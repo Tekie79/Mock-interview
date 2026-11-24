@@ -80,6 +80,64 @@ private enum Keychain {
     }
 }
 
+private enum SpeechProvider: String, CaseIterable, Identifiable {
+    case openai = "OpenAI"
+    case deepgram = "Deepgram"
+    var id: String { rawValue }
+}
+
+private enum TextProvider: String, CaseIterable, Identifiable {
+    case openai = "OpenAI"
+    case anthropic = "Anthropic"
+    var id: String { rawValue }
+}
+
+private struct SessionProviders {
+    let transcriber: @Sendable () -> any StreamingSTT
+    let classifier: any QuestionClassifier
+    let generator: any TextGenerator
+
+    init(defaults: UserDefaults) throws {
+        let speech = SpeechProvider(rawValue: defaults.string(forKey: "speechProvider") ?? "") ?? .openai
+        let classification = TextProvider(rawValue: defaults.string(forKey: "classificationProvider") ?? "") ?? .openai
+        let answer = TextProvider(rawValue: defaults.string(forKey: "answerProvider") ?? "") ?? .openai
+        let language = defaults.string(forKey: "sttLanguage")
+        func key(_ account: String) throws -> String {
+            guard let value = Keychain.load(account), !value.isEmpty else {
+                throw ProviderFailure.missingCredentials
+            }
+            return value
+        }
+
+        switch speech {
+        case .openai:
+            let credential = try key("openai")
+            let model = defaults.string(forKey: "sttModel") ?? "gpt-live-transcribe"
+            transcriber = { OpenAIRealtimeTranscriber(apiKey: credential, model: model, language: language) }
+        case .deepgram:
+            let credential = try key("deepgram")
+            let model = defaults.string(forKey: "deepgramModel") ?? "nova-3"
+            transcriber = { DeepgramTranscriber(apiKey: credential, model: model, language: language) }
+        }
+        switch classification {
+        case .openai:
+            classifier = OpenAIQuestionClassifier(apiKey: try key("openai"),
+                                                  model: defaults.string(forKey: "questionModel") ?? "gpt-4.1-mini")
+        case .anthropic:
+            classifier = AnthropicQuestionClassifier(apiKey: try key("anthropic"),
+                model: defaults.string(forKey: "anthropicQuestionModel") ?? "claude-haiku-4-5")
+        }
+        switch answer {
+        case .openai:
+            generator = OpenAITextGenerator(apiKey: try key("openai"),
+                                            model: defaults.string(forKey: "answerModel") ?? "gpt-4.1-mini")
+        case .anthropic:
+            generator = AnthropicTextGenerator(apiKey: try key("anthropic"),
+                model: defaults.string(forKey: "anthropicAnswerModel") ?? "claude-haiku-4-5")
+        }
+    }
+}
+
 @MainActor
 final class WorkspaceModel: ObservableObject {
     enum SourceMode: String, CaseIterable, Identifiable {
@@ -110,7 +168,7 @@ final class WorkspaceModel: ObservableObject {
     @Published var endedAt: Date?
     @Published var providerTest: String?
     @Published var checkingProvider = false
-    @Published var hasOpenAIKey = Keychain.load("openai") != nil
+    @Published var configuredKeys = Set(["openai", "deepgram", "anthropic"].filter { Keychain.load($0) != nil })
 
     private(set) var store: KnowledgeStore?
     private var session: InterviewSession?
@@ -162,42 +220,37 @@ final class WorkspaceModel: ObservableObject {
         }
     }
 
-    func saveKey(_ key: String) {
+    func saveKey(_ key: String, account: String) {
         do {
-            try Keychain.save(key.trimmingCharacters(in: .whitespacesAndNewlines), account: "openai")
-            hasOpenAIKey = Keychain.load("openai") != nil
+            let normalized = key.trimmingCharacters(in: .whitespacesAndNewlines)
+            try Keychain.save(normalized, account: account)
+            if normalized.isEmpty { configuredKeys.remove(account) } else { configuredKeys.insert(account) }
+            providerTest = nil
         } catch {
-            self.error = "The OpenAI key could not be updated in Keychain."
+            self.error = "The provider key could not be updated in Keychain."
         }
     }
 
     func checkProvider() {
         guard !checkingProvider else { return }
         checkingProvider = true
-        providerTest = "Checking OpenAI configuration…"
+        providerTest = "Checking provider configuration…"
         Task {
             defer { checkingProvider = false }
             do {
-                guard let key = Keychain.load("openai"), !key.isEmpty else { throw ProviderFailure.missingCredentials }
-                let defaults = UserDefaults.standard
-                let transcriber = OpenAIRealtimeTranscriber(
-                    apiKey: key, model: defaults.string(forKey: "sttModel") ?? "gpt-live-transcribe")
+                let providers = try SessionProviders(defaults: .standard)
+                let transcriber = providers.transcriber()
                 let source = CaptureSource(id: "Connection test", role: .interviewer)
                 let epoch = UUID()
-                let transcription = try await transcriber.connect(source: source, epoch: epoch)
+                _ = try await transcriber.connect(source: source, epoch: epoch)
                 await transcriber.close()
-                _ = transcription
-                let classification = OpenAIQuestionClassifier(
-                    apiKey: key, model: defaults.string(forKey: "questionModel") ?? "gpt-4.1-mini")
                 let testQuestion = "What is a FIFO queue?"
-                _ = try await classification.classify(QuestionInput(
+                _ = try await providers.classifier.classify(QuestionInput(
                     turn: TranscriptEvent(source: source, epoch: epoch, itemID: "synthetic-connection-test",
                                           text: testQuestion, state: .final), previousQuestions: []))
-                let generator = OpenAITextGenerator(
-                    apiKey: key, model: defaults.string(forKey: "answerModel") ?? "gpt-4.1-mini")
-                for try await _ in try await generator.stream(AnswerRequest(
+                for try await _ in try await providers.generator.stream(AnswerRequest(
                     question: testQuestion, instructions: "Use one sentence.", evidence: [])) {}
-                providerTest = "OpenAI acknowledged transcription and both text models responded."
+                providerTest = "The transcription connection opened and both text models responded."
             } catch {
                 providerTest = publicErrorMessage(error)
             }
@@ -215,23 +268,16 @@ final class WorkspaceModel: ObservableObject {
                 return
             }
             do {
-                guard let key = Keychain.load("openai"), !key.isEmpty else {
-                    throw ProviderFailure.missingCredentials
-                }
                 let options = UserDefaults.standard
-                let sttModel = options.string(forKey: "sttModel") ?? "gpt-live-transcribe"
-                let questionModel = options.string(forKey: "questionModel") ?? "gpt-4.1-mini"
-                let answerModel = options.string(forKey: "answerModel") ?? "gpt-4.1-mini"
+                let providers = try SessionProviders(defaults: options)
                 let format = AnswerFormat(rawValue: options.string(forKey: "answerFormat") ?? "") ?? .brief
                 let threshold = options.object(forKey: "questionThreshold") as? Double ?? 0.8
                 let sensitivity = Float(options.object(forKey: "vadThreshold") as? Double ?? 0.015)
-                let language = options.string(forKey: "sttLanguage")
                 let profile = profiles.first(where: { $0.id == profileID })
                 let store = self.store
                 let channels = try captureSources().map { source, audio in
-                    TranscriptionChannel(source: source, audio: audio, threshold: sensitivity) {
-                        OpenAIRealtimeTranscriber(apiKey: key, model: sttModel, language: language)
-                    }
+                    TranscriptionChannel(source: source, audio: audio, threshold: sensitivity,
+                                         makeSTT: providers.transcriber)
                 }
                 let preferences = [
                     options.string(forKey: "answerInstructions") ?? "", profile?.instructions ?? "",
@@ -239,9 +285,8 @@ final class WorkspaceModel: ObservableObject {
                 ].joined(separator: "\n")
                 let next = InterviewSession(
                     channels: channels,
-                    detector: QuestionDetector(classifier: OpenAIQuestionClassifier(apiKey: key, model: questionModel),
-                                               threshold: threshold),
-                    generator: OpenAITextGenerator(apiKey: key, model: answerModel),
+                    detector: QuestionDetector(classifier: providers.classifier, threshold: threshold),
+                    generator: providers.generator,
                     format: format, preferences: preferences
                 ) { question in
                     guard let store, let profile else { return [] }
@@ -262,7 +307,7 @@ final class WorkspaceModel: ObservableObject {
                 }
                 await next.start()
             } catch ProviderFailure.missingCredentials {
-                error = "Add an OpenAI API key in Settings before starting."
+                error = "Add API keys for the selected providers in Settings before starting."
             } catch CaptureFailure.sourceUnavailable {
                 error = "Select each required audio source before starting."
             } catch {
@@ -658,7 +703,12 @@ private struct WindowLevel: NSViewRepresentable {
 
 private struct ProviderSettingsView: View {
     @ObservedObject var model: WorkspaceModel
-    @State private var key = ""
+    @AppStorage("speechProvider") private var speech = SpeechProvider.openai
+    @AppStorage("classificationProvider") private var classification = TextProvider.openai
+    @AppStorage("answerProvider") private var answer = TextProvider.openai
+    @AppStorage("deepgramModel") private var deepgramModel = "nova-3"
+    @AppStorage("anthropicQuestionModel") private var anthropicQuestionModel = "claude-haiku-4-5"
+    @AppStorage("anthropicAnswerModel") private var anthropicAnswerModel = "claude-haiku-4-5"
     @AppStorage("sttModel") private var sttModel = "gpt-live-transcribe"
     @AppStorage("questionModel") private var questionModel = "gpt-4.1-mini"
     @AppStorage("answerModel") private var answerModel = "gpt-4.1-mini"
@@ -672,15 +722,25 @@ private struct ProviderSettingsView: View {
     var body: some View {
         Form {
             Section("Providers") {
-                Text(model.hasOpenAIKey ? "OpenAI key stored in Keychain" : "OpenAI key required")
-                SecureField("OpenAI API key", text: $key)
-                HStack {
-                    Button("Save Key") { model.saveKey(key); key = "" }.disabled(key.isEmpty)
-                    Button("Remove Key") { model.saveKey("") }.disabled(!model.hasOpenAIKey)
+                ProviderKeyField(model: model, provider: "OpenAI", account: "openai")
+                if speech == .deepgram {
+                    ProviderKeyField(model: model, provider: "Deepgram", account: "deepgram")
                 }
-                TextField("Transcription model", text: $sttModel)
-                TextField("Classification model", text: $questionModel)
-                TextField("Answer model", text: $answerModel)
+                if classification == .anthropic || answer == .anthropic {
+                    ProviderKeyField(model: model, provider: "Anthropic", account: "anthropic")
+                }
+                Picker("Transcription provider", selection: $speech) {
+                    ForEach(SpeechProvider.allCases) { Text($0.rawValue).tag($0) }
+                }
+                TextField("Transcription model", text: speech == .openai ? $sttModel : $deepgramModel)
+                Picker("Classification provider", selection: $classification) {
+                    ForEach(TextProvider.allCases) { Text($0.rawValue).tag($0) }
+                }
+                TextField("Classification model", text: classification == .openai ? $questionModel : $anthropicQuestionModel)
+                Picker("Answer provider", selection: $answer) {
+                    ForEach(TextProvider.allCases) { Text($0.rawValue).tag($0) }
+                }
+                TextField("Answer model", text: answer == .openai ? $answerModel : $anthropicAnswerModel)
                 TextField("Transcription language code", text: $sttLanguage)
                 Button("Test Connection", action: model.checkProvider).disabled(model.checkingProvider)
                     .help("Sends a synthetic question to the selected models and may incur provider charges.")
@@ -702,6 +762,25 @@ private struct ProviderSettingsView: View {
         }
         .formStyle(.grouped)
         .padding(10)
+    }
+}
+
+private struct ProviderKeyField: View {
+    @ObservedObject var model: WorkspaceModel
+    let provider: String
+    let account: String
+    @State private var key = ""
+
+    var body: some View {
+        HStack {
+            SecureField(provider + " API key", text: $key)
+            Button("Save") { model.saveKey(key, account: account); key = "" }
+                .disabled(key.isEmpty).accessibilityLabel("Save " + provider + " key")
+            Button("Remove") { model.saveKey("", account: account) }
+                .disabled(!model.configuredKeys.contains(account)).accessibilityLabel("Remove " + provider + " key")
+            Text(model.configuredKeys.contains(account) ? "In Keychain" : "Key required")
+                .font(.caption).foregroundStyle(.secondary)
+        }
     }
 }
 

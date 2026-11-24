@@ -12,7 +12,7 @@ Baseline is a repository bootstrap only; no real application or provider integra
 | M05 | IMPLEMENTED (qualification pending) | SQLite profiles/documents/facts, confirmed-only FTS and text/Markdown/PDF import contracts. |
 | M06 | IMPLEMENTED (qualification pending) | Live SwiftUI workspace, source setup and meters, profile review, compact window, shortcuts and Keychain. |
 | M07 | IMPLEMENTED (qualification pending) | Bounded retry, redacted diagnostics, usage, synthetic replay, in-memory retention and packaging command. |
-| M08 | NOT STARTED | Secondary providers |
+| M08 | IMPLEMENTED (qualification pending) | Deepgram PCM WebSocket, Anthropic classifier and answer streams, configurable independent provider/model settings. |
 | M09 | NOT STARTED | Training and review |
 | M10 | NOT STARTED | Retrieval and roles |
 | M11 | NOT STARTED | Final qualification |
@@ -69,3 +69,10 @@ See `docs/verification/baseline.md` for the initial build/test run. No native Ma
 - Debian 13, Swift 6.2.3. Build and tests passed, 14 XCTest passes, 0 failures. PCM-to-answer integration covers duplicate final delivery, usage, stop and transcript-free diagnostics. Native source parsed and packaging script passed shell syntax validation.
 - The hosted macOS workflow is building the M06 checkpoint. Validate packaging output on a subsequent runner. No credentialed connection tests or physical Mac scenario matrix ran here.
 - Next checkpoint is M08 independent Deepgram and Anthropic provider selection.
+
+### M08 development checkpoint
+
+- Debian 13, Swift 6.2.3. Build and tests passed, 17 XCTest passes, 0 failures. Added Deepgram request and endpoint assembly fixtures and Anthropic delta, usage and error fixtures.
+- Reviewed official Deepgram streaming/finalization and Anthropic streaming/structured-output documentation. Live accounts and selected model availability remain unverified.
+- GitHub Actions run 45503029168 passed Swift build, tests and Xcode compilation at M06 (cbc1bb8). This provides compile evidence only.
+- Next checkpoint is M09 optional history, review and solo practice.
