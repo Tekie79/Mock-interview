@@ -1,0 +1,30 @@
+# Swift and Xcode build outputs
+.build/
+.swiftpm/
+DerivedData/
+build/
+*.xcuserstate
+xcuserdata/
+.DS_Store
+# Local environment, credentials and private content
+.env
+.env.*
+!.env.example
+*.key
+*.pem
+*.p12
+*.mobileprovision
+secrets/
+private/
+recordings/
+local-data/
+*.sqlite
+*.sqlite3
+*.sqlite-shm
+*.sqlite-wal
+*.sqlite3-shm
+*.sqlite3-wal
+*.log
+# IDE caches
+.vscode/
+.idea/

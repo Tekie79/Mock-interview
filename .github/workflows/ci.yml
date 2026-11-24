@@ -1,0 +1,19 @@
+name: Swift core CI
+on:
+  push:
+    branches: [main]
+  pull_request:
+permissions:
+  contents: read
+jobs:
+  macos-core:
+    runs-on: macos-15
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v4
+      - name: Toolchain
+        run: swift --version
+      - name: Build portable core
+        run: ./scripts/build.sh
+      - name: Run deterministic tests
+        run: ./scripts/test.sh

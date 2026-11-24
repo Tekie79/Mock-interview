@@ -1,0 +1,124 @@
+[
+  {
+    "id": "intro",
+    "role": "interviewer",
+    "text": "Tell me about yourself.",
+    "isComplete": true,
+    "expected": "accept",
+    "note": "Imperative"
+  },
+  {
+    "id": "logistics",
+    "role": "interviewer",
+    "text": "Can you hear me?",
+    "isComplete": true,
+    "expected": "ignore",
+    "note": "Audio check"
+  },
+  {
+    "id": "local",
+    "role": "candidate",
+    "text": "Should I explain the database first?",
+    "isComplete": true,
+    "expected": "ignore",
+    "note": "Candidate source"
+  },
+  {
+    "id": "unknown",
+    "role": "unknown",
+    "text": "What is your experience with Kafka?",
+    "isComplete": true,
+    "expected": "uncertain",
+    "note": "Must not auto-generate"
+  },
+  {
+    "id": "partial",
+    "role": "interviewer",
+    "text": "Could you explain how you...",
+    "isComplete": false,
+    "expected": "wait",
+    "note": "Incomplete"
+  },
+  {
+    "id": "ack",
+    "role": "interviewer",
+    "text": "That's a good answer. Thank you.",
+    "isComplete": true,
+    "expected": "ignore",
+    "note": "Acknowledgement"
+  },
+  {
+    "id": "topic",
+    "role": "interviewer",
+    "text": "Walk me through a data integration project.",
+    "isComplete": true,
+    "expected": "accept",
+    "note": "Experience",
+    "logicalTurnID": "turn-topic"
+  },
+  {
+    "id": "followup",
+    "role": "interviewer",
+    "text": "And how did you handle failures?",
+    "isComplete": true,
+    "expected": "accept",
+    "note": "Follow-up",
+    "contextTurnIDs": [
+      "turn-topic"
+    ]
+  },
+  {
+    "id": "two-part",
+    "role": "interviewer",
+    "text": "Explain the design, and tell me how you tested it.",
+    "isComplete": true,
+    "expected": "accept",
+    "note": "Both parts"
+  },
+  {
+    "id": "original",
+    "role": "interviewer",
+    "text": "How would you design a retry policy?",
+    "isComplete": true,
+    "expected": "accept",
+    "note": "First accepted turn",
+    "logicalTurnID": "turn-retry-1"
+  },
+  {
+    "id": "duplicate",
+    "role": "interviewer",
+    "text": "How would you design a retry policy?",
+    "isComplete": true,
+    "expected": "ignore",
+    "note": "Exact repeated logical turn/event",
+    "logicalTurnID": "turn-retry-1"
+  },
+  {
+    "id": "repeat",
+    "role": "interviewer",
+    "text": "Could you repeat how you would design a retry policy?",
+    "isComplete": true,
+    "expected": "accept",
+    "note": "Deliberate repeat, fresh turn",
+    "logicalTurnID": "turn-retry-2",
+    "contextTurnIDs": [
+      "turn-retry-1"
+    ]
+  },
+  {
+    "id": "statement",
+    "role": "interviewer",
+    "text": "We use Snowflake here.",
+    "isComplete": true,
+    "expected": "ignore",
+    "note": "Not a request"
+  },
+  {
+    "id": "candidate-questions",
+    "role": "interviewer",
+    "text": "Do you have any questions for us?",
+    "isComplete": true,
+    "expected": "accept",
+    "note": "Suggest relevant questions"
+  }
+]
