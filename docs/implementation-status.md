@@ -7,7 +7,7 @@ Baseline is a repository bootstrap only; no real application or provider integra
 | M00 | IMPLEMENTED (qualification pending) | Native Xcode target, portable contracts, synthetic audio-to-transcript test and macOS compile job. |
 | M01 | IN PROGRESS | Native selected-process and microphone adapters, portable PCM replay, VAD and bounded streams. Real Mac validation and tighter real-time buffer handling remain. |
 | M02 | IMPLEMENTED (qualification pending) | OpenAI WebSocket, normalized ordered finals, local commits, pre-roll and bounded reconnect. |
-| M03 | NOT STARTED | Classifier, assembly and dedup; role policy is initial contract only |
+| M03 | IMPLEMENTED (qualification pending) | Final interviewer gate, incomplete-turn assembly, deduplication, context and OpenAI structured classification. |
 | M04 | NOT STARTED | Response streaming |
 | M05 | NOT STARTED | Knowledge and profiles |
 | M06 | NOT STARTED | Native interface |
@@ -39,3 +39,9 @@ See `docs/verification/baseline.md` for the initial build/test run. No native Ma
 - Debian 13, Swift 6.2.3. Build and test scripts passed with 8 XCTest passes, 0 failures. Synthetic tests cover session configuration, duplicate deltas and out-of-order finals.
 - OpenAI Realtime transcription wire configuration follows the official guide. Reconnect creates a fresh capture epoch and emits a gap. Live provider, injected disconnect and timeout checks are pending.
 - Next checkpoint is M03 final interviewer turn classification and deduplication.
+
+### M03 development checkpoint
+
+- Debian 13, Swift 6.2.3. Build and test scripts passed, 9 XCTest passes, 0 failures. Synthetic tests cover the role and freshness gate, incomplete continuation, logistics, duplicate items and repeat identity.
+- The real classifier uses the Responses API and strict JSON schema. Live model validation and a held-out semantic evaluation are pending.
+- Next checkpoint is M04 streamed generation and stale revision protection.

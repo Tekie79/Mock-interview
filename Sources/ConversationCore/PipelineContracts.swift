@@ -73,14 +73,32 @@ public struct QuestionInput: Equatable, Sendable {
 }
 
 public struct QuestionDecision: Codable, Equatable, Sendable {
-    public let relevant: Bool
-    public let complete: Bool
-    public let parts: [String]
+    public enum Kind: String, Codable, Sendable {
+        case accept, wait, ignore, uncertain
+    }
 
-    public init(relevant: Bool, complete: Bool, parts: [String]) {
-        self.relevant = relevant
-        self.complete = complete
+    public let decision: Kind
+    public let category: String
+    public let normalizedQuestion: String
+    public let parts: [String]
+    public let contextTurnIDs: [String]
+    public let isFollowUp: Bool
+    public let isIntentionalRepeat: Bool
+    public let confidence: Double
+    public let reasonCode: String
+
+    public init(decision: Kind, category: String = "", normalizedQuestion: String = "",
+                parts: [String] = [], contextTurnIDs: [String] = [], isFollowUp: Bool = false,
+                isIntentionalRepeat: Bool = false, confidence: Double = 1, reasonCode: String = "") {
+        self.decision = decision
+        self.category = category
+        self.normalizedQuestion = normalizedQuestion
         self.parts = parts
+        self.contextTurnIDs = contextTurnIDs
+        self.isFollowUp = isFollowUp
+        self.isIntentionalRepeat = isIntentionalRepeat
+        self.confidence = confidence
+        self.reasonCode = reasonCode
     }
 }
 
