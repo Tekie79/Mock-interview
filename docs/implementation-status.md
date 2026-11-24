@@ -6,7 +6,7 @@ Baseline is a repository bootstrap only; no real application or provider integra
 |---|---|---|
 | M00 | IMPLEMENTED (qualification pending) | Native Xcode target, portable contracts, synthetic audio-to-transcript test and macOS compile job. |
 | M01 | IN PROGRESS | Native selected-process and microphone adapters, portable PCM replay, VAD and bounded streams. Real Mac validation and tighter real-time buffer handling remain. |
-| M02 | NOT STARTED | Real streaming STT |
+| M02 | IMPLEMENTED (qualification pending) | OpenAI WebSocket, normalized ordered finals, local commits, pre-roll and bounded reconnect. |
 | M03 | NOT STARTED | Classifier, assembly and dedup; role policy is initial contract only |
 | M04 | NOT STARTED | Response streaming |
 | M05 | NOT STARTED | Knowledge and profiles |
@@ -33,3 +33,9 @@ See `docs/verification/baseline.md` for the initial build/test run. No native Ma
 - Debian 13, Swift 6.2.3. Build and test scripts with `--disable-sandbox --manifest-cache none` passed, 6 XCTest passes, 0 failures.
 - Native source isolation, permissions, route changes and cleanup need Xcode and physical Mac checks. Current native callback copies bounded buffers into an asynchronous stream and still allocates per callback.
 - Next checkpoint is M02 transcription. Native capture and VAD are available as injected source and endpoint contracts.
+
+### M02 development checkpoint
+
+- Debian 13, Swift 6.2.3. Build and test scripts passed with 8 XCTest passes, 0 failures. Synthetic tests cover session configuration, duplicate deltas and out-of-order finals.
+- OpenAI Realtime transcription wire configuration follows the official guide. Reconnect creates a fresh capture epoch and emits a gap. Live provider, injected disconnect and timeout checks are pending.
+- Next checkpoint is M03 final interviewer turn classification and deduplication.
