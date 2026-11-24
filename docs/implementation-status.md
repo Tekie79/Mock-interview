@@ -10,7 +10,7 @@ Baseline is a repository bootstrap only; no real application or provider integra
 | M03 | IMPLEMENTED (qualification pending) | Final interviewer gate, incomplete-turn assembly, deduplication, context and OpenAI structured classification. |
 | M04 | IMPLEMENTED (qualification pending) | OpenAI SSE, grounded prompt, session composition, answer formats, manual generation and revision guards. |
 | M05 | IMPLEMENTED (qualification pending) | SQLite profiles/documents/facts, confirmed-only FTS and text/Markdown/PDF import contracts. |
-| M06 | NOT STARTED | Native interface |
+| M06 | IMPLEMENTED (qualification pending) | Live SwiftUI workspace, source setup and meters, profile review, compact window, shortcuts and Keychain. |
 | M07 | NOT STARTED | MVP resilience |
 | M08 | NOT STARTED | Secondary providers |
 | M09 | NOT STARTED | Training and review |
@@ -57,3 +57,9 @@ See `docs/verification/baseline.md` for the initial build/test run. No native Ma
 - Debian 13, Swift 6.2.3 and Debian SQLite 3.46.1. Build and test scripts passed, 12 XCTest passes, 0 failures. SQLite development files were extracted from signed Debian package metadata into the workspace toolchain and passed through compiler and linker include paths.
 - Tests verify pending/confirmed facts, profile isolation, job description exclusion, limitations and document deletion. PDFKit is Mac-only and its runtime import path still needs validation.
 - Next checkpoint is M06 native session controls, profile editor and Keychain-backed settings.
+
+### M06 development checkpoint
+
+- Debian 13, Swift 6.2.3. Build and test scripts passed, 12 XCTest passes, 0 failures. Swift frontend parsing passed for arm64 macOS 14.2 source. This is syntax coverage only.
+- Feature-branch CI now requests Xcode compilation. Native walkthrough, VoiceOver, local keyboard and selected-source permission tests remain pending.
+- Next checkpoint is M07 resilience, retention, diagnostics and packaging.
