@@ -9,7 +9,7 @@ Baseline is a repository bootstrap only; no real application or provider integra
 | M02 | IMPLEMENTED (qualification pending) | OpenAI WebSocket, normalized ordered finals, local commits, pre-roll and bounded reconnect. |
 | M03 | IMPLEMENTED (qualification pending) | Final interviewer gate, incomplete-turn assembly, deduplication, context and OpenAI structured classification. |
 | M04 | IMPLEMENTED (qualification pending) | OpenAI SSE, grounded prompt, session composition, answer formats, manual generation and revision guards. |
-| M05 | NOT STARTED | Knowledge and profiles |
+| M05 | IMPLEMENTED (qualification pending) | SQLite profiles/documents/facts, confirmed-only FTS and text/Markdown/PDF import contracts. |
 | M06 | NOT STARTED | Native interface |
 | M07 | NOT STARTED | MVP resilience |
 | M08 | NOT STARTED | Secondary providers |
@@ -51,3 +51,9 @@ See `docs/verification/baseline.md` for the initial build/test run. No native Ma
 - Debian 13, Swift 6.2.3. Build and test scripts passed, 11 XCTest passes, 0 failures. Added fragmented UTF-8/SSE parsing and controlled generation tests for supersession, evidence injection and pause.
 - Native end-to-end replay/UI, provider smoke and latency measurements remain pending.
 - Next checkpoint is M05 persisted profiles, imports, fact review and keyword retrieval.
+
+### M05 development checkpoint
+
+- Debian 13, Swift 6.2.3 and Debian SQLite 3.46.1. Build and test scripts passed, 12 XCTest passes, 0 failures. SQLite development files were extracted from signed Debian package metadata into the workspace toolchain and passed through compiler and linker include paths.
+- Tests verify pending/confirmed facts, profile isolation, job description exclusion, limitations and document deletion. PDFKit is Mac-only and its runtime import path still needs validation.
+- Next checkpoint is M06 native session controls, profile editor and Keychain-backed settings.

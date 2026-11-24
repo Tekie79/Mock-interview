@@ -6,7 +6,8 @@ let package = Package(
     platforms: [.macOS("14.2")],
     products: [.library(name: "ConversationCore", targets: ["ConversationCore"])],
     targets: [
-        .target(name: "ConversationCore"),
+        .systemLibrary(name: "CSQLite", pkgConfig: "sqlite3", providers: [.apt(["libsqlite3-dev"])]),
+        .target(name: "ConversationCore", dependencies: ["CSQLite"]),
         .testTarget(name: "ConversationCoreTests", dependencies: ["ConversationCore"])
     ]
 )
