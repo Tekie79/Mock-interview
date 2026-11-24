@@ -17,3 +17,5 @@ jobs:
         run: ./scripts/build.sh
       - name: Run deterministic tests
         run: ./scripts/test.sh
+      - name: Compile native application
+        run: xcodebuild -project MockInterview.xcodeproj -scheme MockInterview -destination 'generic/platform=macOS' CODE_SIGNING_ALLOWED=NO build
