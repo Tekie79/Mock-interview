@@ -108,7 +108,7 @@ public struct ExperienceFact: Codable, Identifiable, Equatable, Sendable {
 }
 
 public actor KnowledgeStore {
-    private let database: SQLiteDatabase
+    let database: SQLiteDatabase
 
     public init(url: URL? = nil) throws {
         let database = try SQLiteDatabase(path: url?.path ?? ":memory:")
@@ -132,6 +132,15 @@ public actor KnowledgeStore {
                     CREATE TRIGGER remove_fact_search AFTER DELETE ON facts
                         BEGIN DELETE FROM fact_search WHERE id=old.id; END;
                     PRAGMA user_version = 1;
+                    """)
+            }
+            if version != "2" {
+                try database.execute("""
+                    CREATE TABLE saved_sessions (id TEXT PRIMARY KEY, started TEXT NOT NULL, data TEXT NOT NULL);
+                    CREATE VIRTUAL TABLE session_search USING fts5(id UNINDEXED, content);
+                    CREATE TRIGGER remove_session_search AFTER DELETE ON saved_sessions
+                        BEGIN DELETE FROM session_search WHERE id=old.id; END;
+                    PRAGMA user_version = 2;
                     """)
             }
         }

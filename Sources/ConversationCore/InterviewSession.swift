@@ -46,6 +46,15 @@ public struct InterviewTranscript: Identifiable, Sendable, Codable, Equatable {
     public let role: SourceRole
     public var text: String
     public var isFinal: Bool
+    public var timestamp: Date?
+
+    public init(id: String, role: SourceRole, text: String, isFinal: Bool, timestamp: Date? = .now) {
+        self.id = id
+        self.role = role
+        self.text = text
+        self.isFinal = isFinal
+        self.timestamp = timestamp
+    }
 }
 
 public struct InterviewSnapshot: Sendable {

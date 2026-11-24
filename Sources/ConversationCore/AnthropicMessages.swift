@@ -70,7 +70,7 @@ public struct AnthropicTextGenerator: TextGenerator {
     }
 
     public func stream(_ request: AnswerRequest) async throws -> AsyncThrowingStream<GenerationEvent, Error> {
-        let request = try client.request(system: AnswerPrompt.policy, input: AnswerPrompt.input(request),
+        let request = try client.request(system: AnswerPrompt.instructions(request), input: AnswerPrompt.input(request),
                                          fields: ["stream": true, "max_tokens": 1_200], timeout: 20)
         let decoder = AnthropicStreamDecoder()
         // StreamingHTTP supplies a serial delegate queue for each decoder.

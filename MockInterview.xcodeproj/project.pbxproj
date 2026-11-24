@@ -31,7 +31,7 @@
         };
         A00000000000000000000003 = {
             isa = PBXGroup;
-            children = (A00000000000000000000005, A00000000000000000000004);
+            children = (A00000000000000000000005, A00000000000000000000016, A00000000000000000000004);
             sourceTree = "<group>";
         };
         A00000000000000000000004 = {
@@ -46,6 +46,16 @@
             path = AppShell/MockInterviewApp.swift;
             sourceTree = "<group>";
         };
+        A00000000000000000000016 = {
+            isa = PBXFileReference;
+            lastKnownFileType = sourcecode.swift;
+            path = AppShell/TrainingViews.swift;
+            sourceTree = "<group>";
+        };
+        A00000000000000000000017 = {
+            isa = PBXBuildFile;
+            fileRef = A00000000000000000000016;
+        };
         A00000000000000000000006 = {
             isa = PBXFileReference;
             explicitFileType = wrapper.application;
@@ -55,7 +65,7 @@
         A00000000000000000000007 = {
             isa = PBXSourcesBuildPhase;
             buildActionMask = 2147483647;
-            files = (A00000000000000000000009);
+            files = (A00000000000000000000009, A00000000000000000000017);
             runOnlyForDeploymentPostprocessing = 0;
         };
         A00000000000000000000008 = {

@@ -34,6 +34,11 @@ struct MockInterviewApp: App {
         }
         .defaultSize(width: 430, height: 285)
 
+        Window("Solo Practice", id: "solo") {
+            SoloPracticeView(model: model)
+                .frame(minWidth: 560, minHeight: 430)
+        }
+
         Settings {
             ProviderSettingsView(model: model)
                 .frame(width: 500)
@@ -100,7 +105,6 @@ private struct SessionProviders {
     init(defaults: UserDefaults) throws {
         let speech = SpeechProvider(rawValue: defaults.string(forKey: "speechProvider") ?? "") ?? .openai
         let classification = TextProvider(rawValue: defaults.string(forKey: "classificationProvider") ?? "") ?? .openai
-        let answer = TextProvider(rawValue: defaults.string(forKey: "answerProvider") ?? "") ?? .openai
         let language = defaults.string(forKey: "sttLanguage")
         func key(_ account: String) throws -> String {
             guard let value = Keychain.load(account), !value.isEmpty else {
@@ -127,12 +131,19 @@ private struct SessionProviders {
             classifier = AnthropicQuestionClassifier(apiKey: try key("anthropic"),
                 model: defaults.string(forKey: "anthropicQuestionModel") ?? "claude-haiku-4-5")
         }
+        generator = try Self.answerGenerator(defaults: defaults)
+    }
+
+    static func answerGenerator(defaults: UserDefaults) throws -> any TextGenerator {
+        let answer = TextProvider(rawValue: defaults.string(forKey: "answerProvider") ?? "") ?? .openai
         switch answer {
         case .openai:
-            generator = OpenAITextGenerator(apiKey: try key("openai"),
-                                            model: defaults.string(forKey: "answerModel") ?? "gpt-4.1-mini")
+            guard let credential = Keychain.load("openai") else { throw ProviderFailure.missingCredentials }
+            return OpenAITextGenerator(apiKey: credential,
+                                       model: defaults.string(forKey: "answerModel") ?? "gpt-4.1-mini")
         case .anthropic:
-            generator = AnthropicTextGenerator(apiKey: try key("anthropic"),
+            guard let credential = Keychain.load("anthropic") else { throw ProviderFailure.missingCredentials }
+            return AnthropicTextGenerator(apiKey: credential,
                 model: defaults.string(forKey: "anthropicAnswerModel") ?? "claude-haiku-4-5")
         }
     }
@@ -159,6 +170,7 @@ final class WorkspaceModel: ObservableObject {
     @Published var error: String?
     @Published var busy = false
     @Published var testing = false
+    @Published var retainNextSession = false
     @Published var testLevels: [String: Float] = [:]
     @Published var profiles: [InterviewProfile] = []
     @Published var profileID: UUID?
@@ -172,6 +184,7 @@ final class WorkspaceModel: ObservableObject {
 
     private(set) var store: KnowledgeStore?
     private var session: InterviewSession?
+    private var recordID = UUID()
     private var observations: Task<Void, Never>?
     private var captureTest: Task<Void, Never>?
 
@@ -296,6 +309,7 @@ final class WorkspaceModel: ObservableObject {
                 session = next
                 selectedAnswer = nil
                 pinned = false
+                recordID = UUID()
                 startedAt = .now
                 endedAt = nil
                 let updates = await next.updates()
@@ -330,9 +344,39 @@ final class WorkspaceModel: ObservableObject {
         busy = true
         Task {
             await session.stop()
+            snapshot = await session.current()
             endedAt = .now
+            if retainNextSession, let record = finishedRecord() {
+                do {
+                    guard let store else { throw StorageFailure.invalidRecord }
+                    try await store.saveInterview(record)
+                } catch {
+                    self.error = "The session could not be saved. Review it before clearing the workspace."
+                }
+            }
+            retainNextSession = false
             busy = false
         }
+    }
+
+    func finishedRecord() -> SavedInterview? {
+        guard let snapshot, snapshot.state == .stopped, let startedAt, let endedAt else { return nil }
+        return SavedInterview(id: recordID, title: "Mock interview", startedAt: startedAt, endedAt: endedAt,
+                              transcript: snapshot.transcript, suggestions: snapshot.answers)
+    }
+
+    func coaching(_ input: CoachingInput) async throws -> String {
+        let provider = try SessionProviders.answerGenerator(defaults: .standard)
+        var text = ""
+        for try await event in try await provider.stream(input.request()) {
+            if case .text(let fragment) = event {
+                guard text.utf8.count + fragment.utf8.count <= 32_768 else { throw ProviderFailure.malformedEvent }
+                text.append(fragment)
+            }
+        }
+        try Task.checkCancellation()
+        guard !text.isEmpty else { throw ProviderFailure.malformedEvent }
+        return text
     }
 
     func clearSession() {
@@ -455,6 +499,7 @@ private struct WorkspaceView: View {
     @State private var profileEditor = false
     @State private var replayPicker = false
     @State private var showDiagnostics = false
+    @State private var showReview = false
     @State private var manualText = ""
     @AppStorage("answerFontSize") private var fontSize = 16.0
 
@@ -485,6 +530,12 @@ private struct WorkspaceView: View {
             if let store = model.store {
                 ProfileEditor(model: model, store: store)
                     .frame(minWidth: 670, minHeight: 545)
+            }
+        }
+        .sheet(isPresented: $showReview) {
+            if let store = model.store {
+                InterviewReviewView(model: model, store: store, current: model.finishedRecord())
+                    .frame(minWidth: 850, minHeight: 620)
             }
         }
         .sheet(isPresented: $showDiagnostics) {
@@ -523,6 +574,8 @@ private struct WorkspaceView: View {
             SettingsLink { Label("Settings", systemImage: "gear") }
             Button("Compact") { openWindow(id: "compact") }
             Menu("Session") {
+                Button("Review and History") { showReview = true }.disabled(model.active || model.store == nil)
+                Button("Solo Practice") { openWindow(id: "solo") }
                 Button("Diagnostics") { showDiagnostics = true }
                 Button("Clear Session", action: model.clearSession).disabled(model.active || model.snapshot == nil)
             }
@@ -575,6 +628,7 @@ private struct WorkspaceView: View {
                 Text("A browser process may include audio from multiple tabs. Use headphones with two sources.")
                     .font(.caption).foregroundStyle(.secondary)
             }
+            Toggle("Save a local copy when this session stops", isOn: $model.retainNextSession)
             ForEach(model.testLevels.keys.sorted(), id: \.self) { source in
                 ProgressView(value: Double(model.testLevels[source] ?? 0)) { Text(source) }
             }
@@ -756,7 +810,7 @@ private struct ProviderSettingsView: View {
                 Slider(value: $fontSize, in: 12...30, step: 1) { Text("Answer text size") }
             }
             Section("Retention") {
-                Text("The live transcript and responses stay in memory for the current session. Audio is never saved.")
+                Text("Session text stays in memory by default. You can save individual sessions locally. Audio is never saved.")
             }
             if let error = model.error { Text(error).foregroundStyle(.red) }
         }

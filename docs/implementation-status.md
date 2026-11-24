@@ -13,7 +13,7 @@ Baseline is a repository bootstrap only; no real application or provider integra
 | M06 | IMPLEMENTED (qualification pending) | Live SwiftUI workspace, source setup and meters, profile review, compact window, shortcuts and Keychain. |
 | M07 | IMPLEMENTED (qualification pending) | Bounded retry, redacted diagnostics, usage, synthetic replay, in-memory retention and packaging command. |
 | M08 | IMPLEMENTED (qualification pending) | Deepgram PCM WebSocket, Anthropic classifier and answer streams, configurable independent provider/model settings. |
-| M09 | NOT STARTED | Training and review |
+| M09 | IMPLEMENTED (qualification pending) | Opt-in saved history with SQLite search, review and missed questions, text export, and solo practice with AI-estimate coaching. |
 | M10 | NOT STARTED | Retrieval and roles |
 | M11 | NOT STARTED | Final qualification |
 
@@ -76,3 +76,9 @@ See `docs/verification/baseline.md` for the initial build/test run. No native Ma
 - Reviewed official Deepgram streaming/finalization and Anthropic streaming/structured-output documentation. Live accounts and selected model availability remain unverified.
 - GitHub Actions run 45503029168 passed Swift build, tests and Xcode compilation at M06 (cbc1bb8). This provides compile evidence only.
 - Next checkpoint is M09 optional history, review and solo practice.
+
+### M09 development checkpoint
+
+- Debian 13, Swift 6.2.3. Build and tests passed, 18 XCTest passes, 0 failures. Added no-save baseline, history FTS update/deletion and actual-versus-suggested separation assertions. macOS-target Swift syntax parse passed.
+- Native review walkthrough and live coaching quality checks are pending. Solo practice uses text prompts and typed answers.
+- Next checkpoint is M10 DOCX extraction, optional vector retrieval and explicit mixed-microphone speaker mapping.

@@ -110,11 +110,13 @@ public struct AnswerRequest: Equatable, Sendable {
     public let question: String
     public let instructions: String
     public let evidence: [String]
+    public let coaching: CoachingInput?
 
-    public init(question: String, instructions: String, evidence: [String]) {
+    public init(question: String, instructions: String, evidence: [String], coaching: CoachingInput? = nil) {
         self.question = question
         self.instructions = instructions
         self.evidence = evidence
+        self.coaching = coaching
     }
 }
 

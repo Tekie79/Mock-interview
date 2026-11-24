@@ -122,7 +122,14 @@ enum AnswerPrompt {
         With insufficient facts, label a hypothetical approach or an adaptable template explicitly.
         """
 
+    static func instructions(_ request: AnswerRequest) -> String {
+        request.coaching == nil ? policy : CoachingInput.rubric
+    }
+
     static func input(_ request: AnswerRequest) throws -> String {
+        if let coaching = request.coaching {
+            return String(decoding: try JSONEncoder().encode(coaching), as: UTF8.self)
+        }
         let input = [
             "question": [String(request.question.prefix(6_000))],
             "response_preferences": [String(request.instructions.prefix(2_000))],
@@ -141,7 +148,7 @@ public struct OpenAITextGenerator: TextGenerator {
 
     public func stream(_ request: AnswerRequest) async throws -> AsyncThrowingStream<GenerationEvent, Error> {
         let urlRequest = try client.request([
-            "instructions": AnswerPrompt.policy, "input": AnswerPrompt.input(request),
+            "instructions": AnswerPrompt.instructions(request), "input": AnswerPrompt.input(request),
             "stream": true, "max_output_tokens": 1_200
         ], timeout: 20)
         return StreamingHTTP.start(urlRequest) { try Self.decode($0) }
