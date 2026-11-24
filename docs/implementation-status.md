@@ -5,7 +5,7 @@ The original bootstrap is documented in the baseline evidence below. Status voca
 | Milestone | Status | Notes |
 |---|---|---|
 | M00 | IMPLEMENTED (qualification pending) | Native Xcode target, portable contracts, synthetic audio-to-transcript test and macOS compile job. |
-| M01 | IN PROGRESS | Native selected-process and microphone adapters, portable PCM replay, VAD and bounded streams. Real Mac validation and tighter real-time buffer handling remain. |
+| M01 | IMPLEMENTED (qualification pending) | Selected process and microphone capture, PCM replay, VAD, preallocated native capture buffers and bounded streams. |
 | M02 | IMPLEMENTED (qualification pending) | OpenAI WebSocket, normalized ordered finals, local commits, pre-roll and bounded reconnect. |
 | M03 | IMPLEMENTED (qualification pending) | Final interviewer gate, incomplete-turn assembly, deduplication, context and OpenAI structured classification. |
 | M04 | IMPLEMENTED (qualification pending) | OpenAI SSE, grounded prompt, session composition, answer formats, manual generation and revision guards. |
@@ -87,5 +87,11 @@ See `docs/verification/baseline.md` for the initial build/test run. No native Ma
 
 - Debian 13, Swift 6.2.3. Build and test scripts passed, 22 XCTest passes, 0 failures. New fixtures cover deflated DOCX extraction and malformed input, model-scoped vectors and revoked evidence, mixed word labels, fail-closed unknown roles, candidate immunity and fresh epochs. Apple-target source parsing and `git diff --check` passed.
 - Deepgram diarization is opt-in for mixed microphone mode and accepts only user-mapped, single-speaker final turns. Roles clear at reconnect. Embeddings are opt-in and require an explicit index build. Keywords remain available if a vector model is unavailable.
-- M11 is reserved for final acceptance. Real Mac audio, OS permissions, provider smoke, held-out role/semantic quality, latency, 90-minute stability, accessibility and packaging qualification require the appropriate machine and opt-in credentials. The native capture callback still uses bounded per-buffer allocation and needs physical real-time measurement.
+- M11 is reserved for final acceptance. Real Mac audio, OS permissions, provider smoke, held-out role/semantic quality, latency, 90-minute stability, accessibility and packaging qualification require the appropriate machine and opt-in credentials. The final hardening checkpoint uses preallocated native capture buffers. Callback performance still needs physical real-time measurement.
 - Exact next checkpoint: on an Apple Silicon Mac, open the branch, run `./scripts/package-macos.sh`, exercise selected app audio and mic permission/route/stop behavior with a synthetic practice call, run each configured provider's opt-in connection and audio smoke, and record the M11 scenario and benchmark evidence from `docs/acceptance-test-plan.md`.
+
+### Development verification and hardening
+
+- GitHub Actions run [45504965184](https://github.com/Tekie79/Mock-interview/actions/runs/45504965184) passed the portable build, 22 deterministic tests and the unsigned Xcode Release app build at the M10 commit `fd6e322`.
+- Linux build and 24 deterministic tests passed on the hardening checkpoint. Verified fixed audio-slot capacity and reuse and separation of job requirements from approved facts. Native source parse and diff check passed.
+- Hardened capture with a preallocated lock-free slot pool, limited meter updates, and added sleep pause, WebSocket send cancellation and configurable local shortcuts. Added target/job context to generation independently of confirmed facts.

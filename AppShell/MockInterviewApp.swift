@@ -8,6 +8,8 @@ import UniformTypeIdentifiers
 struct MockInterviewApp: App {
     @StateObject private var model = WorkspaceModel()
     @Environment(\.openWindow) private var openWindow
+    @AppStorage("pauseShortcut") private var pauseShortcut = "p"
+    @AppStorage("compactShortcut") private var compactShortcut = "k"
 
     var body: some Scene {
         WindowGroup("Mock Interview", id: "workspace") {
@@ -20,11 +22,11 @@ struct MockInterviewApp: App {
                 Button("Start or Resume") { model.startOrResume() }
                     .keyboardShortcut(.return, modifiers: [.command, .shift])
                 Button("Pause") { model.pause() }
-                    .keyboardShortcut("p", modifiers: [.command, .shift])
+                    .keyboardShortcut(KeyEquivalent(pauseShortcut.first ?? "p"), modifiers: [.command, .shift])
                 Button("Stop") { model.stop() }
                     .keyboardShortcut(".", modifiers: [.command, .shift])
                 Button("Show Compact Window") { openWindow(id: "compact") }
-                    .keyboardShortcut("k", modifiers: [.command, .shift])
+                    .keyboardShortcut(KeyEquivalent(compactShortcut.first ?? "k"), modifiers: [.command, .shift])
             }
         }
 
@@ -308,11 +310,19 @@ final class WorkspaceModel: ObservableObject {
                     options.string(forKey: "answerInstructions") ?? "", profile?.instructions ?? "",
                     (profile?.answerLanguage.isEmpty == false) ? "Answer language: " + (profile?.answerLanguage ?? "") : ""
                 ].joined(separator: "\n")
+                var context: [String] = []
+                if let profile {
+                    let role = [profile.role, profile.seniority, profile.industry].filter { !$0.isEmpty }
+                    if !role.isEmpty { context.append("Target role: " + role.joined(separator: ", ")) }
+                    let documents = (try? await store?.documents(profile: profile.id)) ?? []
+                    let requirements = documents.lazy.filter { $0.kind == .jobDescription }.prefix(3)
+                    context.append(contentsOf: requirements.map { "Job requirements: " + String($0.text.prefix(1_100)) })
+                }
                 let next = InterviewSession(
                     channels: channels,
                     detector: QuestionDetector(classifier: providers.classifier, threshold: threshold),
                     generator: providers.generator,
-                    format: format, preferences: preferences
+                    format: format, preferences: preferences, interviewContext: context
                 ) { question in
                     guard let store, let profile else { return [] }
                     if let embedding,
@@ -344,6 +354,11 @@ final class WorkspaceModel: ObservableObject {
                 self.error = "The interview could not start. Check the selected source and provider settings."
             }
         }
+    }
+
+    func prepareForSleep() {
+        captureTest?.cancel()
+        if state == .listening { pause() }
     }
 
     func pause() {
@@ -547,6 +562,9 @@ private struct WorkspaceView: View {
         }
         .padding(18)
         .task { await model.load() }
+        .onReceive(NSWorkspace.shared.notificationCenter.publisher(for: NSWorkspace.willSleepNotification)) { _ in
+            model.prepareForSleep()
+        }
         .sheet(isPresented: $profileEditor) {
             if let store = model.store {
                 ProfileEditor(model: model, store: store)
@@ -807,6 +825,8 @@ private struct ProviderSettingsView: View {
     @AppStorage("answerFontSize") private var fontSize = 16.0
     @AppStorage("semanticRetrieval") private var semanticRetrieval = false
     @AppStorage("embeddingModel") private var embeddingModel = "text-embedding-3-small"
+    @AppStorage("pauseShortcut") private var pauseShortcut = "p"
+    @AppStorage("compactShortcut") private var compactShortcut = "k"
 
     var body: some View {
         Form {
@@ -843,6 +863,12 @@ private struct ProviderSettingsView: View {
                 Slider(value: $vad, in: 0.005...0.08) { Text("Voice threshold") }
                 Slider(value: $confidence, in: 0.5...1) { Text("Question confidence") }
                 Slider(value: $fontSize, in: 12...30, step: 1) { Text("Answer text size") }
+            }
+            Section("Local shortcuts") {
+                TextField("Pause (Command-Shift plus key)", text: $pauseShortcut)
+                    .onChange(of: pauseShortcut) { _, value in pauseShortcut = String(value.suffix(1).lowercased()) }
+                TextField("Compact window (Command-Shift plus key)", text: $compactShortcut)
+                    .onChange(of: compactShortcut) { _, value in compactShortcut = String(value.suffix(1).lowercased()) }
             }
             Section("Evidence search") {
                 Toggle("Use OpenAI embeddings", isOn: $semanticRetrieval)

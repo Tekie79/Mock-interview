@@ -89,12 +89,16 @@ public actor QuestionDetector {
         channel.pending = nil
         channels[event.source.id] = channel
         guard text.utf8.count <= 16_000 else { return nil }
+        if text.hasSuffix("...") || text.hasSuffix("…") {
+            channels[event.source.id]?.pending = (text, arrived, event.speaker)
+            return nil
+        }
 
         let turn = TranscriptEvent(source: event.source, epoch: event.epoch, itemID: event.itemID,
                                    previousItemID: event.previousItemID, text: text, state: .final, speaker: event.speaker)
         let context = recent
         let result = try await classifier.classify(QuestionInput(
-            turn: turn, previousQuestions: context.map(\.normalized)))
+            turn: turn, previousQuestions: context.map { String($0.normalized.prefix(1_000)) }))
         try Task.checkCancellation()
         guard let active = channels[event.source.id], active.epoch == event.epoch,
               AutomaticQuestionRoleGate.permitsClassification(for: Self.role(of: event, channel: active)),
@@ -106,7 +110,10 @@ public actor QuestionDetector {
         }
         let normalized = result.normalizedQuestion.trimmingCharacters(in: .whitespacesAndNewlines)
         guard result.decision == .accept, (threshold...1).contains(result.confidence),
-              !normalized.isEmpty, !result.parts.isEmpty, result.parts.count <= 12 else { return nil }
+              !normalized.isEmpty, normalized.utf8.count <= 16_000, !result.parts.isEmpty,
+              result.parts.count <= 12, result.parts.allSatisfy({
+                  !$0.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty && $0.utf8.count <= 4_000
+              }) else { return nil }
         let question = AcceptedQuestion(original: text, normalized: normalized, parts: result.parts,
                                         previousQuestionID: result.isFollowUp || result.isIntentionalRepeat
                                             ? context.last?.id : nil)

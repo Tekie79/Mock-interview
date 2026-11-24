@@ -113,12 +113,15 @@ public struct AnswerRequest: Equatable, Sendable {
     public let instructions: String
     public let evidence: [String]
     public let coaching: CoachingInput?
+    public let interviewContext: [String]
 
-    public init(question: String, instructions: String, evidence: [String], coaching: CoachingInput? = nil) {
+    public init(question: String, instructions: String, evidence: [String], coaching: CoachingInput? = nil,
+                interviewContext: [String] = []) {
         self.question = question
         self.instructions = instructions
         self.evidence = evidence
         self.coaching = coaching
+        self.interviewContext = interviewContext
     }
 }
 

@@ -81,3 +81,14 @@ final class AnswerStreamingTests: XCTestCase {
         }
     }
 }
+
+extension AnswerStreamingTests {
+    func testJobRequirementsAreKeptSeparateFromApprovedEvidence() throws {
+        let request = AnswerRequest(question: "How have you used distributed tracing?", instructions: "",
+                                    evidence: [], interviewContext: ["Job requirements: tracing experience"])
+        let data = Data(try AnswerPrompt.input(request).utf8)
+        let payload = try XCTUnwrap(JSONSerialization.jsonObject(with: data) as? [String: [String]])
+        XCTAssertEqual(payload["approved_facts"], [])
+        XCTAssertEqual(payload["interview_context"], ["Job requirements: tracing experience"])
+    }
+}

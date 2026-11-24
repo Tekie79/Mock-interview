@@ -212,8 +212,16 @@ public actor DeepgramTranscriber: StreamingSTT {
 
     private func send(_ message: URLSessionWebSocketTask.Message) async throws {
         guard let socket else { throw ProviderFailure.disconnected }
-        do { try await socket.send(message) }
-        catch { throw ProviderFailure.disconnected }
+        do {
+            try await withTaskCancellationHandler {
+                try await socket.send(message)
+            } onCancel: {
+                socket.cancel(with: .goingAway, reason: nil)
+            }
+        } catch {
+            try Task.checkCancellation()
+            throw ProviderFailure.disconnected
+        }
     }
 
     private static let keepAliveMessage = #"{"type":"KeepAlive"}"#

@@ -203,7 +203,9 @@ public actor OpenAIRealtimeTranscriber: StreamingSTT {
                 }
                 output.finish()
             } catch {
-                output.finish(throwing: Task.isCancelled ? nil : ((error as? ProviderFailure) ?? .disconnected))
+                if Task.isCancelled { output.finish() }
+                else if let error = error as? CaptureFailure { output.finish(throwing: error) }
+                else { output.finish(throwing: (error as? ProviderFailure) ?? .disconnected) }
             }
         }
         output.onTermination = { _ in socket.cancel(with: .goingAway, reason: nil) }
@@ -233,8 +235,13 @@ public actor OpenAIRealtimeTranscriber: StreamingSTT {
     private func send(_ message: String) async throws {
         guard let socket else { throw ProviderFailure.disconnected }
         do {
-            try await socket.send(.string(message))
+            try await withTaskCancellationHandler {
+                try await socket.send(.string(message))
+            } onCancel: {
+                socket.cancel(with: .goingAway, reason: nil)
+            }
         } catch {
+            try Task.checkCancellation()
             throw ProviderFailure.disconnected
         }
     }

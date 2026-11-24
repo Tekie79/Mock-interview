@@ -8,7 +8,8 @@ let package = Package(
     targets: [
         .systemLibrary(name: "CSQLite", pkgConfig: "sqlite3", providers: [.apt(["libsqlite3-dev"])]),
         .systemLibrary(name: "CZlib", pkgConfig: "zlib", providers: [.apt(["zlib1g-dev"])]),
-        .target(name: "ConversationCore", dependencies: ["CSQLite", "CZlib"]),
-        .testTarget(name: "ConversationCoreTests", dependencies: ["ConversationCore"])
+        .target(name: "AudioBufferSlots"),
+        .target(name: "ConversationCore", dependencies: ["CSQLite", "CZlib", "AudioBufferSlots"]),
+        .testTarget(name: "ConversationCoreTests", dependencies: ["ConversationCore", "AudioBufferSlots"])
     ]
 )

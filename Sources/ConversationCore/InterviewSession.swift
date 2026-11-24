@@ -92,11 +92,13 @@ public actor InterviewSession {
     private let detector: QuestionDetector
     private let generator: any TextGenerator
     private let preferences: String
+    private let interviewContext: [String]
     private let evidence: @Sendable (String) async -> [String]
     private var captureID: UUID?
     private var cleanup: Task<Void, Never>?
     private var captureTasks: [Task<Void, Never>] = []
     private var epochs: [String: UUID] = [:]
+    private var lastMeterUpdate: [String: ContinuousClock.Instant] = [:]
     private var generation: Task<Void, Never>?
     private var activeRevision: UUID?
     private var format: AnswerFormat
@@ -104,13 +106,14 @@ public actor InterviewSession {
     private var subscriber: AsyncStream<InterviewSnapshot>.Continuation?
 
     public init(channels: [TranscriptionChannel], detector: QuestionDetector, generator: any TextGenerator,
-                format: AnswerFormat = .brief, preferences: String = "",
+                format: AnswerFormat = .brief, preferences: String = "", interviewContext: [String] = [],
                 evidence: @escaping @Sendable (String) async -> [String] = { _ in [] }) {
         self.channels = channels
         self.detector = detector
         self.generator = generator
         self.format = format
         self.preferences = preferences
+        self.interviewContext = interviewContext
         self.evidence = evidence
     }
 
@@ -196,6 +199,7 @@ public actor InterviewSession {
         }
         captureID = nil
         epochs.removeAll()
+        lastMeterUpdate.removeAll()
         let tasks = captureTasks
         captureTasks.removeAll()
         for task in tasks { task.cancel() }
@@ -236,6 +240,9 @@ public actor InterviewSession {
             if source.role == .interviewer { invalidateAnswer(.cancelled) }
             await detector.invalidate(source)
         case .level(let source, let value):
+            let now = ContinuousClock.now
+            if let last = lastMeterUpdate[source.id], last.duration(to: now) < .milliseconds(100) { return }
+            lastMeterUpdate[source.id] = now
             snapshot.levels[source.id] = value
         case .transcript(let event):
             guard epochs[event.source.id] == event.epoch else { return }
@@ -301,7 +308,11 @@ public actor InterviewSession {
         }
         publish()
         let began = ContinuousClock.now
-        generation = Task { [weak self, generator, evidence, preferences] in
+        var context = interviewContext
+        if let prior = snapshot.answers.first(where: { $0.id == question.previousQuestionID }) {
+            context.insert("Previous interviewer question: " + prior.question.original, at: 0)
+        }
+        generation = Task { [weak self, generator, evidence, preferences, context] in
             do {
                 let facts = await evidence(question.normalized)
                 try Task.checkCancellation()
@@ -309,7 +320,7 @@ public actor InterviewSession {
                 let text = ([question.normalized] + question.parts).joined(separator: "\n")
                 let request = AnswerRequest(question: text,
                                             instructions: format.instruction + " " + preferences,
-                                            evidence: facts)
+                                            evidence: facts, interviewContext: context)
                 for try await event in try await generator.stream(request) {
                     try Task.checkCancellation()
                     switch event {

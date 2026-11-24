@@ -47,6 +47,6 @@ final class QuestionDetectionTests: XCTestCase {
         XCTAssertNotEqual(repeatQuestion?.id, accepted?.id)
         XCTAssertEqual(repeatQuestion?.previousQuestionID, accepted?.id)
         let inputs = await classifier.inputs
-        XCTAssertEqual(inputs.count, 3)
+        XCTAssertEqual(inputs.count, 2)
     }
 }

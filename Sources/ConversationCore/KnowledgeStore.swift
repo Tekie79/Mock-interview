@@ -100,7 +100,8 @@ public struct ExperienceFact: Codable, Identifiable, Equatable, Sendable {
     }
 
     public var promptText: String {
-        [claim, labeled("Ownership", ownership), labeled("Dates", dates), labeled("Limitations", limitations)]
+        [claim, labeled("Ownership", ownership), labeled("Dates", dates), labeled("Limitations", limitations),
+         labeled("Source location", locator)]
             .compactMap { $0 }.joined(separator: " | ")
     }
 

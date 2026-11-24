@@ -1,6 +1,7 @@
 #if os(macOS)
 import AppKit
 import AudioToolbox
+import AudioBufferSlots
 import AVFoundation
 import CoreAudio
 import Foundation
@@ -81,7 +82,7 @@ public actor MacAudioSource: AudioSource {
     private var ioProc: AudioDeviceIOProcID?
     private var processListener: AudioObjectPropertyListenerBlock?
     private var conversionTask: Task<Void, Never>?
-    private var rawOutput: AsyncThrowingStream<AVAudioPCMBuffer, Error>.Continuation?
+    private var rawOutput: AsyncThrowingStream<NativeAudioBufferPool.Lease, Error>.Continuation?
 
     public init(source: CaptureSource, input: Input) {
         self.source = source
@@ -94,8 +95,8 @@ public actor MacAudioSource: AudioSource {
         runID = id
         let (frames, output) = AsyncThrowingStream<AudioFrame, Error>.makeStream(
             bufferingPolicy: .bufferingOldest(200))
-        let (raw, buffers) = AsyncThrowingStream<AVAudioPCMBuffer, Error>.makeStream(
-            bufferingPolicy: .bufferingOldest(96))
+        let (raw, buffers) = AsyncThrowingStream<NativeAudioBufferPool.Lease, Error>.makeStream(
+            bufferingPolicy: .bufferingOldest(40))
         rawOutput = buffers
         do {
             switch input {
@@ -113,9 +114,10 @@ public actor MacAudioSource: AudioSource {
         conversionTask = Task.detached { [source, weak self] in
             do {
                 var encoder = PCMEncoder(source: source)
-                for try await buffer in raw {
+                for try await lease in raw {
+                    defer { lease.release() }
                     try Task.checkCancellation()
-                    for frame in try encoder.convert(buffer) {
+                    for frame in try encoder.convert(lease.buffer) {
                         if case .dropped = output.yield(frame) { throw CaptureFailure.bufferOverrun }
                     }
                 }
@@ -168,7 +170,7 @@ public actor MacAudioSource: AudioSource {
     }
 
     private func startMicrophone(_ device: AudioObjectID,
-                                 output: AsyncThrowingStream<AVAudioPCMBuffer, Error>.Continuation) throws {
+                                 output: AsyncThrowingStream<NativeAudioBufferPool.Lease, Error>.Continuation) throws {
         let engine = AVAudioEngine()
         let node = engine.inputNode
         guard let unit = node.audioUnit else { throw CaptureFailure.sourceUnavailable }
@@ -176,9 +178,9 @@ public actor MacAudioSource: AudioSource {
         try check(AudioUnitSetProperty(unit, kAudioOutputUnitProperty_CurrentDevice, kAudioUnitScope_Global,
                                        0, &selected, UInt32(MemoryLayout<AudioObjectID>.size)))
         let format = node.outputFormat(forBus: 0)
-        guard format.sampleRate > 0, format.channelCount > 0 else { throw CaptureFailure.invalidFormat }
+        let pool = try NativeAudioBufferPool(format: format)
         node.installTap(onBus: 0, bufferSize: 960, format: format) { buffer, _ in
-            copyAudio(buffer.audioBufferList, frames: buffer.frameLength, format: format, into: output)
+            pool.copy(buffer.audioBufferList, frames: buffer.frameLength, into: output)
         }
         self.engine = engine
         engineObserver = NotificationCenter.default.addObserver(
@@ -188,7 +190,7 @@ public actor MacAudioSource: AudioSource {
     }
 
     private func startProcess(_ process: AudioObjectID,
-                              output: AsyncThrowingStream<AVAudioPCMBuffer, Error>.Continuation) throws {
+                              output: AsyncThrowingStream<NativeAudioBufferPool.Lease, Error>.Continuation) throws {
         let selector = kAudioHardwarePropertyProcessObjectList
         guard try MacAudioDevices.objectList(selector).contains(process) else { throw CaptureFailure.sourceUnavailable }
         let description = CATapDescription()
@@ -219,10 +221,11 @@ public actor MacAudioSource: AudioSource {
             ]]
         ]
         try check(AudioHardwareCreateAggregateDevice(configuration as CFDictionary, &aggregate))
+        let pool = try NativeAudioBufferPool(format: format)
         let bytesPerFrame = streamFormat.mBytesPerFrame
         try check(AudioDeviceCreateIOProcIDWithBlock(&ioProc, aggregate, nil) { _, input, _, _, _ in
             let frames = input.pointee.mBuffers.mDataByteSize / bytesPerFrame
-            copyAudio(input, frames: frames, format: format, into: output)
+            pool.copy(input, frames: frames, into: output)
         })
         guard let ioProc else { throw CaptureFailure.sourceUnavailable }
         let listener: AudioObjectPropertyListenerBlock = { _, _ in
@@ -237,23 +240,85 @@ public actor MacAudioSource: AudioSource {
     }
 }
 
-private func copyAudio(_ input: UnsafePointer<AudioBufferList>, frames: AVAudioFrameCount,
-                       format: AVAudioFormat,
-                       into output: AsyncThrowingStream<AVAudioPCMBuffer, Error>.Continuation) {
-    guard (1...8_192).contains(frames),
-          let copy = AVAudioPCMBuffer(pcmFormat: format, frameCapacity: frames) else { return }
-    copy.frameLength = frames
-    let inputs = UnsafeMutableAudioBufferListPointer(UnsafeMutablePointer(mutating: input))
-    let destinations = UnsafeMutableAudioBufferListPointer(copy.mutableAudioBufferList)
-    guard inputs.count == destinations.count else { return }
-    for index in inputs.indices {
-        let source = inputs[index]
-        let destination = destinations[index]
-        guard let from = source.mData, let to = destination.mData,
-              source.mDataByteSize == destination.mDataByteSize else { return }
-        memcpy(to, from, Int(source.mDataByteSize))
+// A slot belongs to the callback until yield, then to the conversion worker until release.
+// The atomic slot table keeps those accesses disjoint without blocking the callback.
+private final class NativeAudioBufferPool: @unchecked Sendable {
+    struct Lease: @unchecked Sendable {
+        let buffer: AVAudioPCMBuffer
+        fileprivate let pool: NativeAudioBufferPool
+        fileprivate let index: Int32
+
+        func release() { AudioBufferSlotsRelease(pool.slots, index) }
     }
-    if case .dropped = output.yield(copy) { output.finish(throwing: CaptureFailure.bufferOverrun) }
+
+    private static let count = 40
+    private let frameCapacity: AVAudioFrameCount
+    private let buffers: [AVAudioPCMBuffer]
+    fileprivate let slots: OpaquePointer
+
+    init(format: AVAudioFormat) throws {
+        guard format.sampleRate.isFinite, (8_000...384_000).contains(format.sampleRate),
+              (1...8).contains(format.channelCount) else { throw CaptureFailure.invalidFormat }
+        let capacity = AVAudioFrameCount(min(8_192, format.sampleRate * 5 / Double(Self.count)))
+        var allocated: [AVAudioPCMBuffer] = []
+        for _ in 0..<Self.count {
+            guard let buffer = AVAudioPCMBuffer(pcmFormat: format, frameCapacity: capacity) else {
+                throw CaptureFailure.invalidFormat
+            }
+            allocated.append(buffer)
+        }
+        guard let slots = AudioBufferSlotsCreate(Self.count) else { throw CaptureFailure.bufferOverrun }
+        frameCapacity = capacity
+        buffers = allocated
+        self.slots = slots
+    }
+
+    deinit { AudioBufferSlotsDestroy(slots) }
+
+    func copy(_ input: UnsafePointer<AudioBufferList>, frames: AVAudioFrameCount,
+              into output: AsyncThrowingStream<Lease, Error>.Continuation) {
+        if frames == 0 { return }
+        guard frames <= frameCapacity else {
+            output.finish(throwing: CaptureFailure.invalidFormat)
+            return
+        }
+        let index = AudioBufferSlotsAcquire(slots)
+        guard index >= 0 else {
+            output.finish(throwing: CaptureFailure.bufferOverrun)
+            return
+        }
+        let buffer = buffers[Int(index)]
+        let lease = Lease(buffer: buffer, pool: self, index: index)
+        buffer.frameLength = frames
+        let inputs = UnsafeMutableAudioBufferListPointer(UnsafeMutablePointer(mutating: input))
+        let targets = UnsafeMutableAudioBufferListPointer(buffer.mutableAudioBufferList)
+        guard inputs.count == targets.count else {
+            lease.release()
+            output.finish(throwing: CaptureFailure.invalidFormat)
+            return
+        }
+        for channel in inputs.indices {
+            let source = inputs[channel]
+            let target = targets[channel]
+            guard let from = source.mData, let to = target.mData, source.mDataByteSize == target.mDataByteSize else {
+                lease.release()
+                output.finish(throwing: CaptureFailure.invalidFormat)
+                return
+            }
+            memcpy(to, from, Int(source.mDataByteSize))
+        }
+        switch output.yield(lease) {
+        case .enqueued: break
+        case .dropped(let dropped):
+            dropped.release()
+            output.finish(throwing: CaptureFailure.bufferOverrun)
+        case .terminated:
+            lease.release()
+        @unknown default:
+            lease.release()
+            output.finish(throwing: CaptureFailure.invalidFormat)
+        }
+    }
 }
 
 private struct PCMEncoder {
