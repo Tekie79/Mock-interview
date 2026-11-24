@@ -35,6 +35,9 @@ public struct InterviewAnswer: Identifiable, Sendable, Codable, Equatable {
     public var text: String
     public var state: State
     public var evidence: [String] = []
+    public var usage: TokenUsage?
+    public var firstTextMilliseconds: Int?
+    public var failure: String?
     public var id: UUID { question.id }
 }
 
@@ -56,6 +59,8 @@ public struct InterviewSnapshot: Sendable {
     public internal(set) var levels: [String: Float] = [:]
     public internal(set) var connected: Set<String> = []
     public internal(set) var issues: [String] = []
+    public internal(set) var reconnects = 0
+    public internal(set) var usage: TokenUsage?
 }
 
 public actor InterviewSession {
@@ -107,9 +112,9 @@ public actor InterviewSession {
                     try await channel.run { [weak self] event in
                         await self?.receive(event, activation: id)
                     }
-                    await self?.channelEnded(channel.source, activation: id, failed: false)
+                    await self?.channelEnded(channel.source, activation: id, failure: nil)
                 } catch {
-                    await self?.channelEnded(channel.source, activation: id, failed: !Task.isCancelled)
+                    await self?.channelEnded(channel.source, activation: id, failure: Task.isCancelled ? nil : publicErrorMessage(error))
                 }
             })
         }
@@ -190,6 +195,7 @@ public actor InterviewSession {
         case .gap(let source):
             epochs.removeValue(forKey: source.id)
             snapshot.connected.remove(source.id)
+            snapshot.reconnects += 1
             recordIssue("Audio gap on " + source.id + ". Reconnecting.")
             if source.role == .interviewer { invalidateAnswer(.cancelled) }
             await detector.invalidate(source)
@@ -220,12 +226,12 @@ public actor InterviewSession {
         if captureID == activation { publish() }
     }
 
-    private func channelEnded(_ source: CaptureSource, activation: UUID, failed: Bool) async {
+    private func channelEnded(_ source: CaptureSource, activation: UUID, failure: String?) async {
         guard captureID == activation else { return }
         epochs.removeValue(forKey: source.id)
         snapshot.connected.remove(source.id)
         snapshot.levels.removeValue(forKey: source.id)
-        if failed { recordIssue("Capture or transcription stopped on " + source.id + ".") }
+        if let failure { recordIssue(source.id + ": " + failure) }
         await detector.invalidate(source)
         if captureID == activation { publish() }
     }
@@ -243,6 +249,7 @@ public actor InterviewSession {
             if snapshot.answers.count > 500 { snapshot.answers.removeFirst() }
         }
         publish()
+        let began = ContinuousClock.now
         generation = Task { [weak self, generator, evidence, preferences] in
             do {
                 let facts = await evidence(question.normalized)
@@ -252,15 +259,18 @@ public actor InterviewSession {
                 let request = AnswerRequest(question: text,
                                             instructions: format.instruction + " " + preferences,
                                             evidence: facts)
-                for try await delta in try await generator.stream(request) {
+                for try await event in try await generator.stream(request) {
                     try Task.checkCancellation()
-                    await self?.append(delta, revision)
+                    switch event {
+                    case .text(let delta): await self?.append(delta, revision, began: began)
+                    case .usage(let usage): await self?.recordUsage(usage, revision: revision)
+                    }
                 }
                 await self?.complete(revision, state: .complete)
             } catch is CancellationError {
                 await self?.complete(revision, state: .cancelled)
             } catch {
-                await self?.complete(revision, state: .failed)
+                await self?.complete(revision, state: .failed, failure: publicErrorMessage(error))
             }
         }
     }
@@ -272,7 +282,8 @@ public actor InterviewSession {
         publish()
     }
 
-    private func append(_ delta: String, _ revision: UUID) {
+    private func append(_ delta: String, _ revision: UUID, began: ContinuousClock.Instant) {
+        guard !delta.isEmpty else { return }
         guard activeRevision == revision,
               let index = snapshot.answers.firstIndex(where: { $0.revision == revision }) else { return }
         guard snapshot.answers[index].text.utf8.count + delta.utf8.count <= 32_768 else {
@@ -280,14 +291,31 @@ public actor InterviewSession {
             publish()
             return
         }
+        if snapshot.answers[index].firstTextMilliseconds == nil {
+            let elapsed = began.duration(to: .now).components
+            snapshot.answers[index].firstTextMilliseconds = Int(elapsed.seconds * 1_000 + elapsed.attoseconds / 1_000_000_000_000_000)
+        }
         snapshot.answers[index].text.append(delta)
         publish()
     }
 
-    private func complete(_ revision: UUID, state: InterviewAnswer.State) {
+    private func recordUsage(_ usage: TokenUsage, revision: UUID) {
+        guard activeRevision == revision,
+              let index = snapshot.answers.firstIndex(where: { $0.revision == revision }),
+              snapshot.answers[index].usage == nil else { return }
+        let previous = snapshot.usage ?? TokenUsage(input: 0, output: 0)
+        // Exclude malformed quantities rather than allowing a provider value to overflow a running total.
+        guard usage.input <= 10_000_000, usage.output <= 10_000_000 else { return }
+        snapshot.answers[index].usage = usage
+        snapshot.usage = TokenUsage(input: previous.input + usage.input, output: previous.output + usage.output)
+        publish()
+    }
+
+    private func complete(_ revision: UUID, state: InterviewAnswer.State, failure: String? = nil) {
         guard activeRevision == revision,
               let index = snapshot.answers.firstIndex(where: { $0.revision == revision }) else { return }
         snapshot.answers[index].state = state == .complete && snapshot.answers[index].text.isEmpty ? .failed : state
+        snapshot.answers[index].failure = failure
         activeRevision = nil
         generation = nil
         publish()

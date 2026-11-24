@@ -108,6 +108,8 @@ final class WorkspaceModel: ObservableObject {
     @Published var pinned = false
     @Published var startedAt: Date?
     @Published var endedAt: Date?
+    @Published var providerTest: String?
+    @Published var checkingProvider = false
     @Published var hasOpenAIKey = Keychain.load("openai") != nil
 
     private(set) var store: KnowledgeStore?
@@ -166,6 +168,39 @@ final class WorkspaceModel: ObservableObject {
             hasOpenAIKey = Keychain.load("openai") != nil
         } catch {
             self.error = "The OpenAI key could not be updated in Keychain."
+        }
+    }
+
+    func checkProvider() {
+        guard !checkingProvider else { return }
+        checkingProvider = true
+        providerTest = "Checking OpenAI configuration…"
+        Task {
+            defer { checkingProvider = false }
+            do {
+                guard let key = Keychain.load("openai"), !key.isEmpty else { throw ProviderFailure.missingCredentials }
+                let defaults = UserDefaults.standard
+                let transcriber = OpenAIRealtimeTranscriber(
+                    apiKey: key, model: defaults.string(forKey: "sttModel") ?? "gpt-live-transcribe")
+                let source = CaptureSource(id: "Connection test", role: .interviewer)
+                let epoch = UUID()
+                let transcription = try await transcriber.connect(source: source, epoch: epoch)
+                await transcriber.close()
+                _ = transcription
+                let classification = OpenAIQuestionClassifier(
+                    apiKey: key, model: defaults.string(forKey: "questionModel") ?? "gpt-4.1-mini")
+                let testQuestion = "What is a FIFO queue?"
+                _ = try await classification.classify(QuestionInput(
+                    turn: TranscriptEvent(source: source, epoch: epoch, itemID: "synthetic-connection-test",
+                                          text: testQuestion, state: .final), previousQuestions: []))
+                let generator = OpenAITextGenerator(
+                    apiKey: key, model: defaults.string(forKey: "answerModel") ?? "gpt-4.1-mini")
+                for try await _ in try await generator.stream(AnswerRequest(
+                    question: testQuestion, instructions: "Use one sentence.", evidence: [])) {}
+                providerTest = "OpenAI acknowledged transcription and both text models responded."
+            } catch {
+                providerTest = publicErrorMessage(error)
+            }
         }
     }
 
@@ -253,6 +288,18 @@ final class WorkspaceModel: ObservableObject {
             endedAt = .now
             busy = false
         }
+    }
+
+    func clearSession() {
+        guard !active, !busy else { return }
+        observations?.cancel()
+        observations = nil
+        session = nil
+        snapshot = nil
+        selectedAnswer = nil
+        pinned = false
+        startedAt = nil
+        endedAt = nil
     }
 
     func cancelAnswer() {
@@ -362,6 +409,7 @@ private struct WorkspaceView: View {
     @Environment(\.openWindow) private var openWindow
     @State private var profileEditor = false
     @State private var replayPicker = false
+    @State private var showDiagnostics = false
     @State private var manualText = ""
     @AppStorage("answerFontSize") private var fontSize = 16.0
 
@@ -394,6 +442,20 @@ private struct WorkspaceView: View {
                     .frame(minWidth: 670, minHeight: 545)
             }
         }
+        .sheet(isPresented: $showDiagnostics) {
+            VStack(alignment: .leading) {
+                Text("Session Diagnostics").font(.headline)
+                Text(model.snapshot?.diagnosticSummary ?? "No session is active.").textSelection(.enabled)
+                HStack {
+                    Button("Copy") {
+                        NSPasteboard.general.clearContents()
+                        NSPasteboard.general.setString(model.snapshot?.diagnosticSummary ?? "", forType: .string)
+                    }
+                    Spacer()
+                    Button("Done") { showDiagnostics = false }
+                }
+            }.padding(18).frame(minWidth: 340)
+        }
         .fileImporter(isPresented: $replayPicker, allowedContentTypes: [.data]) { result in
             if case .success(let url) = result { model.replayURL = url }
         }
@@ -415,6 +477,10 @@ private struct WorkspaceView: View {
             Button("Profiles") { profileEditor = true }.disabled(model.store == nil || model.active)
             SettingsLink { Label("Settings", systemImage: "gear") }
             Button("Compact") { openWindow(id: "compact") }
+            Menu("Session") {
+                Button("Diagnostics") { showDiagnostics = true }
+                Button("Clear Session", action: model.clearSession).disabled(model.active || model.snapshot == nil)
+            }
             if model.state == .listening {
                 Button("Pause", action: model.pause)
             } else {
@@ -533,6 +599,11 @@ private struct AnswerPanel: View {
                     .frame(maxWidth: .infinity, alignment: .leading)
                 }
                 Text(answer.state.rawValue.capitalized).font(.caption).foregroundStyle(.secondary)
+                if let failure = answer.failure { Text(failure).font(.caption).foregroundStyle(.secondary) }
+                if let usage = answer.usage {
+                    Text("\(usage.input) input / \(usage.output) output tokens")
+                        .font(.caption).foregroundStyle(.secondary)
+                }
                 HStack {
                     if answer.state == .generating {
                         Button("Cancel", action: model.cancelAnswer)
@@ -611,6 +682,9 @@ private struct ProviderSettingsView: View {
                 TextField("Classification model", text: $questionModel)
                 TextField("Answer model", text: $answerModel)
                 TextField("Transcription language code", text: $sttLanguage)
+                Button("Test Connection", action: model.checkProvider).disabled(model.checkingProvider)
+                    .help("Sends a synthetic question to the selected models and may incur provider charges.")
+                if let result = model.providerTest { Text(result).foregroundStyle(.secondary) }
             }
             Section("Live answers") {
                 Picker("Format", selection: $format) {
@@ -620,6 +694,9 @@ private struct ProviderSettingsView: View {
                 Slider(value: $vad, in: 0.005...0.08) { Text("Voice threshold") }
                 Slider(value: $confidence, in: 0.5...1) { Text("Question confidence") }
                 Slider(value: $fontSize, in: 12...30, step: 1) { Text("Answer text size") }
+            }
+            Section("Retention") {
+                Text("The live transcript and responses stay in memory for the current session. Audio is never saved.")
             }
             if let error = model.error { Text(error).foregroundStyle(.red) }
         }

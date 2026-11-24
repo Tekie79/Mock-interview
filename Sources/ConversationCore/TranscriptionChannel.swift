@@ -54,8 +54,10 @@ public struct TranscriptionChannel: Sendable {
             } catch {
                 await stt.close()
                 guard !Task.isCancelled else { throw CancellationError() }
-                guard let providerError = error as? ProviderFailure,
-                      [.unavailable, .disconnected, .timeout].contains(providerError), attempt < 2 else {
+                let transient = (error as? ProviderFailure).map {
+                    [ProviderFailure.unavailable, .disconnected, .timeout, .rateLimited].contains($0)
+                } ?? false
+                guard transient || (error as? CaptureFailure) == .bufferOverrun, attempt < 2 else {
                     throw error
                 }
                 await events(.gap(source: source))
@@ -75,6 +77,7 @@ public struct TranscriptionChannel: Sendable {
                 var endpoint = AudioEndpoint(threshold: threshold)
                 var preRoll: [AudioFrame] = []
                 var sending = false
+                var hasCommitted = false
                 for try await frame in frames {
                     try Task.checkCancellation()
                     let activity = endpoint.observe(frame)
@@ -93,10 +96,14 @@ public struct TranscriptionChannel: Sendable {
                     if activity.shouldCommit, sending {
                         try await stt.commit()
                         sending = false
+                        hasCommitted = true
                     }
                 }
                 if sending {
                     try await stt.commit()
+                    hasCommitted = true
+                }
+                if hasCommitted {
                     // A finite replay may end before the provider sends its last transcript.
                     try await delay(.seconds(3))
                 }

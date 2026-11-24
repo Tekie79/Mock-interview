@@ -139,18 +139,26 @@ public struct OpenAITextGenerator: TextGenerator {
         client = OpenAIResponsesClient(apiKey: apiKey, model: model)
     }
 
-    public func stream(_ request: AnswerRequest) async throws -> AsyncThrowingStream<String, Error> {
+    public func stream(_ request: AnswerRequest) async throws -> AsyncThrowingStream<GenerationEvent, Error> {
         let urlRequest = try client.request([
             "instructions": AnswerPrompt.policy, "input": AnswerPrompt.input(request),
             "stream": true, "max_output_tokens": 1_200
         ], timeout: 20)
-        return StreamingHTTP.start(urlRequest, decode: Self.decode)
+        return StreamingHTTP.start(urlRequest) { try Self.decode($0) }
     }
 
     static func decode(_ event: String) throws -> StreamingHTTP.Event {
         struct Payload: Decodable {
+            struct Response: Decodable {
+                struct Usage: Decodable {
+                    let input_tokens: Int
+                    let output_tokens: Int
+                }
+                let usage: Usage?
+            }
             let type: String
             let delta: String?
+            let response: Response?
         }
         guard let payload = try? JSONDecoder().decode(Payload.self, from: Data(event.utf8)) else {
             throw ProviderFailure.malformedEvent
@@ -159,7 +167,9 @@ public struct OpenAITextGenerator: TextGenerator {
         case "response.output_text.delta":
             guard let delta = payload.delta else { throw ProviderFailure.malformedEvent }
             return .text(delta)
-        case "response.completed": return .complete
+        case "response.completed":
+            let usage = payload.response?.usage.map { TokenUsage(input: $0.input_tokens, output: $0.output_tokens) }
+            return .complete(usage)
         case "error", "response.failed", "response.incomplete", "response.refusal.delta":
             throw ProviderFailure.requestRejected
         default: return .ignore

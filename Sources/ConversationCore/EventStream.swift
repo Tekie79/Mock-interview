@@ -41,22 +41,23 @@ final class StreamingHTTP: NSObject, URLSessionDataDelegate, @unchecked Sendable
     enum Event {
         case ignore
         case text(String)
-        case complete
+        case usage(TokenUsage)
+        case complete(TokenUsage? = nil)
     }
 
-    private let output: AsyncThrowingStream<String, Error>.Continuation
+    private let output: AsyncThrowingStream<GenerationEvent, Error>.Continuation
     private let decode: Decode
     private var parser = EventStreamParser()
     private var finished = false
     private var emittedText = false
 
-    private init(output: AsyncThrowingStream<String, Error>.Continuation, decode: @escaping Decode) {
+    private init(output: AsyncThrowingStream<GenerationEvent, Error>.Continuation, decode: @escaping Decode) {
         self.output = output
         self.decode = decode
     }
 
-    static func start(_ request: URLRequest, decode: @escaping Decode) -> AsyncThrowingStream<String, Error> {
-        let (stream, output) = AsyncThrowingStream<String, Error>.makeStream(
+    static func start(_ request: URLRequest, decode: @escaping Decode) -> AsyncThrowingStream<GenerationEvent, Error> {
+        let (stream, output) = AsyncThrowingStream<GenerationEvent, Error>.makeStream(
             bufferingPolicy: .bufferingOldest(512))
         let receiver = StreamingHTTP(output: output, decode: decode)
         let configuration = URLSessionConfiguration.ephemeral
@@ -94,9 +95,14 @@ final class StreamingHTTP: NSObject, URLSessionDataDelegate, @unchecked Sendable
                 case .text(let text):
                     if !text.isEmpty {
                         emittedText = true
-                        if case .dropped = output.yield(text) { throw CaptureFailure.bufferOverrun }
+                        if case .dropped = output.yield(.text(text)) { throw CaptureFailure.bufferOverrun }
                     }
-                case .complete:
+                case .usage(let usage):
+                    if case .dropped = output.yield(.usage(usage)) { throw CaptureFailure.bufferOverrun }
+                case .complete(let usage):
+                    if let usage, case .dropped = output.yield(.usage(usage)) {
+                        throw CaptureFailure.bufferOverrun
+                    }
                     finish(emittedText ? nil : ProviderFailure.malformedEvent)
                 }
             }

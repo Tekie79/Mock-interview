@@ -118,6 +118,21 @@ public struct AnswerRequest: Equatable, Sendable {
     }
 }
 
+public struct TokenUsage: Sendable, Equatable, Codable {
+    public let input: Int
+    public let output: Int
+
+    public init(input: Int, output: Int) {
+        self.input = max(0, input)
+        self.output = max(0, output)
+    }
+}
+
+public enum GenerationEvent: Sendable, Equatable {
+    case text(String)
+    case usage(TokenUsage)
+}
+
 public protocol TextGenerator: Sendable {
-    func stream(_ request: AnswerRequest) async throws -> AsyncThrowingStream<String, Error>
+    func stream(_ request: AnswerRequest) async throws -> AsyncThrowingStream<GenerationEvent, Error>
 }

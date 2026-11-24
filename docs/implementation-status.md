@@ -11,7 +11,7 @@ Baseline is a repository bootstrap only; no real application or provider integra
 | M04 | IMPLEMENTED (qualification pending) | OpenAI SSE, grounded prompt, session composition, answer formats, manual generation and revision guards. |
 | M05 | IMPLEMENTED (qualification pending) | SQLite profiles/documents/facts, confirmed-only FTS and text/Markdown/PDF import contracts. |
 | M06 | IMPLEMENTED (qualification pending) | Live SwiftUI workspace, source setup and meters, profile review, compact window, shortcuts and Keychain. |
-| M07 | NOT STARTED | MVP resilience |
+| M07 | IMPLEMENTED (qualification pending) | Bounded retry, redacted diagnostics, usage, synthetic replay, in-memory retention and packaging command. |
 | M08 | NOT STARTED | Secondary providers |
 | M09 | NOT STARTED | Training and review |
 | M10 | NOT STARTED | Retrieval and roles |
@@ -63,3 +63,9 @@ See `docs/verification/baseline.md` for the initial build/test run. No native Ma
 - Debian 13, Swift 6.2.3. Build and test scripts passed, 12 XCTest passes, 0 failures. Swift frontend parsing passed for arm64 macOS 14.2 source. This is syntax coverage only.
 - Feature-branch CI now requests Xcode compilation. Native walkthrough, VoiceOver, local keyboard and selected-source permission tests remain pending.
 - Next checkpoint is M07 resilience, retention, diagnostics and packaging.
+
+### M07 development checkpoint
+
+- Debian 13, Swift 6.2.3. Build and tests passed, 14 XCTest passes, 0 failures. PCM-to-answer integration covers duplicate final delivery, usage, stop and transcript-free diagnostics. Native source parsed and packaging script passed shell syntax validation.
+- The hosted macOS workflow is building the M06 checkpoint. Validate packaging output on a subsequent runner. No credentialed connection tests or physical Mac scenario matrix ran here.
+- Next checkpoint is M08 independent Deepgram and Anthropic provider selection.
