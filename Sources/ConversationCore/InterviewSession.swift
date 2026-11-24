@@ -47,14 +47,28 @@ public struct InterviewTranscript: Identifiable, Sendable, Codable, Equatable {
     public var text: String
     public var isFinal: Bool
     public var timestamp: Date?
+    public var speaker: Int?
 
-    public init(id: String, role: SourceRole, text: String, isFinal: Bool, timestamp: Date? = .now) {
+    public init(id: String, role: SourceRole, text: String, isFinal: Bool, timestamp: Date? = .now,
+                speaker: Int? = nil) {
         self.id = id
         self.role = role
         self.text = text
         self.isFinal = isFinal
         self.timestamp = timestamp
+        self.speaker = speaker
     }
+}
+
+public struct DiarizedSpeaker: Identifiable, Hashable, Sendable {
+    public struct ID: Hashable, Sendable {
+        public let sourceID: String
+        public let epoch: UUID
+        public let number: Int
+    }
+
+    public let id: ID
+    public var role: SourceRole
 }
 
 public struct InterviewSnapshot: Sendable {
@@ -68,6 +82,7 @@ public struct InterviewSnapshot: Sendable {
     public internal(set) var levels: [String: Float] = [:]
     public internal(set) var connected: Set<String> = []
     public internal(set) var issues: [String] = []
+    public internal(set) var speakers: [DiarizedSpeaker] = []
     public internal(set) var reconnects = 0
     public internal(set) var usage: TokenUsage?
 }
@@ -158,6 +173,16 @@ public actor InterviewSession {
         generate(answer.question, format: format ?? answer.format)
     }
 
+    public func assignSpeaker(_ id: DiarizedSpeaker.ID, role: SourceRole) async {
+        guard captureID != nil, epochs[id.sourceID] == id.epoch,
+              let index = snapshot.speakers.firstIndex(where: { $0.id == id }) else { return }
+        let revoked = snapshot.speakers[index].role == .interviewer && role != .interviewer
+        snapshot.speakers[index].role = role
+        if revoked { invalidateAnswer(.cancelled) }
+        await detector.assignSpeaker(id.number, role: role, sourceID: id.sourceID, epoch: id.epoch)
+        publish()
+    }
+
     public func cancelAnswer() {
         invalidateAnswer(.cancelled)
         publish()
@@ -182,6 +207,7 @@ public actor InterviewSession {
             for task in tasks { await task.value }
             await previous?.value
             snapshot.connected.removeAll()
+            snapshot.speakers.removeAll()
             snapshot.levels.removeAll()
             snapshot.transcript.removeAll { !$0.isFinal }
             publish()
@@ -204,6 +230,7 @@ public actor InterviewSession {
         case .gap(let source):
             epochs.removeValue(forKey: source.id)
             snapshot.connected.remove(source.id)
+            snapshot.speakers.removeAll { $0.id.sourceID == source.id }
             snapshot.reconnects += 1
             recordIssue("Audio gap on " + source.id + ". Reconnecting.")
             if source.role == .interviewer { invalidateAnswer(.cancelled) }
@@ -213,8 +240,19 @@ public actor InterviewSession {
         case .transcript(let event):
             guard epochs[event.source.id] == event.epoch else { return }
             let id = event.epoch.uuidString + "/" + event.source.id + "/" + event.itemID
-            let item = InterviewTranscript(id: id, role: event.source.role, text: event.text,
-                                           isFinal: event.state == .final)
+            var speakerID: DiarizedSpeaker.ID?
+            var role = event.source.role
+            if role == .unknown, let number = event.speaker, number >= 0, event.state == .final {
+                let speaker = DiarizedSpeaker.ID(sourceID: event.source.id, epoch: event.epoch, number: number)
+                speakerID = speaker
+                if let known = snapshot.speakers.first(where: { $0.id == speaker }) {
+                    role = known.role
+                } else if snapshot.speakers.count < 32 {
+                    snapshot.speakers.append(DiarizedSpeaker(id: speaker, role: .unknown))
+                }
+            }
+            let item = InterviewTranscript(id: id, role: role, text: event.text, isFinal: event.state == .final,
+                                           speaker: speakerID?.number)
             if let existing = snapshot.transcript.firstIndex(where: { $0.id == id }) {
                 if snapshot.transcript[existing].isFinal { return }
                 snapshot.transcript[existing] = item
@@ -226,6 +264,9 @@ public actor InterviewSession {
             do {
                 if let question = try await detector.receive(event), captureID == activation,
                    epochs[event.source.id] == event.epoch {
+                    if let speakerID, snapshot.speakers.first(where: { $0.id == speakerID })?.role != .interviewer {
+                        return
+                    }
                     generate(question, format: format)
                 }
             } catch where !(error is CancellationError) {
@@ -240,6 +281,7 @@ public actor InterviewSession {
         epochs.removeValue(forKey: source.id)
         snapshot.connected.remove(source.id)
         snapshot.levels.removeValue(forKey: source.id)
+        snapshot.speakers.removeAll { $0.id.sourceID == source.id }
         if let failure { recordIssue(source.id + ": " + failure) }
         await detector.invalidate(source)
         if captureID == activation { publish() }

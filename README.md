@@ -1,24 +1,27 @@
 # Live AI Mock Interview Assistant
 
-A macOS-first native application for live mock interviews and training. Listen to a selected remote mock interviewer or microphone, recognize complete relevant questions, and stream grounded text suggestions while continuing to listen. This is the initial development repository, not a working desktop application.
+A native macOS app for mock interviews and solo practice. It listens to selected audio, transcribes each source separately, and streams text suggestions for complete interviewer questions while capture continues.
 
-## Development baseline
+## Run on a Mac
 
-- Apple Silicon, macOS 14.2+; SwiftUI/AppKit for the app; Swift Package Manager for portable core modules.
-- Swift 6.x toolchain recommended. Package currently uses Swift 5.9 manifest/language compatibility to permit the initial core to run on multiple Swift toolchains.
-- Local-first profiles, BYOK cloud STT/LLM; no mandatory app-level consent workflow; operating system permissions remain mandatory.
-- No real personal records, recordings, API keys, or provider traffic in source control or deterministic tests.
+Requires Apple Silicon, macOS 14.2 or later, and Xcode with a macOS SDK that supports Core Audio process taps.
 
-## Start here
+1. Open `MockInterview.xcodeproj`, select the **MockInterview** scheme, and run. For a local unsigned release build, run `./scripts/package-macos.sh`.
+2. Open **Settings**. Choose transcription, classification, and answer providers independently. Add the required API keys. The app stores them in Keychain. **Test Connection** sends synthetic requests and may incur provider charges.
+3. Choose an application, a microphone, or both. **Test Audio** shows input levels before the session. Allow indicated macOS permissions. The app does not automatically change the selected source.
+4. Optionally create a profile, import text, Markdown, PDF, or DOCX, and confirm the experience facts the assistant can use.
+5. Start the interview. Use the native workspace or compact window to review suggestions and control the session. Transcript and answers are kept in memory by default. Select local retention or save an individual session from **Review and History**.
 
-1. Read [AGENTS.md](AGENTS.md), [requirements](docs/requirements.md), [architecture](docs/architecture.md), [PLANS.md](PLANS.md), and [acceptance plan](docs/acceptance-test-plan.md).
-2. Run `./scripts/test.sh` (requires Swift). The initial package contains only a small role-policy contract and smoke tests.
-3. Run `./scripts/build.sh` for the portable package. On a Mac the future desktop app must also build with Xcode; its project does not exist yet.
-4. Read [cloud setup and handoff](docs/cloud-development.md) and submit [the cloud implementation prompt](prompts/CODEX_CLOUD_IMPLEMENTATION.md) to a Codex Cloud task.
-5. Track milestone progress and actual verification in [implementation status](docs/implementation-status.md).
+The app accepts raw mono signed PCM16 little-endian replay at 24 kHz. Live replay uses the selected transcription provider. The deterministic developer replay test uses synthetic audio and test transports.
 
-The authoritative requirements are `docs/requirements.md`. The derived documents clarify engineering and test execution without replacing those requirements. See [provider compatibility](docs/provider-compatibility.md) for the live API verification policy and [fixture schema](Tests/Fixtures/README.md) for synthetic test cases.
+## Develop
+
+- Install Swift 6.x on Linux or use the Xcode toolchain on macOS. On Debian or Ubuntu, install `libsqlite3-dev`, `zlib1g-dev`, and `pkg-config`. The macOS SDK supplies SQLite and zlib.
+- Run `./scripts/build.sh` and `./scripts/test.sh`. Deterministic tests require no provider credentials or network.
+- Read the [requirements](docs/requirements.md), [development plan](PLANS.md), [implementation status](docs/implementation-status.md), and [acceptance plan](docs/acceptance-test-plan.md) for scope and the distinction between development and final qualification.
+
+The GitHub Actions workflow builds the portable package, runs deterministic tests, and compiles the native app on a hosted Mac. The implementation status records real-provider and physical-device checks separately.
 
 ## Repository policy
 
-Use feature branches and reviewed pull requests. Do not merge or publish releases automatically. No license chosen; ask the owner before distribution or adding a license. Working title and repository name are provisional.
+Use feature branches and reviewed changes. Do not merge or publish releases automatically. No distribution license has been selected.

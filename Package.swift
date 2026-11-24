@@ -7,7 +7,8 @@ let package = Package(
     products: [.library(name: "ConversationCore", targets: ["ConversationCore"])],
     targets: [
         .systemLibrary(name: "CSQLite", pkgConfig: "sqlite3", providers: [.apt(["libsqlite3-dev"])]),
-        .target(name: "ConversationCore", dependencies: ["CSQLite"]),
+        .systemLibrary(name: "CZlib", pkgConfig: "zlib", providers: [.apt(["zlib1g-dev"])]),
+        .target(name: "ConversationCore", dependencies: ["CSQLite", "CZlib"]),
         .testTarget(name: "ConversationCoreTests", dependencies: ["ConversationCore"])
     ]
 )

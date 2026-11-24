@@ -102,7 +102,7 @@ private struct SessionProviders {
     let classifier: any QuestionClassifier
     let generator: any TextGenerator
 
-    init(defaults: UserDefaults) throws {
+    init(defaults: UserDefaults, diarize: Bool = false) throws {
         let speech = SpeechProvider(rawValue: defaults.string(forKey: "speechProvider") ?? "") ?? .openai
         let classification = TextProvider(rawValue: defaults.string(forKey: "classificationProvider") ?? "") ?? .openai
         let language = defaults.string(forKey: "sttLanguage")
@@ -121,7 +121,9 @@ private struct SessionProviders {
         case .deepgram:
             let credential = try key("deepgram")
             let model = defaults.string(forKey: "deepgramModel") ?? "nova-3"
-            transcriber = { DeepgramTranscriber(apiKey: credential, model: model, language: language) }
+            transcriber = {
+                DeepgramTranscriber(apiKey: credential, model: model, language: language, diarize: diarize)
+            }
         }
         switch classification {
         case .openai:
@@ -132,6 +134,13 @@ private struct SessionProviders {
                 model: defaults.string(forKey: "anthropicQuestionModel") ?? "claude-haiku-4-5")
         }
         generator = try Self.answerGenerator(defaults: defaults)
+    }
+
+    static func embeddings(defaults: UserDefaults) throws -> (any TextEmbeddingProvider)? {
+        guard defaults.bool(forKey: "semanticRetrieval") else { return nil }
+        guard let key = Keychain.load("openai") else { throw ProviderFailure.missingCredentials }
+        return OpenAIEmbeddings(apiKey: key,
+                               model: defaults.string(forKey: "embeddingModel") ?? "text-embedding-3-small")
     }
 
     static func answerGenerator(defaults: UserDefaults) throws -> any TextGenerator {
@@ -165,6 +174,7 @@ final class WorkspaceModel: ObservableObject {
     @Published var processID: UInt32?
     @Published var micID: UInt32?
     @Published var designatedInterviewer = false
+    @Published var mixedDiarization = false
     @Published var replayURL: URL?
     @Published var snapshot: InterviewSnapshot?
     @Published var error: String?
@@ -282,7 +292,9 @@ final class WorkspaceModel: ObservableObject {
             }
             do {
                 let options = UserDefaults.standard
-                let providers = try SessionProviders(defaults: options)
+                let diarize = mode == .microphone && !designatedInterviewer && mixedDiarization
+                let providers = try SessionProviders(defaults: options, diarize: diarize)
+                let embedding = try? SessionProviders.embeddings(defaults: options)
                 let format = AnswerFormat(rawValue: options.string(forKey: "answerFormat") ?? "") ?? .brief
                 let threshold = options.object(forKey: "questionThreshold") as? Double ?? 0.8
                 let sensitivity = Float(options.object(forKey: "vadThreshold") as? Double ?? 0.015)
@@ -303,6 +315,10 @@ final class WorkspaceModel: ObservableObject {
                     format: format, preferences: preferences
                 ) { question in
                     guard let store, let profile else { return [] }
+                    if let embedding,
+                       let facts = try? await store.hybridRetrieve(question, profile: profile.id, provider: embedding) {
+                        return facts.map(\.promptText)
+                    }
                     return (try? await store.retrieve(question, profile: profile.id))?.map(\.promptText) ?? []
                 }
                 observations?.cancel()
@@ -389,6 +405,10 @@ final class WorkspaceModel: ObservableObject {
         pinned = false
         startedAt = nil
         endedAt = nil
+    }
+
+    func assignSpeaker(_ id: DiarizedSpeaker.ID, role: SourceRole) {
+        Task { await session?.assignSpeaker(id, role: role) }
     }
 
     func cancelAnswer() {
@@ -502,6 +522,7 @@ private struct WorkspaceView: View {
     @State private var showReview = false
     @State private var manualText = ""
     @AppStorage("answerFontSize") private var fontSize = 16.0
+    @AppStorage("speechProvider") private var speechProvider = SpeechProvider.openai
 
     var body: some View {
         VStack(alignment: .leading, spacing: 12) {
@@ -624,6 +645,9 @@ private struct WorkspaceView: View {
                 }
                 Button(model.testing ? "End Audio Test" : "Test Audio", action: model.testSources)
             }
+            if model.mode == .microphone && !model.designatedInterviewer && speechProvider == .deepgram {
+                Toggle("Identify speakers for manual role assignment", isOn: $model.mixedDiarization)
+            }
             if model.mode == .remote || model.mode == .both {
                 Text("A browser process may include audio from multiple tabs. Use headphones with two sources.")
                     .font(.caption).foregroundStyle(.secondary)
@@ -644,9 +668,18 @@ private struct WorkspaceView: View {
                         Text(source + (snapshot.connected.contains(source) ? " · Connected" : " · Disconnected"))
                     }
                 }
+                ForEach(snapshot.speakers) { speaker in
+                    Picker("Speaker \(speaker.id.number)", selection: Binding(
+                        get: { speaker.role },
+                        set: { model.assignSpeaker(speaker.id, role: $0) }
+                    )) {
+                        ForEach(SourceRole.allCases, id: \.self) { role in Text(role.rawValue.capitalized).tag(role) }
+                    }
+                }
                 List(snapshot.transcript) { turn in
                     VStack(alignment: .leading) {
-                        Text(turn.role.rawValue.capitalized + (turn.isFinal ? "" : " · Partial"))
+                        Text([turn.speaker.map { "Speaker \($0)" }, turn.role.rawValue.capitalized,
+                              turn.isFinal ? nil : "Partial"].compactMap { $0 }.joined(separator: " · "))
                             .font(.caption).foregroundStyle(.secondary)
                         Text(turn.text).textSelection(.enabled)
                         if turn.isFinal && model.state == .listening {
@@ -772,6 +805,8 @@ private struct ProviderSettingsView: View {
     @AppStorage("vadThreshold") private var vad = 0.015
     @AppStorage("questionThreshold") private var confidence = 0.8
     @AppStorage("answerFontSize") private var fontSize = 16.0
+    @AppStorage("semanticRetrieval") private var semanticRetrieval = false
+    @AppStorage("embeddingModel") private var embeddingModel = "text-embedding-3-small"
 
     var body: some View {
         Form {
@@ -808,6 +843,14 @@ private struct ProviderSettingsView: View {
                 Slider(value: $vad, in: 0.005...0.08) { Text("Voice threshold") }
                 Slider(value: $confidence, in: 0.5...1) { Text("Question confidence") }
                 Slider(value: $fontSize, in: 12...30, step: 1) { Text("Answer text size") }
+            }
+            Section("Evidence search") {
+                Toggle("Use OpenAI embeddings", isOn: $semanticRetrieval)
+                if semanticRetrieval {
+                    TextField("Embedding model", text: $embeddingModel)
+                    Text("Build an index in Profiles after enabling this option or changing the model. Indexing sends approved facts. Search sends accepted questions.")
+                        .font(.caption).foregroundStyle(.secondary)
+                }
             }
             Section("Retention") {
                 Text("Session text stays in memory by default. You can save individual sessions locally. Audio is never saved.")
@@ -852,6 +895,8 @@ private struct ProfileEditor: View {
     @State private var message: String?
     @State private var selectedFact: ExperienceFact?
     @State private var deleteConfirmation = false
+    @State private var indexing = false
+    @AppStorage("semanticRetrieval") private var semanticRetrieval = false
 
     var body: some View {
         VStack(alignment: .leading) {
@@ -921,6 +966,23 @@ private struct ProfileEditor: View {
                     Task { await change { try await store.save(fact, profile: profile.id) } }
                 }.disabled(claim.trimmingCharacters(in: .whitespaces).isEmpty)
             }
+            HStack {
+                if semanticRetrieval {
+                    Button(indexing ? "Indexing…" : "Build Embeddings", action: reindex)
+                        .disabled(indexing || !facts.contains(where: { $0.status == .confirmed }))
+                }
+                Button("Clear Embeddings") {
+                    let id = profile.id
+                    Task {
+                        do {
+                            try await store.clearFactIndex(profile: id)
+                            if profile.id == id { message = "Embedding index cleared." }
+                        } catch {
+                            if profile.id == id { message = "The embedding index could not be cleared." }
+                        }
+                    }
+                }.disabled(indexing || !model.profiles.contains(where: { $0.id == profile.id }))
+            }
             if let message { Text(message).foregroundStyle(.secondary) }
         }
         .padding(16)
@@ -935,7 +997,7 @@ private struct ProfileEditor: View {
                 } catch StorageFailure.emptyDocument {
                     message = "This document has no extractable text. Paste its text or use a text-based PDF."
                 } catch {
-                    message = "Import failed. Choose a text, Markdown, or PDF document."
+                    message = "Import failed. Choose a text, Markdown, PDF, or DOCX document."
                 }
             case .failure:
                 message = "The selected document could not be opened."
@@ -957,6 +1019,21 @@ private struct ProfileEditor: View {
                         select(InterviewProfile(name: ""))
                     } catch { message = "Profile deletion failed." }
                 }
+            }
+        }
+    }
+
+    private func reindex() {
+        let id = profile.id
+        indexing = true
+        Task {
+            defer { indexing = false }
+            do {
+                guard let provider = try SessionProviders.embeddings(defaults: .standard) else { return }
+                let count = try await store.indexConfirmedFacts(profile: id, provider: provider)
+                if profile.id == id { message = "Indexed \(count) approved facts." }
+            } catch {
+                if profile.id == id { message = publicErrorMessage(error) }
             }
         }
     }

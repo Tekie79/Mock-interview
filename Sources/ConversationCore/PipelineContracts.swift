@@ -42,15 +42,17 @@ public struct TranscriptEvent: Equatable, Sendable {
     public let previousItemID: String?
     public let text: String
     public let state: State
+    public let speaker: Int?
 
     public init(source: CaptureSource, epoch: UUID, itemID: String, previousItemID: String? = nil,
-                text: String, state: State) {
+                text: String, state: State, speaker: Int? = nil) {
         self.source = source
         self.epoch = epoch
         self.itemID = itemID
         self.previousItemID = previousItemID
         self.text = text
         self.state = state
+        self.speaker = speaker
     }
 }
 

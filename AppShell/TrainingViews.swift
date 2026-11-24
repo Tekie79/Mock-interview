@@ -161,7 +161,7 @@ struct InterviewReviewView: View {
                 guard !Task.isCancelled, record?.id == entry.id else { return }
                 record?.coaching = feedback
             } catch where !Task.isCancelled {
-                error = publicErrorMessage(error)
+                self.error = publicErrorMessage(error)
             } catch {}
             if record?.id == entry.id { reviewing = false }
         }
@@ -295,7 +295,7 @@ struct SoloPracticeView: View {
                 feedback = try await model.coaching(input)
                 saved = false
             } catch where !Task.isCancelled {
-                error = publicErrorMessage(error)
+                self.error = publicErrorMessage(error)
             } catch {}
         }
     }

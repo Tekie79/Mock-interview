@@ -1,6 +1,6 @@
 # Implementation status
 
-Baseline is a repository bootstrap only; no real application or provider integration. Status vocabulary: NOT STARTED, IN PROGRESS, IMPLEMENTED (qualification pending), QUALIFIED, BLOCKED. Include evidence for every transition.
+The original bootstrap is documented in the baseline evidence below. Status vocabulary: NOT STARTED, IN PROGRESS, IMPLEMENTED (qualification pending), QUALIFIED, BLOCKED. Include evidence for every transition.
 
 | Milestone | Status | Notes |
 |---|---|---|
@@ -14,7 +14,7 @@ Baseline is a repository bootstrap only; no real application or provider integra
 | M07 | IMPLEMENTED (qualification pending) | Bounded retry, redacted diagnostics, usage, synthetic replay, in-memory retention and packaging command. |
 | M08 | IMPLEMENTED (qualification pending) | Deepgram PCM WebSocket, Anthropic classifier and answer streams, configurable independent provider/model settings. |
 | M09 | IMPLEMENTED (qualification pending) | Opt-in saved history with SQLite search, review and missed questions, text export, and solo practice with AI-estimate coaching. |
-| M10 | NOT STARTED | Retrieval and roles |
+| M10 | IMPLEMENTED (qualification pending) | DOCX text extraction, opt-in hybrid retrieval, and explicit epoch-scoped roles for diarized mixed microphone speech. |
 | M11 | NOT STARTED | Final qualification |
 
 ## Verification log
@@ -80,5 +80,12 @@ See `docs/verification/baseline.md` for the initial build/test run. No native Ma
 ### M09 development checkpoint
 
 - Debian 13, Swift 6.2.3. Build and tests passed, 18 XCTest passes, 0 failures. Added no-save baseline, history FTS update/deletion and actual-versus-suggested separation assertions. macOS-target Swift syntax parse passed.
-- Native review walkthrough and live coaching quality checks are pending. Solo practice uses text prompts and typed answers.
+- The M09 macOS workflow passed portable checks and surfaced two native review error-binding compile errors. Both are corrected in the M10 checkpoint. Native review walkthrough and live coaching quality checks are pending. Solo practice uses text prompts and typed answers.
 - Next checkpoint is M10 DOCX extraction, optional vector retrieval and explicit mixed-microphone speaker mapping.
+
+### M10 development checkpoint
+
+- Debian 13, Swift 6.2.3. Build and test scripts passed, 22 XCTest passes, 0 failures. New fixtures cover deflated DOCX extraction and malformed input, model-scoped vectors and revoked evidence, mixed word labels, fail-closed unknown roles, candidate immunity and fresh epochs. Apple-target source parsing and `git diff --check` passed.
+- Deepgram diarization is opt-in for mixed microphone mode and accepts only user-mapped, single-speaker final turns. Roles clear at reconnect. Embeddings are opt-in and require an explicit index build. Keywords remain available if a vector model is unavailable.
+- M11 is reserved for final acceptance. Real Mac audio, OS permissions, provider smoke, held-out role/semantic quality, latency, 90-minute stability, accessibility and packaging qualification require the appropriate machine and opt-in credentials. The native capture callback still uses bounded per-buffer allocation and needs physical real-time measurement.
+- Exact next checkpoint: on an Apple Silicon Mac, open the branch, run `./scripts/package-macos.sh`, exercise selected app audio and mic permission/route/stop behavior with a synthetic practice call, run each configured provider's opt-in connection and audio smoke, and record the M11 scenario and benchmark evidence from `docs/acceptance-test-plan.md`.

@@ -51,6 +51,8 @@ public struct ProfileDocument: Codable, Identifiable, Equatable, Sendable {
         switch url.pathExtension.lowercased() {
         case "txt", "md", "markdown":
             text = try String(contentsOf: url, encoding: .utf8)
+        case "docx":
+            text = try DOCXDocument.text(from: Data(contentsOf: url))
         #if os(macOS)
         case "pdf":
             guard let pdf = PDFDocument(url: url), let content = pdf.string else {
@@ -114,7 +116,7 @@ public actor KnowledgeStore {
         let database = try SQLiteDatabase(path: url?.path ?? ":memory:")
         try database.transaction {
             let versions = try database.query("PRAGMA user_version") { SQLiteDatabase.text($0, 0) }
-            guard let version = versions.first, ["0", "1", "2"].contains(version) else {
+            guard let version = versions.first, ["0", "1", "2", "3"].contains(version) else {
                 throw StorageFailure.invalidRecord
             }
             if version == "0" {
@@ -134,13 +136,22 @@ public actor KnowledgeStore {
                     PRAGMA user_version = 1;
                     """)
             }
-            if version != "2" {
+            if version == "0" || version == "1" {
                 try database.execute("""
                     CREATE TABLE saved_sessions (id TEXT PRIMARY KEY, started TEXT NOT NULL, data TEXT NOT NULL);
                     CREATE VIRTUAL TABLE session_search USING fts5(id UNINDEXED, content);
                     CREATE TRIGGER remove_session_search AFTER DELETE ON saved_sessions
                         BEGIN DELETE FROM session_search WHERE id=old.id; END;
                     PRAGMA user_version = 2;
+                    """)
+            }
+            if version != "3" {
+                try database.execute("""
+                    CREATE TABLE fact_vectors (
+                        fact TEXT PRIMARY KEY REFERENCES facts(id) ON DELETE CASCADE,
+                        model TEXT NOT NULL, data TEXT NOT NULL
+                    );
+                    PRAGMA user_version = 3;
                     """)
             }
         }
@@ -243,6 +254,7 @@ public actor KnowledgeStore {
             """, [fact.id.uuidString, profile.uuidString, fact.documentID?.uuidString ?? "",
                   try SQLiteDatabase.json(fact)])
         try database.write("DELETE FROM fact_search WHERE id=?", [fact.id.uuidString])
+        try database.write("DELETE FROM fact_vectors WHERE fact=?", [fact.id.uuidString])
         if fact.status == .confirmed {
             try database.write("INSERT INTO fact_search VALUES (?, ?, ?)",
                                [fact.id.uuidString, profile.uuidString, fact.promptText + " " + fact.category])

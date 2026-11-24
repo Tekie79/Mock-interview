@@ -17,3 +17,7 @@ Work on `feature/v1-cloud-implementation` in M00–M10 dependency order. M11 own
 | M10 | DOCX, optional embeddings and user-assigned diarized speaker roles |
 
 Run `./scripts/build.sh` and `./scripts/test.sh` throughout. Track native compilation, real device behavior and provider live checks separately in the implementation status and verification evidence. Cloud Linux lacks Xcode and audio devices, and no provider credentials are configured.
+
+## Development handoff
+
+The feature branch contains the M00–M10 checkpoints in dependency order. See the implementation status for verified results and remaining hardware work. The next checkpoint is M11 final acceptance on an Apple Silicon Mac with opt-in test provider accounts. Start with a packaged app launch, source permissions and dual-channel isolation, then use the acceptance plan for held-out semantic, grounding, mixed microphone and latency/stability measurements.

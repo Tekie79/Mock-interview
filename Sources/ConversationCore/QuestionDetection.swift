@@ -22,7 +22,8 @@ public actor QuestionDetector {
         let source: CaptureSource
         let epoch: UUID
         var finalizedIDs: Set<String> = []
-        var pending: (text: String, instant: ContinuousClock.Instant)?
+        var speakerRoles: [Int: SourceRole] = [:]
+        var pending: (text: String, instant: ContinuousClock.Instant, speaker: Int?)?
     }
 
     private let classifier: any QuestionClassifier
@@ -44,6 +45,15 @@ public actor QuestionDetector {
         }
     }
 
+    public func assignSpeaker(_ speaker: Int, role: SourceRole, sourceID: String, epoch: UUID) {
+        guard speaker >= 0, let channel = channels[sourceID], channel.source.role == .unknown,
+              channel.epoch == epoch, channel.speakerRoles.count < 32 || channel.speakerRoles[speaker] != nil else {
+            return
+        }
+        channels[sourceID]?.speakerRoles[speaker] = role
+        channels[sourceID]?.pending = nil
+    }
+
     public func invalidate(_ source: CaptureSource) {
         channels.removeValue(forKey: source.id)
     }
@@ -55,10 +65,14 @@ public actor QuestionDetector {
 
     public func receive(_ event: TranscriptEvent) async throws -> AcceptedQuestion? {
         guard event.state == .final,
-              AutomaticQuestionRoleGate.permitsClassification(for: event.source.role),
               var channel = channels[event.source.id], channel.source == event.source,
               channel.epoch == event.epoch, channel.finalizedIDs.count < 16_384,
               channel.finalizedIDs.insert(event.itemID).inserted else { return nil }
+        channels[event.source.id] = channel
+        guard AutomaticQuestionRoleGate.permitsClassification(for: Self.role(of: event, channel: channel)) else {
+            channels[event.source.id]?.pending = nil
+            return nil
+        }
 
         let arrived = now()
         var text = event.text.trimmingCharacters(in: .whitespacesAndNewlines)
@@ -68,7 +82,8 @@ public actor QuestionDetector {
             channels[event.source.id] = channel
             return nil
         }
-        if let pending = channel.pending, pending.instant.duration(to: arrived) <= .seconds(3) {
+        if let pending = channel.pending, pending.speaker == event.speaker,
+           pending.instant.duration(to: arrived) <= .seconds(3) {
             text = pending.text.trimmingCharacters(in: CharacterSet(charactersIn: ".… ")) + " " + text
         }
         channel.pending = nil
@@ -76,16 +91,17 @@ public actor QuestionDetector {
         guard text.utf8.count <= 16_000 else { return nil }
 
         let turn = TranscriptEvent(source: event.source, epoch: event.epoch, itemID: event.itemID,
-                                   previousItemID: event.previousItemID, text: text, state: .final)
+                                   previousItemID: event.previousItemID, text: text, state: .final, speaker: event.speaker)
         let context = recent
         let result = try await classifier.classify(QuestionInput(
             turn: turn, previousQuestions: context.map(\.normalized)))
         try Task.checkCancellation()
-        guard channels[event.source.id]?.epoch == event.epoch,
+        guard let active = channels[event.source.id], active.epoch == event.epoch,
+              AutomaticQuestionRoleGate.permitsClassification(for: Self.role(of: event, channel: active)),
               arrived.duration(to: now()) <= .seconds(12) else { return nil }
 
         if result.decision == .wait {
-            channels[event.source.id]?.pending = (text, arrived)
+            channels[event.source.id]?.pending = (text, arrived, event.speaker)
             return nil
         }
         let normalized = result.normalizedQuestion.trimmingCharacters(in: .whitespacesAndNewlines)
@@ -97,6 +113,11 @@ public actor QuestionDetector {
         recent.append(question)
         if recent.count > 8 { recent.removeFirst() }
         return question
+    }
+
+    private static func role(of event: TranscriptEvent, channel: Channel) -> SourceRole {
+        guard event.source.role == .unknown, let speaker = event.speaker else { return event.source.role }
+        return channel.speakerRoles[speaker] ?? .unknown
     }
 
     private static let obviousNonQuestions: Set<String> = [
