@@ -138,4 +138,6 @@ See `docs/verification/baseline.md` for the initial build/test run. No native Ma
 
 - **Wait for silence** collects finalized pieces into question rounds, with live adjustment from 0 to 6 seconds and a two-second default. Resumed speech extends waiting. Each classified round generates one answer containing its approved requests in order. Live end-to-end latency and complex room pauses remain to be measured.
 
-- Scenarios lead with a practical conditional response. Approved facts remain the basis for claims about past experience. Profiles provide explicit file types, batch attachment by purpose, a separate paste control, and source-linked Markdown review drafts.
+- Scenarios lead with a practical conditional response. Approved facts remain the basis for claims about past experience. Profiles provide explicit file types, batch attachment by purpose, a separate paste control, and source-linked Markdown facts.
+
+- Profile attachments and directly added experience are ready for answers without a per-fact review step. The one-time profile database upgrade enables legacy pending items and preserves exclusions. The editor supports optional corrections and a **Use in answers** toggle.

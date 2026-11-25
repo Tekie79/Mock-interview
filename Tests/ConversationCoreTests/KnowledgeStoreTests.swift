@@ -3,7 +3,7 @@ import XCTest
 @testable import ConversationCore
 
 final class KnowledgeStoreTests: XCTestCase {
-    func testMarkdownAttachesByTypeAndDraftsCleanFactsWithSourceLines() async throws {
+    func testMarkdownAttachmentsAreUsableWithCleanFactsAndSourceLines() async throws {
         let folder = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString, isDirectory: true)
         try FileManager.default.createDirectory(at: folder, withIntermediateDirectories: true)
         defer { try? FileManager.default.removeItem(at: folder) }
@@ -32,9 +32,9 @@ final class KnowledgeStoreTests: XCTestCase {
         XCTAssertEqual(facts.map(\.claim), ["Designed a bounded retry queue.", "Documented the failure scenarios."])
         XCTAssertEqual(facts.map(\.documentID), [saved[0].id, saved[2].id])
         XCTAssertEqual(facts.map(\.locator), ["Text line 3", "Text line 2"])
-        XCTAssertTrue(facts.allSatisfy { $0.status == .pending })
-        let unapproved = try await store.retrieve("bounded retry queue", profile: profile.id)
-        XCTAssertTrue(unapproved.isEmpty)
+        XCTAssertTrue(facts.allSatisfy { $0.status == .confirmed })
+        let matches = try await store.retrieve("bounded retry queue", profile: profile.id)
+        XCTAssertEqual(matches.map(\.claim), ["Designed a bounded retry queue."])
     }
 
     func testMarkdownReaderRejectsEmptyOrUnsupportedFiles() throws {
@@ -66,7 +66,10 @@ final class KnowledgeStoreTests: XCTestCase {
         let facts = try await store.facts(profile: mine.id)
         var evidence = try XCTUnwrap(facts.first)
         XCTAssertEqual(facts.count, 1)
-        XCTAssertEqual(evidence.status, .pending)
+        XCTAssertEqual(evidence.status, .confirmed)
+        evidence.status = .rejected
+        try await store.save(evidence, profile: mine.id)
+        try await store.save(.init(claim: "Draft about the retry queue", status: .pending), profile: mine.id)
         let initial = try await store.retrieve("Explain retries and your retry queue", profile: mine.id)
         XCTAssertTrue(initial.isEmpty)
 
@@ -86,5 +89,36 @@ final class KnowledgeStoreTests: XCTestCase {
         try await store.deleteDocument(resume.id, profile: mine.id)
         let deleted = try await store.retrieve("retry", profile: mine.id)
         XCTAssertTrue(deleted.isEmpty)
+    }
+
+    func testLegacyUpgradeEnablesExistingProfileFactsAndPreservesExclusions() async throws {
+        let folder = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString, isDirectory: true)
+        try FileManager.default.createDirectory(at: folder, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: folder) }
+        let url = folder.appendingPathComponent("legacy.sqlite")
+        let legacy = try KnowledgeStore(url: url)
+        let profile = InterviewProfile(name: "Legacy fixture")
+        try await legacy.save(profile)
+        let resume = ProfileDocument(kind: .resume, title: "Resume.md", text: "- Designed queue instrumentation.")
+        try await legacy.add(resume, to: profile.id)
+        let imported = try await legacy.facts(profile: profile.id)
+        var pendingImport = try XCTUnwrap(imported.first)
+        pendingImport.status = .pending
+        let manual = ExperienceFact(claim: "Maintained a replay tool.", status: .pending)
+        let excluded = ExperienceFact(documentID: resume.id, claim: "Owned payments.", status: .rejected)
+        for fact in [pendingImport, manual, excluded] { try await legacy.save(fact, profile: profile.id) }
+        try SQLiteDatabase(path: url.path).execute("PRAGMA user_version = 3")
+
+        let updated = try KnowledgeStore(url: url)
+        let facts = try await updated.facts(profile: profile.id)
+        XCTAssertEqual(facts.map(\.status), [.confirmed, .confirmed, .rejected])
+        XCTAssertEqual(facts.first?.documentID, resume.id)
+        XCTAssertEqual(facts.first?.locator, pendingImport.locator)
+        let usable = try await updated.retrieve("instrumentation replay payments", profile: profile.id)
+        XCTAssertEqual(Set(usable.map(\.id)), Set([pendingImport.id, manual.id]))
+
+        let reopened = try KnowledgeStore(url: url)
+        let stable = try await reopened.facts(profile: profile.id)
+        XCTAssertEqual(stable, facts)
     }
 }

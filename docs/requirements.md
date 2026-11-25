@@ -21,7 +21,7 @@ The product must be role-agnostic: software engineering, data engineering, leade
 ### 1.2 Primary workflow
 
 1. Create or select an interview profile.
-2. Import a résumé, job description and optional project/experience notes; review extracted facts.
+2. Import a résumé, job description and optional project notes. Attached experience is ready for use, with optional editing or exclusion of individual facts.
 3. Select the remote mock interviewer application, microphone or replay source and confirm audio levels.
 4. Choose answer format, response language and configured providers.
 5. Start the session. The app transcribes the selected sources continuously while the session is active.
@@ -352,7 +352,7 @@ P0 imports text, Markdown and PDF text via PDFKit; provide paste/manual entry. S
 
 ### 8.2 Fact records
 
-Store atomic evidence with source document, location, user-confirmed status, category, ownership, dates (when known), and optional limitations. Support edit, confirm, reject and remove. Use approved facts for first-person experience claims. Unreviewed material may be displayed in the profile editor but cannot be passed off as verified experience. Example:
+Store atomic evidence with source document, location, inclusion status, category, ownership, dates (when known), and optional limitations. Attaching a document as a résumé or project notes, or entering an experience fact directly, authorizes it for use. Support edit, exclusion and removal. Use authorized facts for first-person experience claims and respect the ownership stated in the source. Job descriptions supply role context. Example:
 
 ```json
 {

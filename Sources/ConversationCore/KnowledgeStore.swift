@@ -30,6 +30,8 @@ public struct ProfileDocument: Codable, Identifiable, Equatable, Sendable {
         case jobDescription = "Job description"
         case project = "Project notes"
         public var id: String { rawValue }
+
+        fileprivate var isExperienceSource: Bool { self == .resume || self == .project }
     }
 
     public let id: UUID
@@ -68,8 +70,8 @@ public struct ProfileDocument: Codable, Identifiable, Equatable, Sendable {
         return Self(kind: kind, title: url.lastPathComponent, text: text)
     }
 
-    fileprivate func pendingExperienceFacts() -> [ExperienceFact] {
-        guard kind != .jobDescription else { return [] }
+    fileprivate func experienceFacts() -> [ExperienceFact] {
+        guard kind.isExperienceSource else { return [] }
         let markdown = ["md", "markdown"].contains((title as NSString).pathExtension.lowercased())
         var fence: (marker: Character, count: Int)?
         var facts: [ExperienceFact] = []
@@ -93,7 +95,8 @@ public struct ProfileDocument: Codable, Identifiable, Equatable, Sendable {
                 }
             }
             guard line.count >= 12 else { continue }
-            facts.append(.init(documentID: id, locator: "Text line \(index + 1)", claim: String(line.prefix(1_200))))
+            facts.append(.init(documentID: id, locator: "Text line \(index + 1)", claim: String(line.prefix(1_200)),
+                               status: .confirmed))
             if facts.count == 100 { break }
         }
         return facts
@@ -148,7 +151,7 @@ public actor KnowledgeStore {
         let database = try SQLiteDatabase(path: url?.path ?? ":memory:")
         try database.transaction {
             let versions = try database.query("PRAGMA user_version") { SQLiteDatabase.text($0, 0) }
-            guard let version = versions.first, ["0", "1", "2", "3"].contains(version) else {
+            guard let version = versions.first, ["0", "1", "2", "3", "4"].contains(version) else {
                 throw StorageFailure.invalidRecord
             }
             if version == "0" {
@@ -177,7 +180,7 @@ public actor KnowledgeStore {
                     PRAGMA user_version = 2;
                     """)
             }
-            if version != "3" {
+            if ["0", "1", "2"].contains(version) {
                 try database.execute("""
                     CREATE TABLE fact_vectors (
                         fact TEXT PRIMARY KEY REFERENCES facts(id) ON DELETE CASCADE,
@@ -185,6 +188,10 @@ public actor KnowledgeStore {
                     );
                     PRAGMA user_version = 3;
                     """)
+            }
+            if version != "4" {
+                try Self.enableExistingProfileEvidence(in: database)
+                try database.execute("PRAGMA user_version = 4")
             }
         }
         self.database = database
@@ -223,7 +230,7 @@ public actor KnowledgeStore {
         try database.transaction {
             try database.write("INSERT INTO documents VALUES (?, ?, ?)",
                                [document.id.uuidString, profile.uuidString, try SQLiteDatabase.json(document)])
-            for fact in document.pendingExperienceFacts() { try writeFact(fact, profile: profile) }
+            for fact in document.experienceFacts() { try Self.writeFact(fact, profile: profile, in: database) }
         }
     }
 
@@ -238,7 +245,7 @@ public actor KnowledgeStore {
     }
 
     public func save(_ fact: ExperienceFact, profile: UUID) throws {
-        try database.transaction { try writeFact(fact, profile: profile) }
+        try database.transaction { try Self.writeFact(fact, profile: profile, in: database) }
     }
 
     public func deleteFact(_ id: UUID, profile: UUID) throws {
@@ -256,7 +263,29 @@ public actor KnowledgeStore {
         }.filter { $0.status == .confirmed }
     }
 
-    private func writeFact(_ fact: ExperienceFact, profile: UUID) throws {
+    private static func enableExistingProfileEvidence(in database: SQLiteDatabase) throws {
+        while true {
+            let rows = try database.query("""
+                SELECT facts.profile, facts.data FROM facts
+                LEFT JOIN documents ON documents.id=facts.document AND documents.profile=facts.profile
+                WHERE json_extract(facts.data, '$.status')=?
+                  AND (facts.document IS NULL OR json_extract(documents.data, '$.kind') IN (?, ?))
+                LIMIT 200
+                """, [ExperienceFact.Status.pending.rawValue, ProfileDocument.Kind.resume.rawValue,
+                      ProfileDocument.Kind.project.rawValue]) { row -> (UUID, ExperienceFact) in
+                guard let profile = UUID(uuidString: SQLiteDatabase.text(row, 0)) else { throw StorageFailure.invalidRecord }
+                return (profile, try SQLiteDatabase.decode(ExperienceFact.self, from: row, column: 1))
+            }
+            guard !rows.isEmpty else { return }
+            for (profile, fact) in rows {
+                var active = fact
+                active.status = .confirmed
+                try writeFact(active, profile: profile, in: database)
+            }
+        }
+    }
+
+    private static func writeFact(_ fact: ExperienceFact, profile: UUID, in database: SQLiteDatabase) throws {
         guard !fact.claim.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else {
             throw StorageFailure.invalidRecord
         }
@@ -265,7 +294,7 @@ public actor KnowledgeStore {
                                               [documentID.uuidString, profile.uuidString]) {
                 try SQLiteDatabase.decode(ProfileDocument.self, from: $0)
             }.first
-            guard let document, document.kind != .jobDescription else { throw StorageFailure.invalidRecord }
+            guard let document, document.kind.isExperienceSource else { throw StorageFailure.invalidRecord }
         }
         let owners = try database.query("SELECT profile FROM facts WHERE id=?", [fact.id.uuidString]) {
             SQLiteDatabase.text($0, 0)

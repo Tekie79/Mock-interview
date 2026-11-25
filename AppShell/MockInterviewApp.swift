@@ -1735,8 +1735,8 @@ private struct ProfileEditor: View {
                         HStack {
                             Text(fact.claim)
                             Spacer()
-                            Text(fact.status.rawValue.capitalized).foregroundStyle(.secondary)
-                            Button("Review") { selectedFact = fact }.buttonStyle(.borderless)
+                            if fact.status == .rejected { Text("Excluded").foregroundStyle(.secondary) }
+                            Button("Edit") { selectedFact = fact }.buttonStyle(.borderless)
                         }
                     }
                 }
@@ -1744,8 +1744,8 @@ private struct ProfileEditor: View {
             .disabled(attaching)
             HStack {
                 TextField("Add an experience fact", text: $claim)
-                Button("Add for Review") {
-                    let fact = ExperienceFact(claim: claim)
+                Button("Add Fact") {
+                    let fact = ExperienceFact(claim: claim, status: .confirmed)
                     claim = ""
                     Task { await change { id in try await store.save(fact, profile: id) } }
                 }.disabled(claim.trimmingCharacters(in: .whitespaces).isEmpty)
@@ -1810,6 +1810,8 @@ private struct ProfileEditor: View {
                     .disabled(!hasProfileName)
             }
             Text(hasProfileName ? "Markdown (.md, .markdown), text, PDF, or DOCX." : "Enter a profile name to add attachments.")
+                .font(.caption).foregroundStyle(.secondary)
+            Text("Résumé and project notes are used in answers. Job descriptions guide the role.")
                 .font(.caption).foregroundStyle(.secondary)
             DisclosureGroup("Paste document text", isExpanded: $showingPaste) {
                 HStack(alignment: .top) {
@@ -1949,9 +1951,10 @@ private struct FactEditor: View {
             TextField("Ownership", text: $fact.ownership)
             TextField("Dates", text: $fact.dates)
             TextField("Limitations", text: $fact.limitations)
-            Picker("Review status", selection: $fact.status) {
-                ForEach(ExperienceFact.Status.allCases) { Text($0.rawValue.capitalized).tag($0) }
-            }
+            Toggle("Use in answers", isOn: Binding(
+                get: { fact.status == .confirmed },
+                set: { fact.status = $0 ? .confirmed : .rejected }
+            ))
             HStack {
                 Button("Remove", role: .destructive) { remove(); dismiss() }
                 Spacer()
