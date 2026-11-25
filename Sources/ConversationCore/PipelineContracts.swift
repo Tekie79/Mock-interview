@@ -33,6 +33,20 @@ public protocol AudioSource: Sendable {
     func stop() async
 }
 
+public struct TranscriptWord: Equatable, Sendable, Codable {
+    public let text: String
+    public let startSeconds: Double?
+    public let endSeconds: Double?
+    public let speaker: Int?
+
+    public init(text: String, startSeconds: Double?, endSeconds: Double?, speaker: Int? = nil) {
+        self.text = text
+        self.startSeconds = startSeconds
+        self.endSeconds = endSeconds
+        self.speaker = speaker
+    }
+}
+
 public struct TranscriptEvent: Equatable, Sendable {
     public enum State: Equatable, Sendable {
         case partial
@@ -47,9 +61,15 @@ public struct TranscriptEvent: Equatable, Sendable {
     public let state: State
     public let speaker: Int?
     public var timing: PipelineTiming
+    public let utteranceID: String
+    public let words: [TranscriptWord]
+    public let language: String?
+    public let turnProbability: Double?
 
     public init(source: CaptureSource, epoch: UUID, itemID: String, previousItemID: String? = nil,
-                text: String, state: State, speaker: Int? = nil, timing: PipelineTiming = .init()) {
+                text: String, state: State, speaker: Int? = nil, timing: PipelineTiming = .init(),
+                utteranceID: String? = nil, words: [TranscriptWord] = [],
+                language: String? = nil, turnProbability: Double? = nil) {
         self.source = source
         self.epoch = epoch
         self.itemID = itemID
@@ -58,10 +78,15 @@ public struct TranscriptEvent: Equatable, Sendable {
         self.state = state
         self.speaker = speaker
         self.timing = timing
+        self.utteranceID = utteranceID ?? itemID
+        self.words = words
+        self.language = language
+        self.turnProbability = turnProbability
     }
 }
 
 public protocol StreamingSTT: Sendable {
+    var behavior: TranscriptionBehavior { get }
     func connect(source: CaptureSource, epoch: UUID) async throws
         -> AsyncThrowingStream<TranscriptEvent, Error>
     func append(_ frame: AudioFrame) async throws
@@ -71,6 +96,20 @@ public protocol StreamingSTT: Sendable {
 }
 
 public extension StreamingSTT {
+    var behavior: TranscriptionBehavior { .init() }
+
+    /// Completes only after the adapter's readiness contract has succeeded.
+    func testConnection(source: CaptureSource = .init(id: "test", role: .unknown)) async throws {
+        do {
+            let stream = try await connect(source: source, epoch: UUID())
+            await close()
+            _ = stream
+        } catch {
+            await close()
+            throw error
+        }
+    }
+
     /// Most manually committed transports remain open until the final events are read.
     func finishInput() async throws {}
 }

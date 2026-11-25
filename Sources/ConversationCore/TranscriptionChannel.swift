@@ -69,7 +69,10 @@ public struct TranscriptionChannel: Sendable {
                          transcripts: AsyncThrowingStream<TranscriptEvent, Error>,
                          stt: any StreamingSTT,
                          events: @escaping @Sendable (ChannelEvent) async -> Void) async throws {
-        let progress = CommitProgress()
+        let behavior = stt.behavior
+        guard behavior.sampleRate == 24_000 else { throw CaptureFailure.invalidFormat }
+        let providerCommits = behavior.delivery == .providerCommit
+        let progress = CommitProgress(requiresStreamEnd: providerCommits)
         try await withThrowingTaskGroup(of: Void.self) { group in
             group.addTask {
                 var endpoint = AudioEndpoint(threshold: threshold)
@@ -97,8 +100,12 @@ public struct TranscriptionChannel: Sendable {
                         began.capture = preRoll.first?.capturedAt ?? frame.capturedAt
                         began.speechStart = frame.capturedAt
                         span = began
-                        for leading in preRoll { try await stt.append(leading) }
+                        if !behavior.streamsSilence {
+                            for leading in preRoll { try await stt.append(leading) }
+                        }
                         preRoll.removeAll(keepingCapacity: true)
+                        try await stt.append(frame)
+                    } else if behavior.streamsSilence {
                         try await stt.append(frame)
                     } else {
                         preRoll.append(frame)
@@ -107,8 +114,12 @@ public struct TranscriptionChannel: Sendable {
                     if activity.shouldCommit, var closing = span {
                         closing.endpoint = frame.capturedAt
                         closing.commit = .now
-                        try await progress.committed(closing)
-                        try await stt.commit()
+                        if providerCommits {
+                            await progress.observedSpeech(closing)
+                        } else {
+                            try await progress.committed(closing)
+                            try await stt.commit()
+                        }
                         span = nil
                     }
                 }
@@ -116,8 +127,12 @@ public struct TranscriptionChannel: Sendable {
                 if var closing = span {
                     closing.endpoint = latest?.capturedAt
                     closing.commit = .now
-                    try await progress.committed(closing)
-                    try await stt.commit()
+                    if providerCommits {
+                        await progress.observedSpeech(closing)
+                    } else {
+                        try await progress.committed(closing)
+                        try await stt.commit()
+                    }
                 }
                 await progress.requestFinish()
                 try await stt.finishInput()
@@ -131,7 +146,7 @@ public struct TranscriptionChannel: Sendable {
                     await events(.transcript(tagged))
                     await progress.delivered(tagged)
                 }
-                guard await progress.isFinished else { throw ProviderFailure.disconnected }
+                guard await progress.streamEnded() else { throw ProviderFailure.disconnected }
             }
             defer { group.cancelAll() }
             _ = try await group.next()
@@ -166,9 +181,26 @@ private actor CommitProgress {
     private var firstPartials: [String: ContinuousClock.Instant] = [:]
     private var finalIDs: Set<String> = []
     private var finishing = false
+    private var ended = false
+    private let requiresStreamEnd: Bool
+    private var speechObservation: PipelineTiming?
 
-    init() { (changes, signal) = AsyncStream.makeStream(bufferingPolicy: .bufferingNewest(1)) }
-    var isFinished: Bool { finishing && pending.isEmpty }
+    init(requiresStreamEnd: Bool) {
+        self.requiresStreamEnd = requiresStreamEnd
+        (changes, signal) = AsyncStream.makeStream(bufferingPolicy: .bufferingNewest(1))
+    }
+
+    var isFinished: Bool { finishing && pending.isEmpty && (!requiresStreamEnd || ended) }
+
+    func streamEnded() -> Bool {
+        ended = true
+        signal.yield(())
+        return isFinished
+    }
+
+    func observedSpeech(_ timing: PipelineTiming) {
+        speechObservation = timing
+    }
 
     func committed(_ timing: PipelineTiming) throws {
         guard pending.count < 64 else { throw ProviderFailure.incompleteTranscription }
@@ -188,7 +220,7 @@ private actor CommitProgress {
             }
         } else {
             let first = firstPartials.removeValue(forKey: event.itemID)
-            event.timing = pending.first ?? event.timing
+            event.timing = pending.first ?? speechObservation ?? event.timing
             event.timing.firstPartial = first ?? event.timing.firstPartial
             event.timing.final = .now
         }
@@ -198,6 +230,7 @@ private actor CommitProgress {
     func delivered(_ event: TranscriptEvent) {
         guard event.state == .final, finalIDs.count < 32_768, finalIDs.insert(event.itemID).inserted else { return }
         if !pending.isEmpty { pending.removeFirst() }
+        speechObservation = nil
         signal.yield(())
     }
 }
