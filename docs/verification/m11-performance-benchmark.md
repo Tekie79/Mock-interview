@@ -13,6 +13,12 @@ Installed Apple SpeechAnalyzer ran on all 30 separate qualification tracks on ma
 
 This is an on-device transcription measurement for known, separate tracks. The per-track voices and word populations differ. Mixed-channel speaker attribution and final answer quality are separate checks.
 
+### Native live replay of the frozen corpus
+
+The rebuilt app replayed all 497.036 seconds of frozen audio as one interviewer-designated feed. The three aligned tracks were mixed within each scene with the original gaps and overlap. Replay SHA-256 `a60efe01f57247ae5d308cd197ecc9be4c5b4724a58b763b06f1e47863ff05c3`. General practice supplied no profile context. OpenAI `gpt-live-transcribe` and GPT-6 Luna at `none` for classification and answers were selected. The run used one second of additional silence waiting and lasted 537.15 seconds from Start through the post-replay Stop.
+
+OpenAI returned 95 finals. Ordered word alignment matched at least three tokens for 99 of the 100 cues. The native workspace repeatedly reported that the question buffer was full, retained the transcript, and reached end of file. It produced 0 answer cards for 40 expected accepts, so observed card recall was 0%. Card precision and time to rendered text have no sample. This failed end-to-end configuration adds no evidence about model accuracy on the full split. Most 550 ms clip gaps were shorter than the configured wait, and the single designated source treated speech from every speaker as interviewer activity. This outcome is distinct from the independent Apple transcription result and from separately assigned speaker channels.
+
 ### Recorded speech and controlled silence
 
 Two parts of one recorded Federal Reserve question were cut at the Apple SpeechAnalyzer range boundaries of 9.00, 11.58 and 16.25 seconds relative to the recorded third question below. The app's production replay, transcription channel and question round controller processed the real spoken clips with inserted silences of 750 and 1,500 ms. The probe injected the Apple-transcribed final at each cut boundary and used fixed decision and generation fixtures. The metric runs from delivery of the second final to its classifier call. An early card entered classification before the second final.

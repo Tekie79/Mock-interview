@@ -267,14 +267,12 @@ public actor MacAudioSource: AudioSource {
     }
 
     private static func requestMicrophonePermission() async -> Bool {
-        let permission = AsyncStream<Bool> { status in
-            AVCaptureDevice.requestAccess(for: .audio) {
-                status.yield($0)
-                status.finish()
-            }
+        switch AVCaptureDevice.authorizationStatus(for: .audio) {
+        case .authorized: return true
+        case .notDetermined: return await AVCaptureDevice.requestAccess(for: .audio)
+        case .denied, .restricted: return false
+        @unknown default: return false
         }
-        var responses = permission.makeAsyncIterator()
-        return await responses.next() == true
     }
 
     private func startMicrophone(_ device: AudioObjectID,

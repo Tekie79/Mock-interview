@@ -30,3 +30,9 @@ A SwiftPM helper linked against the production Core Audio adapter on the physica
 | Correction | 20/20 | 0.0014396926–0.011738739 | 0 |
 
 Stream and sample-rate callbacks can report unchanged values. The correction checks actual stream IDs and rate before triggering recovery and retains device and alive-state validation. Both revisions passed the adapter exercise. The original failure remains unreproduced under this protocol, and native **Test Audio** retest is pending after the UI automation connection timed out. This setup did not exercise an actual transition between two physical outputs or microphone capture. The helper reported undetermined microphone permission. No physical cross-channel leakage, overlapping voices or acoustic cancellation measurement was made. [Apple Core Audio tap sample](https://developer.apple.com/documentation/coreaudio/capturing-system-audio-with-core-audio-taps)
+
+## Native permission follow-up
+
+The continuation bundle exposed system default output and an independent MacBook Pro candidate microphone in the workspace. Its combined Test Audio attempt emitted no usable meters and remained in progress past the cancellation deadline. The sample showed the Core Audio thread waiting inside `AudioDeviceCreateIOProcIDWithBlock`. The sample establishes the blocking setup call. Its cause, physical route switching, native speaker assignment and separate microphone frame delivery remain open.
+
+The subsequent permission correction checks microphone and Speech authorization status before requesting access. Authorized states proceed directly, undetermined states use the OS request, and denied and restricted states stop the operation. Core Audio tap permissions remain controlled by macOS. Test Audio and Start still require explicit user action. [Apple capture authorization](https://developer.apple.com/documentation/AVFoundation/AVCaptureDevice/authorizationStatus%28for%3A%29)

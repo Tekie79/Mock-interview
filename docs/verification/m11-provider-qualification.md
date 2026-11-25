@@ -43,6 +43,30 @@ OpenAI lists January 14, 2027 as the shutdown date for `gpt-4.1-mini-2025-04-14`
 
 The correction sent zero billable provider requests. Earlier historical spend remains subject to provider statements and the owner's approved US$10 total. The 90-minute run did not start because no remote endpoint was available.
 
+## Native authorization after b2946d6
+
+Mock Interview displayed OpenAI and ElevenLabs items as present in Keychain. The owner approved the OS authorization prompt locally. The native Settings checks on the reviewed bundle acknowledged OpenAI `gpt-live-transcribe`, returned a structured answerable decision from GPT-6 Luna at `none`, and completed an answer stream from GPT-6.2 Sol at `low`. These three probes were single synthetic requests and had no clean latency sample. The application loaded credentials through its standard path. The newer unsigned build required its own OS authorization.
+
+OpenAI publishes Luna at `none`, `low`, `medium`, `high`, `xhigh` and `max` and Sol at `low` through `max`. Both advertise structured outputs and streaming. The app allows only explicit `none` or `low` where supported in classification, to fit the live deadline, and exposes the supported reasoning efforts for answers. [GPT-6 Luna](https://developers.openai.com/api/docs/models/gpt-6-luna) · [GPT-6.2 Sol](https://developers.openai.com/api/docs/models/gpt-6.2-sol)
+
+The continuation bundle returned structured decisions from Luna `low` and Sol `low`, and completed a Luna `none` answer stream. Later Settings observations bracketed the Sol structured decision between 0.56 and 3.95 s and the Luna stream completion between 0.60 and 3.99 s after click. These bounds include UI automation and polling. The reviewed bundle also passed Luna `none` classification and Sol `low` streaming as noted above. Account-level latency across all answer efforts remains open.
+
+### Scribe v3 Live strategy comparison
+
+The app replayed the same 59.3826-second single-source PCM in each mode. Input was the ten annotated turns of frozen scene 01, with overlap removed for this comparison and 1.7 seconds between clips except the 1.45-second designated continuation. PCM SHA-256 `a027b55709e76c5a98df57fa95294c581f6fade8424b36529de501e2242c069f`. All runs used English, endpoint silence 0.65 s, question wait zero, and GPT-6 Luna `none` for classification and answers. The route designated the single mixed input as interviewer, so the reference unknown voice reached the classifier.
+
+| Scribe strategy | Finals / mapped cues | Completed cards | Estimated endpoint to SwiftUI acknowledgment p50 / max | Estimated endpoint to terminal p50 / max | Replay drain |
+|---|---:|---:|---:|---:|---|
+| Manual | 10 / 10 | 5 | 2,950 / 3,461 ms | 3,741 / 4,009 ms | Unconfirmed audio |
+| VAD | 10 / 10 | 5 | 3,355 / 4,194 ms | 3,854 / 5,070 ms | Unconfirmed audio |
+| Semantic turn | 10 / 10 | 5 | 3,457 / 3,783 ms | 4,117 / 4,504 ms | Unconfirmed audio |
+
+Every strategy answered the four labeled questions and also answered the unknown speaker's question. Each had 80% card precision, 100% recall, and zero duplicate or premature cards in this one scene. Synced transcript provenance associated each card with its labeled turn. All three reported unresolved audio at graceful completion. Manual timing used local speech estimation. VAD and semantic-turn timing mapped provider ranges to capture time. The visible timing is the application's SwiftUI acknowledgment and does not measure screen refresh or independent acoustic endpoint. This short comparison provides no basis to select a global default. [Commit strategy contract](https://elevenlabs.io/docs/eleven-api/guides/how-to/speech-to-text/realtime/transcripts-and-commit-strategies)
+
+### Permission reuse
+
+The final correction serializes credential reads and writes off the UI thread and caches an authorized read per account for the running process. Saving or removing a key updates that cache only after successful Keychain persistence. Cold starts still ask the operating system for access to stored items. Stable app identity and the OS authorization decision control access across launches and updates. The unsigned development builds used during qualification have separate binaries and can prompt again. [Apple Keychain ACLs](https://developer.apple.com/documentation/security/access-control-lists) · [macOS designated requirements](https://developer.apple.com/library/archive/technotes/tn2206/)
+
 ## Spending
 
 The owner approved a **US$10 total test usage limit**. Estimated upper workload before retries and account pricing is approximately **US$5.17**. It assumes 220 OpenAI audio minutes at $0.017/min, 50 ElevenLabs audio minutes including a $0.05/hour vocabulary add-on at a total $0.27/hour, 50 Deepgram Nova-3 multilingual minutes at $0.0058/min, and 300,000 input plus 75,000 output tokens for each text provider at published rates for the listed baseline models. Both channels count toward audio minutes. Consult account billing for actual usage. This estimate is neither an invoice nor a provider-enforced spending limit. [OpenAI pricing](https://developers.openai.com/api/docs/pricing) · [ElevenLabs pricing](https://elevenlabs.io/pricing/api) · [Deepgram pricing](https://deepgram.com/pricing) · [Anthropic pricing](https://platform.claude.com/docs/en/about-claude/pricing)

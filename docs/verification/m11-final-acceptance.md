@@ -2,6 +2,16 @@
 
 **Hold release.** The M11 correction passed local regression tests and unsigned packaging. Live shared-feed quality, Scribe strategy comparison, physical microphone attribution, visible-answer timing and the real 90-minute run remain open. The reports below distinguish current results from historical smoke. [Benchmark](m11-performance-benchmark.md) · [Provider results](m11-provider-qualification.md) · [Audio compatibility](m11-audio-compatibility.md) · [Defects](m11-defect-register.md)
 
+## Continuation after b2946d6
+
+The new first-person, indirect and conversational regression rejects the reviewed baseline. Six of ten legitimate requests were dropped before classification. All ten reach the semantic classifier on the correction. Narration and uncertain intent also reach it, and fixture decisions of ignore or uncertain create no cards.
+
+The live replay and model checks used build `37bc058`. Its Release executable SHA-256 is `2b10463b578160d33d9e5c6e853d87b367d141764b346bf2dcdcdf6d906e3920`. The subsequent permission correction passed 142 local XCTest cases and unsigned universal packaging on Xcode 26.6 (17F113). Its Release executable SHA-256 is `d6fb557939e04e1037af2e9a0c4dc486c66e8f3f74f6e12f729030bc3e829675`. Per-job logs and exact source revision are on [draft PR #3](https://github.com/Tekie79/Mock-interview/pull/3).
+
+The native frozen-corpus run failed the question recall gate with one second of silence waiting on a single mixed feed. The app produced 95 finals and zero cards and reported a question buffer overflow. The independent Apple SpeechAnalyzer run covered 100/100 clips with 4.82% normalized WER. The recorded-speech wait probe used controlled provider finals and found that 1 second combined parts across a 750 ms gap, while 2 seconds was needed for the 1,500 ms case. [Benchmark](m11-performance-benchmark.md)
+
+The application used the owner-approved Keychain path for native provider checks. All three live Scribe modes completed five cards each on the matched replay and reported unconfirmed audio at drain. The separate native candidate microphone and output were selectable, but Test Audio stalled in Core Audio setup before delivering usable meters. Live speaker assignment and full profile grounding remain open. The 90-minute tracks and cue sheet are ready. AT-16 remains blocked by the unavailable second endpoint. [Provider results](m11-provider-qualification.md) · [Native audio](m11-audio-compatibility.md) · [Remote playback setup](../../Tests/Fixtures/m11/README.md#90-minute-remote-playback)
+
 ## Acceptance correction after 41c243a
 
 The work continues from `41c243a1b7a72ea69b71940acd4c7edd615e732b`. [Draft PR #3](https://github.com/Tekie79/Mock-interview/pull/3) records the final commit and links its hosted Linux, macOS 15 and macOS 26 checks.

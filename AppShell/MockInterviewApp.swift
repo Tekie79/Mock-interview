@@ -77,6 +77,10 @@ private final class InterviewAppDelegate: NSObject, NSApplicationDelegate {
 
 private enum Keychain {
     static let service = "com.mockinterview.desktop"
+    static let providers = ProviderCredentialStore(
+        read: { account in load(account) },
+        persist: { value, account in try save(value, account: account) }
+    )
 
     static func configuredAccounts() -> Set<String> {
         let authentication = LAContext()
@@ -89,7 +93,7 @@ private enum Keychain {
         })
     }
 
-    static func load(_ account: String) -> String? {
+    private static func load(_ account: String) -> String? {
         var query = base(account)
         query[kSecReturnData as String] = true
         query[kSecMatchLimit as String] = kSecMatchLimitOne
@@ -99,7 +103,7 @@ private enum Keychain {
         return String(data: data, encoding: .utf8)
     }
 
-    static func save(_ value: String, account: String) throws {
+    private static func save(_ value: String, account: String) throws {
         let query = base(account)
         if value.isEmpty {
             let status = SecItemDelete(query as CFDictionary)
@@ -173,7 +177,7 @@ private struct SessionProviders {
         let classification = try ProviderSelection.decode(defaults.string(forKey: "classificationProvider"), default: TextProvider.openai)
         let answer = try ProviderSelection.decode(defaults.string(forKey: "answerProvider"), default: TextProvider.openai)
         let activityThreshold = Self.audioActivityThreshold(defaults: defaults)
-        let transcriber = try Self.transcriptionFactory(defaults: defaults, diarize: diarize, activityThreshold: activityThreshold)
+        let transcriber = try await Self.transcriptionFactory(defaults: defaults, diarize: diarize, activityThreshold: activityThreshold)
         self.classifier = try await Self.questionClassifier(defaults: defaults, provider: classification)
         self.generator = try await Self.answerGenerator(defaults: defaults, provider: answer)
         self.transcriber = transcriber
@@ -181,8 +185,10 @@ private struct SessionProviders {
         self.activityThreshold = activityThreshold
     }
 
-    private static func key(_ account: String) throws -> String {
-        guard let value = Keychain.load(account), !value.isEmpty else { throw ProviderFailure.missingCredentials }
+    private static func key(_ account: String) async throws -> String {
+        try Task.checkCancellation()
+        guard let value = await Keychain.providers.load(account) else { throw ProviderFailure.missingCredentials }
+        try Task.checkCancellation()
         return value
     }
 
@@ -191,7 +197,7 @@ private struct SessionProviders {
         return (0.005...0.08).contains(stored) ? Float(stored) : 0.015
     }
 
-    static func transcriptionFactory(defaults: UserDefaults, diarize: Bool = false, activityThreshold: Float? = nil) throws
+    static func transcriptionFactory(defaults: UserDefaults, diarize: Bool = false, activityThreshold: Float? = nil) async throws
         -> @Sendable () -> any StreamingSTT {
         let speech = try ProviderSelection.decode(defaults.string(forKey: "speechProvider"), default: SpeechProvider.openai)
         let language = defaults.string(forKey: "sttLanguage")
@@ -203,7 +209,7 @@ private struct SessionProviders {
             let mode = AppleRecognitionMode(rawValue: defaults.string(forKey: "appleSpeechMode") ?? "") ?? .onDevice
             return { AppleSpeechRouter(locale: locale, mode: mode, vocabulary: vocabulary) }
         case .eleven:
-            let credential = try key("elevenlabs")
+            let credential = try await key("elevenlabs")
             let model = defaults.string(forKey: "elevenModel") ?? "scribe_v3_live"
             let strategy = TranscriptionCommitStrategy(rawValue: defaults.string(forKey: "elevenCommit") ?? "") ?? .manual
             let config = ElevenLabsSpeechConfiguration(
@@ -213,11 +219,11 @@ private struct SessionProviders {
                 diarize: diarize && ProviderCapabilities.describe(.elevenLabs, model: model).diarization)
             return { ElevenLabsTranscriber(apiKey: credential, configuration: config) }
         case .openai:
-            let credential = try key("openai")
+            let credential = try await key("openai")
             let model = defaults.string(forKey: "sttModel") ?? "gpt-live-transcribe"
             return { OpenAIRealtimeTranscriber(apiKey: credential, model: model, language: language, vocabulary: vocabulary) }
         case .deepgram:
-            let credential = try key("deepgram")
+            let credential = try await key("deepgram")
             let model = defaults.string(forKey: "deepgramModel") ?? "nova-3"
             let seconds = defaults.object(forKey: "sttEndpoint") as? Double ?? 0.65
             let endpoint = Int(min(3, max(0.1, seconds.isFinite ? seconds : 0.65)) * 1_000)
@@ -232,11 +238,11 @@ private struct SessionProviders {
         let instructions = defaults.string(forKey: "classificationInstructions") ?? ""
         switch provider {
         case .openai:
-            return OpenAIQuestionClassifier(apiKey: try key("openai"),
+            return OpenAIQuestionClassifier(apiKey: try await key("openai"),
                 model: defaults.string(forKey: "questionModel") ?? "gpt-4.1-mini", guidance: instructions,
                 reasoning: reasoning(defaults, "openAIQuestionReasoning"))
         case .anthropic:
-            return AnthropicQuestionClassifier(apiKey: try key("anthropic"),
+            return AnthropicQuestionClassifier(apiKey: try await key("anthropic"),
                 model: defaults.string(forKey: "anthropicQuestionModel") ?? "claude-haiku-4-5", guidance: instructions,
                 reasoning: reasoning(defaults, "anthropicQuestionReasoning"))
         case .chatGPT:
@@ -245,9 +251,9 @@ private struct SessionProviders {
         }
     }
 
-    static func embeddings(defaults: UserDefaults) throws -> (any TextEmbeddingProvider)? {
+    static func embeddings(defaults: UserDefaults) async throws -> (any TextEmbeddingProvider)? {
         guard defaults.bool(forKey: "semanticRetrieval") else { return nil }
-        return OpenAIEmbeddings(apiKey: try key("openai"),
+        return OpenAIEmbeddings(apiKey: try await key("openai"),
                                model: defaults.string(forKey: "embeddingModel") ?? "text-embedding-3-small")
     }
 
@@ -255,11 +261,11 @@ private struct SessionProviders {
         let answer = try provider ?? ProviderSelection.decode(defaults.string(forKey: "answerProvider"), default: TextProvider.openai)
         switch answer {
         case .openai:
-            return OpenAITextGenerator(apiKey: try key("openai"),
+            return OpenAITextGenerator(apiKey: try await key("openai"),
                 model: defaults.string(forKey: "answerModel") ?? "gpt-4.1-mini",
                 reasoning: reasoning(defaults, "openAIAnswerReasoning"))
         case .anthropic:
-            return AnthropicTextGenerator(apiKey: try key("anthropic"),
+            return AnthropicTextGenerator(apiKey: try await key("anthropic"),
                 model: defaults.string(forKey: "anthropicAnswerModel") ?? "claude-haiku-4-5",
                 reasoning: reasoning(defaults, "anthropicAnswerReasoning"))
         case .chatGPT:
@@ -398,19 +404,24 @@ final class WorkspaceModel: ObservableObject {
     }
 
     func saveKey(_ key: String, account: String) {
-        do {
-            let normalized = key.trimmingCharacters(in: .whitespacesAndNewlines)
-            try Keychain.save(normalized, account: account)
-            keySettingsRevision += 1
-            if normalized.isEmpty { configuredKeys.remove(account) } else { configuredKeys.insert(account) }
-            providerTest = nil
-        } catch {
-            self.error = "The provider key could not be updated in Keychain."
+        guard !busy, !checkingProvider, !active else { return }
+        busy = true
+        let normalized = key.trimmingCharacters(in: .whitespacesAndNewlines)
+        Task {
+            defer { busy = false }
+            do {
+                try await Keychain.providers.save(normalized, account: account)
+                keySettingsRevision += 1
+                if normalized.isEmpty { configuredKeys.remove(account) } else { configuredKeys.insert(account) }
+                providerTest = nil
+            } catch {
+                self.error = "The provider key could not be updated in Keychain."
+            }
         }
     }
 
     func checkProvider(_ service: ProviderService) {
-        guard !checkingProvider, !active, !chatGPTBusy else { return }
+        guard !checkingProvider, !active, !busy, !chatGPTBusy else { return }
         checkingProvider = true
         providerTest = "Checking \(service.rawValue)…"
         Task {
@@ -420,7 +431,7 @@ final class WorkspaceModel: ObservableObject {
                 let question = "What is a FIFO queue?"
                 switch service {
                 case .transcription:
-                    let factory = try SessionProviders.transcriptionFactory(defaults: defaults,
+                    let factory = try await SessionProviders.transcriptionFactory(defaults: defaults,
                                                                             diarize: route.requiresSpeakerLabels)
                     try await factory().testConnection()
                     providerTest = "Transcription provider acknowledged the connection."
@@ -431,7 +442,7 @@ final class WorkspaceModel: ObservableObject {
                     try await SessionProviders.testTextProvider(service, defaults: defaults, question: question)
                     providerTest = "The selected answer model completed a text stream."
                 case .embeddings:
-                    guard let embeddings = try SessionProviders.embeddings(defaults: defaults),
+                    guard let embeddings = try await SessionProviders.embeddings(defaults: defaults),
                           try await embeddings.embed([question]).first?.isEmpty == false else {
                         throw ProviderFailure.unsupportedCapability
                     }
@@ -497,7 +508,7 @@ final class WorkspaceModel: ObservableObject {
                 let options = UserDefaults.standard
                 let diarize = route.requiresSpeakerLabels
                 let providers = try await SessionProviders(defaults: options, diarize: diarize)
-                let embedding = try? SessionProviders.embeddings(defaults: options)
+                let embedding = try? await SessionProviders.embeddings(defaults: options)
                 let format = AnswerFormat(rawValue: options.string(forKey: "answerFormat") ?? "") ?? .brief
                 let threshold = options.object(forKey: "questionThreshold") as? Double ?? 0.8
                 let profile = profiles.first(where: { $0.id == profileID })
@@ -766,7 +777,7 @@ final class WorkspaceModel: ObservableObject {
             do {
                 let options = UserDefaults.standard
                 let sensitivity = SessionProviders.audioActivityThreshold(defaults: options)
-                let speech = try SessionProviders.transcriptionFactory(defaults: options,
+                let speech = try await SessionProviders.transcriptionFactory(defaults: options,
                     diarize: route.requiresSpeakerLabels, activityThreshold: sensitivity)
                 let channels = try makeChannels(speech, sensitivity: sensitivity)
                 await session.replaceChannels(channels)
@@ -1763,6 +1774,7 @@ private struct ProviderKeyField: View {
             Text(model.configuredKeys.contains(account) ? "In Keychain" : "Key required")
                 .font(.caption).foregroundStyle(.secondary)
         }
+        .disabled(model.busy || model.checkingProvider)
     }
 }
 
@@ -1993,7 +2005,7 @@ private struct ProfileEditor: View {
         Task {
             defer { indexing = false }
             do {
-                guard let provider = try SessionProviders.embeddings(defaults: .standard) else { return }
+                guard let provider = try await SessionProviders.embeddings(defaults: .standard) else { return }
                 let count = try await store.indexConfirmedFacts(profile: id, provider: provider)
                 if profile.id == id { message = "Indexed \(count) approved facts." }
             } catch {
