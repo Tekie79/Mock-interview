@@ -15,3 +15,19 @@ Each conversation yields three aligned raw mono PCM16 little-endian tracks at 24
 `zoom-qa.jsonl` adds a 12-turn synthetic transcript probe for interview questions interleaved with spoken answers and trailing agreement checks on one source. It is a supplemental fixture for the classifier boundary.
 
 `qualification.jsonl` is the fresh M11 correction holdout. It was frozen before the correction and reserved for evaluation. It contains ten new scenarios and 100 turns with 40 accept, 50 ignore and 10 wait labels. Its SHA-256 is `5dd9e1f824c83b5a4299917db29d92d776ec25cf1f9095b26db013688d749f3f`. Run `python3 Tests/Fixtures/m11/render.py --render qualification --output <directory>` to generate its three PCM tracks and one label file per scenario. The renderer validates separation from both historical splits. Generated insertion boundaries require an independent speech-end audit for displayed-latency qualification.
+
+## 90-minute remote playback
+
+On a Mac with the three voices installed, build the tracks in a new scratch directory:
+
+```sh
+run_dir=$(mktemp -d "${TMPDIR:-/tmp}/m11-endurance.XXXXXX")
+python3 -B Tests/Fixtures/m11/render.py --render qualification --output "$run_dir/corpus"
+python3 -B Tests/Fixtures/m11/endurance.py --corpus "$run_dir/corpus" --output "$run_dir/playback"
+```
+
+The builder creates two 24 kHz mono WAV files, each exactly 5,400 seconds. The ten nine-minute blocks each include the same ten scenes, a five-second lead-in and trailing silence. The remote track mixes interviewer and unknown voices. The separate candidate reference stays on the test Mac and can be played to the candidate microphone using a separate nearby device. The cue sheet has 1,000 sample-indexed entries with their block, role, expected action and source label hash.
+
+Have a second participant join a private meeting and share only `remote.wav` as computer audio at normal speed. Start Mock Interview with the meeting process as question audio and an independent candidate microphone. Use headphones on the test Mac and align both files at the agreed start time during the lead-in. Time playback from that point and log any disconnect or restart. For a mixed-feed attribution run, select a diarization-capable transcription model and assign the voices in Transcript. Verify that each source reaches the workspace before beginning the timed run. Keep synthetic data and any explicitly saved test session local.
+
+Use cue times for matching turns, then independently mark acoustic speech ends for display latency. Score blocks as sequential repeated load, with separate counts for intentional repeats and duplicate cards. Record submitted audio, provider usage, queue overflows and source reconnects. Confirm sufficient room in the approved US$10 total before starting the dual-source run.

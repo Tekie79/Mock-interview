@@ -93,3 +93,10 @@ Baseline is `41c243a1b7a72ea69b71940acd4c7edd615e732b` on `feature/m11-final-acc
 - Run unit and integration regressions, unsigned native packaging, and the full hosted Linux/macOS 15/macOS 26 matrix. Report measured and unexecuted acceptance cases separately, including remaining provider, hardware and latency gates.
 
 The owner confirmed existing pending facts must stay excluded until enabled and confirmed no remote endpoint is available. The new corpus was frozen before the corrections. Local Xcode build, 139 tests and unsigned packaging passed. A recorded human Q&A diagnostic and baseline/candidate physical output probes ran at the adapter layer. The provider strategy matrix, live model and grounding trials, physical microphone/overlap and true remote endurance still need their required environments. Exact hosted checks and the final commit are recorded on [draft PR #3](https://github.com/Tekie79/Mock-interview/pull/3).
+
+## M11 continuation after b2946d6
+
+- Narrow the transcript-only rejection in `QuestionDetection` and add regression cases for direct, indirect and conversational interviewer prompts. Keep the independent speaker-role, lifecycle and duplicate gates.
+- Use the app's ordinary Keychain path. Ask the owner to respond to macOS prompts if needed. Keep the frozen audio corpus, Scribe strategy comparison, OpenAI model/effort matrix, and native capture/grounding checks within the approved US$10 total.
+- Provide a repeatable 90-minute synthetic remote playback track with a separate candidate reference and scoring manifest. Run the native endurance case when a second endpoint is available. Keep provider use and output measurement distinct from local playback preparation.
+- Run the portable regression matrix and unsigned native packaging. Record exact revision and test output on PR #3, with separately scoped evidence for physical hardware, live providers and displayed latency.

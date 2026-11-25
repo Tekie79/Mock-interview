@@ -109,8 +109,12 @@ public struct OpenAIQuestionClassifier: QuestionClassifier {
         Ignore spoken answers and explanations, even if they answer a prior interview question. A trailing agreement
         check such as "right?" does not turn an explanation into an interview question. Never reformulate an answer
         as a new question. Accept a distinct substantive request in the same utterance, including a short follow-up.
-        Quoted or reported questions, questions the speaker answers within their own explanation, and requests
-        addressed to people outside the interview are not requests to the current candidate.
+        Ignore questions reported as part of a story, questions the speaker answers in their own explanation,
+        and requests addressed to people outside the interview. Quoting a prompt while asking the candidate
+        to answer it is still a request.
+        Interviewers can make a substantive request indirectly, in first person, or without a question mark.
+        "I'm curious how you decided when to retry" and "I'd love to hear about the first incident you handled"
+        are requests for the candidate to answer. "I was curious how it worked, so I checked the logs" is narration.
         Wait when a request is unfinished. Use uncertain if intent is unclear.
         Preserve every requested part. Use role-labeled actual dialogue to resolve references. Approved evidence
         and target job context are separate from dialogue. Recognize technical, coding, design, leadership,

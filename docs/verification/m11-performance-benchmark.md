@@ -1,8 +1,38 @@
 # M11 performance benchmark
 
+## Continuation after b2946d6
+
+Installed Apple SpeechAnalyzer ran on all 30 separate qualification tracks on macOS 26.3.2. A nonblank final overlapping a cue by at least 80 ms counted as transcription coverage. Track-level WER uses word edit distance after case and punctuation normalization against the frozen text. There were 134 finals covering all 100 cues. Overlap establishes coverage, and a single final may cover multiple cues.
+
+| Track role | Cues covered | Finals | Reference words | Word edits | WER |
+|---|---:|---:|---:|---:|---:|
+| Interviewer | 60/60 | 66 | 729 | 15 | 2.06% |
+| Candidate | 30/30 | 58 | 560 | 12 | 2.14% |
+| Unknown | 10/10 | 10 | 100 | 40 | 40.00% |
+| Total | 100/100 | 134 | 1,389 | 67 | 4.82% |
+
+This is an on-device transcription measurement for known, separate tracks. The per-track voices and word populations differ. Mixed-channel speaker attribution and final answer quality are separate checks.
+
+### Recorded speech and controlled silence
+
+Two parts of one recorded Federal Reserve question were cut at the Apple SpeechAnalyzer range boundaries of 9.00, 11.58 and 16.25 seconds relative to the recorded third question below. The app's production replay, transcription channel and question round controller processed the real spoken clips with inserted silences of 750 and 1,500 ms. The probe injected the Apple-transcribed final at each cut boundary and used fixed decision and generation fixtures. The metric runs from delivery of the second final to its classifier call. An early card entered classification before the second final.
+
+| Wait (s) | 750 ms gap, early / cards | Final to classification (ms) | 1,500 ms gap, early / cards | Final to classification (ms) |
+|---:|---:|---:|---:|---:|
+| 0 | 1 / 2 | 0 | 1 / 2 | 0 |
+| 0.5 | 1 / 2 | 503 | 1 / 2 | 510 |
+| 1 | 0 / 1 | 1,003 | 1 / 2 | 1,010 |
+| 2 | 0 / 1 | 2,021 | 0 / 1 | 2,003 |
+
+The one-second setting joined both requests across a 750 ms pause and separated them across a 1,500 ms pause. The two-second setting joined both at both gaps. This eight-configuration probe measures the assembly layer on recorded speech with controlled segmentation. Independently annotated speech-end to first useful displayed text and completed-answer latency remain release gates.
+
+### Endurance readiness
+
+The reproducible local playback was built and verified as two 5,400-second tracks with 1,000 labeled cues per cue sheet. It uses the frozen 100-turn synthetic split repeated ten times for load. The owner confirmed that a second endpoint remains unavailable. The playback setup is ready, and AT-16 is still blocked. [Build and run instructions](../../Tests/Fixtures/m11/README.md#90-minute-remote-playback)
+
 ## Acceptance correction benchmark
 
-The fresh holdout was frozen before tuning. `qualification.jsonl` contains 100 distinct labeled turns in 10 scenarios, with 40 accepts, 50 ignores and 10 waits. The renderer produced 30 PCM tracks and 10 insertion-label files using `python3 Tests/Fixtures/m11/render.py --render qualification --output <directory>`. SHA-256 of the frozen labels is `5dd9e1f824c83b5a4299917db29d92d776ec25cf1f9095b26db013688d749f3f`. Earlier text and audio retests serve as regression data. The new audio has not been scored against live providers. Before using it for the latency gate, independently mark actual acoustic speech ends.
+The fresh holdout was frozen before tuning. `qualification.jsonl` contains 100 distinct labeled turns in 10 scenarios, with 40 accepts, 50 ignores and 10 waits. The renderer produced 30 PCM tracks and 10 insertion-label files using `python3 Tests/Fixtures/m11/render.py --render qualification --output <directory>`. SHA-256 of the frozen labels is `5dd9e1f824c83b5a4299917db29d92d776ec25cf1f9095b26db013688d749f3f`. Earlier text and audio retests serve as regression data. Before using the rendered corpus for the latency gate, independently mark actual acoustic speech ends.
 
 ### Human question-and-answer recording
 
@@ -13,7 +43,7 @@ The recorded diagnostic used the first 177 seconds of the Q&A excerpt from the M
 | Complete request | 3 | 3 | 0 |
 | Spoken answer, incomplete setup or clarification | 6 | 2 | 4 |
 
-All four ordinary answer windows were blocked. The incomplete setup and clarification reached the classifier. This measures preclassifier gating at 3/5 precision and 3/3 recall on nine windows. Because this recording informed the corrections, it now serves as a regression diagnostic. Live automatic-answer precision and recall, duplicate/premature counts, physical speaker-label accuracy and model latency remain unmeasured. The excerpt SHA-256 is `8f4b966f7c1138f78589e53495b246270e1d0ea5ab2df2d53fc311bdbbbaba22`. Evaluation time windows are relative to the excerpt: positives 11.94–21.59, 123.00–126.24, 147.36–163.61 s; negatives 21.60–53.87, 60.60–79.01, 103.86–116.39, 118.60–120.95, 126.25–137.81, 163.62–176.90 s.
+On `b2946d6`, the former narration filter blocked all four ordinary answer windows. The incomplete setup and clarification reached the classifier. This historical preclassifier result was 3/5 precision and 3/3 recall on nine windows. The current detector delegates narration and ambiguities to semantic classification. This recording informed the earlier corrections and serves as a regression diagnostic. The excerpt SHA-256 is `8f4b966f7c1138f78589e53495b246270e1d0ea5ab2df2d53fc311bdbbbaba22`. Positive windows relative to the excerpt are 11.94–21.59, 123.00–126.24 and 147.36–163.61 s. Negative windows are 21.60–53.87, 60.60–79.01, 103.86–116.39, 118.60–120.95, 126.25–137.81 and 163.62–176.90 s.
 
 ### Silence wait trade-off
 
