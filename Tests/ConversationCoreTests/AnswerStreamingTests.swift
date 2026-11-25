@@ -9,6 +9,14 @@ private struct NeverClassify: QuestionClassifier {
     }
 }
 
+private struct TopicNormalizingClassifier: QuestionClassifier {
+    func classify(_ input: QuestionInput) async throws -> QuestionDecision {
+        let followUp = !input.previousQuestions.isEmpty
+        let normalized = followUp ? "How did you validate it?" : "Describe a past project."
+        return .init(decision: .accept, normalizedQuestion: normalized, parts: [normalized], isFollowUp: followUp)
+    }
+}
+
 actor ControlledGenerator: TextGenerator {
     private var streams: [AsyncThrowingStream<GenerationEvent, Error>.Continuation] = []
     private let requests: AsyncStream<AnswerRequest>.Continuation
@@ -91,10 +99,72 @@ extension AnswerStreamingTests {
         let policy = AnswerPrompt.instructions(request)
         XCTAssertTrue(policy.contains("lead with a practical first-person"))
         XCTAssertTrue(policy.contains("I would first verify the scope of the incident"))
-        XCTAssertTrue(policy.contains("Omit statements about lacking experience"))
+        XCTAssertTrue(policy.contains("Do not state or imply a lack of experience"))
         XCTAssertTrue(policy.contains("Use only approved facts for personal claims"))
         XCTAssertTrue(policy.contains("only when it is confirmed and directly relevant"))
         XCTAssertTrue(AnswerFormat.star.instructions(wordLimit: 0).contains("describe the actions and expected result conditionally"))
+    }
+
+    func testPastExperiencePolicyRequiresASpeakableExampleAndConcretePracticeFallback() {
+        let request = AnswerRequest(question: "What did you build with dbt?",
+                                    instructions: AnswerFormat.bullets.instructions(wordLimit: 60),
+                                    evidence: ["Maintained a Snowflake staging area."])
+        let policy = AnswerPrompt.instructions(request)
+        XCTAssertTrue(policy.contains("Write the words the candidate could say aloud"))
+        XCTAssertTrue(policy.contains("Avoid phrases like “I would describe,”"))
+        XCTAssertTrue(policy.contains("lead with one real example"))
+        XCTAssertTrue(policy.contains("A fact about a related"))
+        XCTAssertTrue(policy.contains("give one concrete example labeled “Practice scenario”"))
+        XCTAssertTrue(policy.contains("how you would validate it, and the expected result"))
+        XCTAssertTrue(policy.contains("Use conditional language throughout"))
+        XCTAssertTrue(request.instructions.contains("candidate's speaking voice"))
+        XCTAssertTrue(request.instructions.contains("Use at most 60 words."))
+    }
+
+    func testAutomaticAnswerUsesProfileEvidenceFromOriginalWordingAndTrustedFollowUp() async throws {
+        let store = try KnowledgeStore()
+        let profile = InterviewProfile(name: "Synthetic data engineering profile")
+        try await store.save(profile)
+        let evidence = "Built incremental dbt models for subscription events."
+        let resume = ProfileDocument(kind: .resume, title: "Resume.md", text: "- \(evidence)")
+        let requirements = ProfileDocument(kind: .jobDescription, title: "Role.md", text: "Own every dbt pipeline.")
+        try await store.add(resume, to: profile.id)
+        try await store.add(requirements, to: profile.id)
+        try await store.save(.init(claim: "Led all dbt migrations.", status: .rejected), profile: profile.id)
+
+        let stt = InjectedSTT()
+        let generator = ControlledGenerator()
+        let session = InterviewSession(
+            channels: [.init(source: .init(id: "question", role: .interviewer), audio: HeldAudio(), makeSTT: { stt })],
+            detector: .init(classifier: TopicNormalizingClassifier()), generator: generator, format: .bullets,
+            interviewContext: ["Job requirements: \(requirements.text)"], evidence: { query in
+                (try? await store.retrieve(query, profile: profile.id))?.map(\.promptText) ?? []
+            }
+        )
+        await session.start()
+        try await eventually { await session.current().state == .listening }
+        let original = "What have you built using dbt?"
+        await stt.send(original, item: "experience")
+        try await eventually { await generator.submitted.count == 1 }
+        let firstRequests = await generator.submitted
+        let first = try XCTUnwrap(firstRequests.first)
+        let payload = try XCTUnwrap(JSONSerialization.jsonObject(with: Data(try AnswerPrompt.input(first).utf8)) as? [String: [String]])
+        XCTAssertEqual(payload["original_question"], [original])
+        XCTAssertEqual(payload["approved_facts"], [evidence + " | Source location: Text line 1"])
+        XCTAssertTrue(payload["interview_context"]?.contains("Job requirements: \(requirements.text)") == true)
+        await generator.write("I built incremental dbt models for subscription events.", to: 0, finish: true)
+        try await eventually { await session.current().answers.last?.state == .complete }
+
+        await stt.send("How did you validate it?", item: "follow-up")
+        try await eventually { await generator.submitted.count == 2 }
+        let latestRequests = await generator.submitted
+        let followUp = try XCTUnwrap(latestRequests.last)
+        XCTAssertEqual(followUp.evidence, first.evidence)
+        XCTAssertNil(followUp.originalQuestion)
+        XCTAssertTrue(followUp.interviewContext.contains("Previous interviewer question: \(original)"))
+        let snapshot = await session.current()
+        XCTAssertEqual(snapshot.transcript.map(\.text), [original, "How did you validate it?"])
+        await session.stop()
     }
 
     func testCustomLengthOverridesFormatDefaultsAndPreservesGroundingOnRegenerate() async throws {

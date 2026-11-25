@@ -49,3 +49,12 @@ The owner requested removing the Pending and Review workflow. Attaching a résum
 Migrate existing pending items once, retaining their source and any explicit exclusions. Preserve the confirmed-only retrieval and embedding indexes so excluded content stays out of answers. Verify new attachments, the legacy upgrade and the native profile controls before updating the review PR.
 
 `./scripts/build.sh` and `./scripts/test.sh` passed on Linux Swift 6.2.3 (115 XCTest cases) and on the local Apple Silicon Mac (125 XCTest cases). `./scripts/package-macos.sh` built the unsigned application with one App Intents metadata warning. A native walkthrough backed by an in-memory synthetic profile verified the fact list, **Edit** and saving an exclusion using **Use in answers**. No personal profile, Keychain entry or live provider was used in this check.
+
+## Concrete experience answers and practice scenarios
+
+The owner reported that Talking points returned advice about what to mention instead of an answer to a past-experience question. Update the shared answer prompt and format instructions to produce speakable responses grounded in specific profile facts. For an unsupported past-experience question, generate one labeled, conditional practice scenario with concrete steps and an expected result. General technical and explicitly hypothetical questions still get direct answers in the requested format.
+
+- Keep the selected profile across app launches and fix it for the session. Search the accepted question, its parts, the original wording, and a trusted referenced question so normalization and short follow-ups do not drop useful search terms.
+- Verify automatic retrieval with a synthetic résumé, a competing job description, and a classifier that drops an acronym. Check shared generation inputs and instructions with relevant evidence, unrelated evidence and no profile. Run deterministic build and tests, unsigned packaging, and hosted CI. Live model adherence is distinct from the prompt and retrieval checks.
+
+Local portable builds passed with 117 Linux Swift 6.2.3 and 127 Apple Silicon macOS XCTest cases, all passing. Unsigned arm64/x86_64 packaging passed with one App Intents metadata warning. Synthetic checks verify that the résumé reaches the answer request, job requirements and excluded claims stay out of the evidence, and a trusted follow-up retains access to the applicable facts. No personal profile or live provider was used.

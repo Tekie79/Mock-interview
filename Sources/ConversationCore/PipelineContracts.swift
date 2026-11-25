@@ -189,6 +189,7 @@ public protocol QuestionClassifier: Sendable {
 
 public struct AnswerRequest: Equatable, Sendable {
     public let question: String
+    public let originalQuestion: String?
     public let questionParts: [String]
     public let instructions: String
     public let evidence: [String]
@@ -196,8 +197,9 @@ public struct AnswerRequest: Equatable, Sendable {
     public let interviewContext: [String]
 
     public init(question: String, instructions: String, evidence: [String], coaching: CoachingInput? = nil,
-                interviewContext: [String] = [], questionParts: [String] = []) {
+                interviewContext: [String] = [], questionParts: [String] = [], originalQuestion: String? = nil) {
         self.question = question
+        self.originalQuestion = originalQuestion
         self.questionParts = questionParts
         self.instructions = instructions
         self.evidence = evidence

@@ -25,7 +25,8 @@ public enum AnswerFormat: String, Codable, CaseIterable, Identifiable, Sendable 
             ("Lead with the main point. Use Markdown headings for the relevant approach, rationale, and trade-offs.",
              "Use up to 250 words.")
         case .bullets:
-            ("Present the response as Markdown bullets, one speakable thought per bullet.", "Use three to five bullets.")
+            ("Write Markdown bullets in the candidate's speaking voice. Each bullet should move the same answer forward.",
+             "Use three to five bullets.")
         case .star:
             ("Use the Markdown headings Situation, Task, Action, and Result. For a proposed scenario, describe the actions and expected result conditionally.",
              "Keep each section to one or two sentences.")
@@ -894,10 +895,15 @@ public actor InterviewSession {
             return speaker + ": " + turn.text
         }
         context.append(contentsOf: interviewContext)
+        var evidenceTerms = [question.normalized] + question.parts + [question.original]
         if let previousID = question.previousQuestionID, conversation.contains(where: { $0.questionID == previousID }),
            let prior = snapshot.answers.first(where: { $0.id == previousID && $0.state != .invalidated }) {
             context.insert("Previous interviewer question: " + prior.question.original, at: 0)
+            evidenceTerms += [prior.question.normalized, prior.question.original]
         }
+        // Use one retrieval query so finding additional terms does not add provider round trips.
+        var seenTerms: Set<String> = []
+        let evidenceQuery = evidenceTerms.filter { seenTerms.insert($0).inserted }.joined(separator: "\n")
         let limitedContext = answerBudget.share(70).limit(context)
         generationDeadline = Task { [weak self, generationTimeout] in
             do {
@@ -908,7 +914,7 @@ public actor InterviewSession {
         generation = Task { [weak self, generator, evidence, preferences, limitedContext, answerBudget, answerWordLimit] in
             do {
                 await self?.mark(revision, \.retrievalStarted)
-                let facts = answerBudget.share(30).limit(await evidence(question.normalized))
+                let facts = answerBudget.share(30).limit(await evidence(evidenceQuery))
                 await self?.mark(revision, \.retrievalFinished)
                 try Task.checkCancellation()
                 await self?.recordEvidence(facts, revision)
@@ -918,7 +924,8 @@ public actor InterviewSession {
                 let request = AnswerRequest(question: text,
                                             instructions: format.instructions(wordLimit: answerWordLimit) + " " + multipart + preferences,
                                             evidence: facts, interviewContext: limitedContext,
-                                            questionParts: question.parts.count > 1 ? question.parts : [])
+                                            questionParts: question.parts.count > 1 ? question.parts : [],
+                                            originalQuestion: question.original == question.normalized ? nil : question.original)
                 await self?.mark(revision, \.requestStarted)
                 for try await event in try await generator.stream(request) {
                     try Task.checkCancellation()

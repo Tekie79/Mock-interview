@@ -301,7 +301,9 @@ final class WorkspaceModel: ObservableObject {
     @Published var retainNextSession = false
     @Published var testLevels: [String: Float] = [:]
     @Published var profiles: [InterviewProfile] = []
-    @Published var profileID: UUID?
+    @Published var profileID = UserDefaults.standard.string(forKey: "selectedProfileID").flatMap(UUID.init(uuidString:)) {
+        didSet { UserDefaults.standard.set(profileID?.uuidString, forKey: "selectedProfileID") }
+    }
     @Published var selectedAnswer: UUID?
     @Published var pinned = false
     @Published var startedAt: Date?
@@ -514,15 +516,15 @@ final class WorkspaceModel: ObservableObject {
                     generationTimeout: .seconds(timeout), classificationEvidence: { question in
                         guard let store, let profile else { return [] }
                         return (try? await store.retrieve(question, profile: profile.id))?.map(\.promptText) ?? []
+                    }, evidence: { question in
+                        guard let store, let profile else { return [] }
+                        if let embedding,
+                           let facts = try? await store.hybridRetrieve(question, profile: profile.id, provider: embedding) {
+                            return facts.map(\.promptText)
+                        }
+                        return (try? await store.retrieve(question, profile: profile.id))?.map(\.promptText) ?? []
                     }
-                ) { question in
-                    guard let store, let profile else { return [] }
-                    if let embedding,
-                       let facts = try? await store.hybridRetrieve(question, profile: profile.id, provider: embedding) {
-                        return facts.map(\.promptText)
-                    }
-                    return (try? await store.retrieve(question, profile: profile.id))?.map(\.promptText) ?? []
-                }
+                )
                 observations?.cancel()
                 session = next
                 sessionUsesChatGPT = providers.usesChatGPT
@@ -906,6 +908,7 @@ private struct WorkspaceView: View {
                     Text("General practice").tag(UUID?.none)
                     ForEach(model.profiles) { Text($0.name).tag(Optional($0.id)) }
                 }
+                .disabled(model.active || model.busy)
                 if model.route.question != .sharedMicrophone {
                     Picker("Question audio", selection: $model.route.question) {
                         ForEach(QuestionAudioKind.allCases.filter { $0 != .sharedMicrophone }) { Text($0.rawValue).tag($0) }
@@ -1088,7 +1091,7 @@ private struct AnswerPanel: View {
                                 }
                         }
                         if answer.state != .invalidated, !answer.evidence.isEmpty {
-                            DisclosureGroup("Approved evidence") {
+                            DisclosureGroup("Profile evidence") {
                                 VStack(alignment: .leading, spacing: 7) {
                                     ForEach(Array(answer.evidence.enumerated()), id: \.offset) { _, fact in
                                         Text(fact).textSelection(.enabled)
