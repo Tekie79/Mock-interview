@@ -78,7 +78,7 @@ verify_app() {
         cmp -s "$scratch/expected-entitlements" "$scratch/entitlements" || fail "Unexpected signing entitlements on $arch."
         minos="$(xcrun vtool -arch "$arch" -show-build "$bundle/Contents/MacOS/MockInterview" | awk '$1 == "minos" { print $2 }')"
         [[ "$minos" == 14.2 ]] || fail "Unexpected macOS deployment target on $arch."
-        codesign --display --architecture "$arch" --extract-certificates "$scratch/leaf-" "$bundle" 2>/dev/null
+        codesign --display --architecture "$arch" --extract-certificates="$scratch/leaf-" "$bundle"
         found_sha256="$(/usr/bin/shasum -a 256 "$scratch/leaf-0" | awk '{ print toupper($1) }')"
         [[ "$found_sha256" == "$identity_sha256" ]] || fail "Unexpected embedded signer on $arch."
     done
