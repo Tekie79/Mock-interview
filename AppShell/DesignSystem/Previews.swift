@@ -15,19 +15,6 @@ enum WorkspaceFixture {
     static let profile = InterviewProfile(name: "Jordan Ellis", role: "Platform Engineer",
                                           seniority: "Senior", industry: "Developer infrastructure")
 
-    #if M12_UI_FIXTURES
-    @MainActor static func captureWindow() {
-        guard let view = NSApp.keyWindow?.contentView, !view.bounds.isEmpty else { return }
-        let bounds = view.bounds
-        guard let image = view.bitmapImageRepForCachingDisplay(in: bounds) else { return }
-        view.cacheDisplay(in: bounds, to: image)
-        guard let png = image.representation(using: .png, properties: [:]) else { return }
-        let directory = URL(fileURLWithPath: "/tmp/mock-interview-ui-captures", isDirectory: true)
-        try? FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
-        let name = NSApp.keyWindow?.title.replacingOccurrences(of: " ", with: "-") ?? "Workspace"
-        try? png.write(to: directory.appendingPathComponent("\(Date.now.timeIntervalSince1970)-\(name).png"), options: .atomic)
-    }
-    #endif
 }
 
 actor FixtureAudio: AudioSource {
@@ -76,7 +63,13 @@ struct FixtureClassifier: QuestionClassifier {
 
 struct FixtureAnswer: TextGenerator {
     func stream(_ request: AnswerRequest) async throws -> AsyncThrowingStream<GenerationEvent, Error> {
-        AsyncThrowingStream { output in
+        if request.question.hasPrefix("Load fixture") {
+            return AsyncThrowingStream { output in
+                for _ in 0..<8 { output.yield(.text("Synthetic replay notes show how to verify checkpoint order. ")) }
+                output.finish()
+            }
+        }
+        return AsyncThrowingStream { output in
             let task = Task {
                 for paragraph in [
                     "**Start with the guarantee**\n\nI would write down which messages need ordering and where the guarantee ends.\n\n",
@@ -99,21 +92,45 @@ struct WorkspaceLayoutPreviews: PreviewProvider {
         Group {
             WorkspaceNavigation(model: WorkspaceModel()).frame(width: 1120, height: 720)
                 .previewDisplayName("Workspace · Live")
-            CompactView(model: WorkspaceModel()).frame(width: 300, height: 240)
-                .preferredColorScheme(.dark).previewDisplayName("Compact · Dark")
-            ProviderSettingsView(model: WorkspaceModel()).frame(width: 780, height: 580)
-                .preferredColorScheme(.light).previewDisplayName("Settings · Light")
+            ForEach(InterviewPresentation.allCases) { mode in
+                FixturePreview { model in
+                    InterviewAnswerView(model: model, fontSize: 16, previewPresentation: mode)
+                }.frame(width: 760, height: 560).previewDisplayName(mode.rawValue)
+                FixturePreview { model in CompactView(model: model, previewPresentation: mode) }
+                    .frame(width: 300, height: 240).preferredColorScheme(.dark)
+                    .previewDisplayName("Compact · " + mode.rawValue)
+            }
+            ForEach(ProviderSettingsView.Category.allCases) { category in
+                ProviderSettingsView(model: WorkspaceModel(), initialCategory: category)
+                    .frame(width: 780, height: 580).preferredColorScheme(.light)
+                    .previewDisplayName("Settings · " + category.rawValue)
+            }
             SoloPracticeView(model: WorkspaceModel()).frame(width: 620, height: 500)
                 .previewDisplayName("Practice")
-            if let store = try? KnowledgeStore() {
-                ProfileEditor(model: WorkspaceModel(), store: store, embedded: true)
-                    .frame(width: 820, height: 600).previewDisplayName("Profiles")
-                InterviewReviewView(model: WorkspaceModel(), store: store, current: nil, embedded: true)
-                    .frame(width: 850, height: 600).previewDisplayName("History")
+            FixturePreview { model in
+                if let store = model.store { ProfileEditor(model: model, store: store, embedded: true) }
+            }.frame(width: 820, height: 600).previewDisplayName("Profiles")
+            FixturePreview { model in
+                if let store = model.store { InterviewReviewView(model: model, store: store, current: nil, embedded: true) }
+            }.frame(width: 850, height: 600).previewDisplayName("History and review")
+            ForEach(ContextInspector.Tab.allCases, id: \.self) { tab in
+                FixturePreview { model in ContextInspector(model: model, useAsQuestion: { _ in }, initialTab: tab) }
+                    .frame(width: 290, height: 540).previewDisplayName(tab.rawValue)
             }
-            ContextInspector(model: WorkspaceModel(), useAsQuestion: { _ in })
-                .frame(width: 290, height: 540).previewDisplayName("Inspector")
         }
+    }
+}
+
+private struct FixturePreview<Content: View>: View {
+    @State private var model = WorkspaceModel()
+    @ViewBuilder let content: (WorkspaceModel) -> Content
+
+    var body: some View {
+        content(model)
+            .padding(Studio.tight)
+            .background(Studio.canvas)
+            .tint(Studio.accent)
+            .task { if model.store == nil { await model.load() } }
     }
 }
 #endif

@@ -12,24 +12,32 @@ struct InterviewAnswerView: View {
     @Bindable var model: WorkspaceModel
     let fontSize: Double
     var compact = false
+    @State var previewPresentation: InterviewPresentation?
     @AppStorage("interviewPresentation") private var presentation = InterviewPresentation.focus
+
+    private var presentationSelection: Binding<InterviewPresentation> {
+        Binding(get: { previewPresentation ?? presentation }, set: { selection in
+            if previewPresentation != nil { previewPresentation = selection }
+            else { presentation = selection }
+        })
+    }
 
     var body: some View {
         VStack(alignment: .leading, spacing: Studio.tight) {
             HStack {
-                Picker("Answer view", selection: $presentation) {
+                Picker("Answer view", selection: presentationSelection) {
                     ForEach(InterviewPresentation.allCases) { Text($0.rawValue).tag($0) }
                 }
                 .pickerStyle(.segmented).labelsHidden()
                 .frame(width: compact ? 124 : 164)
                 .accessibilityLabel("Answer view")
                 Spacer(minLength: Studio.small)
-                if presentation == .focus { focusControls }
+                if (previewPresentation ?? presentation) == .focus { focusControls }
             }
             if model.active, model.sessionUsesChatGPT, let url = SessionProviders.usageURL {
                 Link("Manage ChatGPT plan usage", destination: url).font(.caption)
             }
-            if presentation == .chat {
+            if (previewPresentation ?? presentation) == .chat {
                 InterviewChatView(model: model, fontSize: fontSize, compact: compact).id(model.startedAt)
             } else if let answer = model.displayedAnswer {
                 ScrollView {
@@ -71,7 +79,7 @@ private struct InterviewChatView: View {
     @State private var scheduledFollow: Task<Void, Never>?
     @AppStorage("fitLatestAnswer") private var fitLatest = false
 
-    private var answers: [InterviewAnswer] { model.snapshot?.answers ?? [] }
+    private var answers: [InterviewAnswer] { model.answerHistory }
 
     var body: some View {
         ScrollViewReader { proxy in
@@ -100,22 +108,37 @@ private struct InterviewChatView: View {
                                 detail: "Accepted questions and answers appear here in order.")
                         .studioSurface()
                 } else {
-                    ScrollView {
-                        LazyVStack(alignment: .leading, spacing: 0) {
-                            ForEach(Array(answers.enumerated()), id: \.element.id) { index, answer in
-                                AnswerEntry(answer: answer, number: index + 1, fontSize: fontSize,
-                                            compact: compact, model: model)
-                                    .equatable()
-                                    .padding(.vertical, Studio.section)
-                                if answer.id != answers.last?.id { Divider() }
-                            }
-                            Color.clear.frame(height: 1).id(Anchor.bottom).accessibilityHidden(true)
+                    List {
+                        ForEach(Array(answers.enumerated()), id: \.element.id) { index, answer in
+                            AnswerEntry(answer: answer, number: index + 1, fontSize: fontSize,
+                                        compact: compact, model: model)
+                                .equatable()
+                                .frame(maxWidth: 690, alignment: .leading)
+                                .padding(.horizontal, compact ? Studio.small : Studio.section)
+                                .padding(.vertical, Studio.section)
+                                .frame(maxWidth: .infinity)
+                                .listRowInsets(EdgeInsets())
+                                .listRowBackground(Studio.surface)
+                                .accessibilityActions {
+                                    if answer.state != .invalidated && !answer.text.isEmpty {
+                                        Button("Copy answer") { copy(answer.text) }
+                                    }
+                                    if model.state.isRunning {
+                                        Button(revisionAction(answer)) { model.regenerateAnswer(answer.id) }
+                                    }
+                                    if answer.state == .generating {
+                                        Button("Cancel answer", action: model.cancelAnswer)
+                                    }
+                                }
                         }
-                        .frame(maxWidth: 690, alignment: .leading)
-                        .padding(.horizontal, compact ? Studio.tight : Studio.page)
-                        .frame(maxWidth: .infinity)
-                        .background(ChatScrollInput { followsLatest = false })
+                        Color.clear.frame(height: 1).id(Anchor.bottom).accessibilityHidden(true)
+                            .listRowInsets(EdgeInsets()).listRowSeparator(.hidden)
+                            .listRowBackground(Studio.surface)
                     }
+                    .environment(\.defaultMinListRowHeight, 0)
+                    .listStyle(.plain)
+                    .scrollContentBackground(.hidden)
+                    .background(ChatScrollInput { followsLatest = false })
                     .studioSurface()
                     .accessibilityLabel("Interview chat")
                     .onChange(of: answers.last?.id, initial: true) { old, new in
@@ -208,10 +231,7 @@ private struct AnswerEntry: View, Equatable {
             }
             Spacer(minLength: 0)
             if answer.state != .invalidated && !answer.text.isEmpty {
-                Button {
-                    NSPasteboard.general.clearContents()
-                    NSPasteboard.general.setString(answer.text, forType: .string)
-                } label: { Image(systemName: "doc.on.doc") }
+                Button { copy(answer.text) } label: { Image(systemName: "doc.on.doc") }
                 .studioIcon("Copy answer")
             }
             if answer.state == .generating {
@@ -220,7 +240,7 @@ private struct AnswerEntry: View, Equatable {
             Button {
                 model.regenerateAnswer(answer.id)
             } label: { Image(systemName: "arrow.clockwise") }
-            .studioIcon(answer.state == .failed ? "Retry answer" : answer.state == .invalidated ? "Generate manually" : "Regenerate answer")
+            .studioIcon(revisionAction(answer))
             .disabled(!model.state.isRunning)
             Menu {
                 ForEach(AnswerFormat.allCases) { format in
@@ -235,6 +255,19 @@ private struct AnswerEntry: View, Equatable {
                 Color.clear.help(failure).accessibilityLabel(failure).allowsHitTesting(false)
             }
         }
+    }
+}
+
+@MainActor private func copy(_ text: String) {
+    NSPasteboard.general.clearContents()
+    NSPasteboard.general.setString(text, forType: .string)
+}
+
+private func revisionAction(_ answer: InterviewAnswer) -> String {
+    switch answer.state {
+    case .failed: "Retry answer"
+    case .invalidated: "Generate manually"
+    default: "Regenerate answer"
     }
 }
 
@@ -265,7 +298,8 @@ private struct ChatScrollInput: NSViewRepresentable {
         }
 
         private func scrollInput(_ event: NSEvent) {
-            guard let scroll = enclosingScrollView, event.window === scroll.window else { return }
+            guard event.window === window, bounds.contains(convert(event.locationInWindow, from: nil)) || event.type == .keyDown,
+                  let scroll = scrollView() else { return }
             let point = scroll.convert(event.locationInWindow, from: nil)
             switch event.type {
             case .scrollWheel where event.scrollingDeltaY > 0 && scroll.bounds.contains(point): suspend?()
@@ -278,6 +312,24 @@ private struct ChatScrollInput: NSViewRepresentable {
                    [115, 116, 126].contains(event.keyCode) { suspend?() }
             default: break
             }
+        }
+
+        private func scrollView() -> NSScrollView? {
+            if let enclosingScrollView { return enclosingScrollView }
+            guard let root = window?.contentView else { return nil }
+            let probeFrame = convert(bounds, to: nil)
+            guard !probeFrame.isEmpty else { return nil }
+            var candidates = [root]
+            // Match the represented list's viewport, excluding neighboring inspector and sidebar scrolling.
+            while let candidate = candidates.popLast() {
+                let frame = candidate.convert(candidate.bounds, to: nil)
+                if !frame.intersects(probeFrame) { continue }
+                if let scroll = candidate as? NSScrollView,
+                   frame.intersection(probeFrame).height >= min(frame.height, probeFrame.height) * 0.9,
+                   frame.intersection(probeFrame).width >= probeFrame.width * 0.9 { return scroll }
+                candidates.append(contentsOf: candidate.subviews)
+            }
+            return nil
         }
     }
 }

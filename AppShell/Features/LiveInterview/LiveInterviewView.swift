@@ -15,12 +15,12 @@ struct WorkspaceView: View {
     var body: some View {
         VStack(alignment: .leading, spacing: Studio.section) {
             header
-            if let error = model.error ?? model.snapshot?.issues.last {
+            if let error = model.error ?? model.lastIssue {
                 Label(error, systemImage: "exclamationmark.circle")
                     .font(.callout).foregroundStyle(model.error == nil ? Studio.warning : Studio.error)
                     .lineLimit(3)
             }
-            if model.state == .idle && model.snapshot?.answers.isEmpty != false {
+            if model.state == .idle && model.answerHistory.isEmpty {
                 preparation
             } else {
                 HStack(spacing: Studio.section) {
@@ -101,6 +101,10 @@ struct WorkspaceView: View {
                 setupRow("Interview context", icon: "text.magnifyingglass") { Text(contextMode.rawValue) }
             }
             .padding(.horizontal, Studio.section).studioSurface()
+            if let permission = model.microphoneReadiness {
+                Label(permission, systemImage: "mic.badge.exclamationmark")
+                    .font(.callout).foregroundStyle(Studio.warning)
+            }
             HStack {
                 Button("Start Interview", systemImage: "play.fill", action: model.startOrResume)
                     .buttonStyle(.borderedProminent).disabled(!model.canStartOrResume)

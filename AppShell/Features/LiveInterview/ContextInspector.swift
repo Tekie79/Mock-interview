@@ -3,13 +3,19 @@ import ConversationCore
 import SwiftUI
 
 struct ContextInspector: View {
-    private enum Tab: String, CaseIterable { case transcript = "Transcript", context = "Learned Context" }
+    enum Tab: String, CaseIterable { case transcript = "Transcript", context = "Learned Context" }
     @Bindable var model: WorkspaceModel
     let useAsQuestion: (String) -> Void
     @State private var selected = Tab.transcript
     @State private var editing: LearnedContextItem?
     @State private var replacement = ""
     @State private var confirmsClear = false
+
+    init(model: WorkspaceModel, useAsQuestion: @escaping (String) -> Void, initialTab: Tab = .transcript) {
+        self.model = model
+        self.useAsQuestion = useAsQuestion
+        _selected = State(initialValue: initialTab)
+    }
 
     var body: some View {
         VStack(alignment: .leading, spacing: Studio.tight) {
@@ -47,14 +53,14 @@ struct ContextInspector: View {
                     .font(.caption).foregroundStyle(Studio.warning)
             }
             if model.liveQuestionMode == .diarized {
-                ForEach(model.snapshot?.speakers ?? []) { speaker in
+                ForEach(model.speakers) { speaker in
                     Picker("Speaker \(speaker.id.number)", selection: Binding(get: { speaker.role },
                         set: { model.assignSpeaker(speaker.id, role: $0) })) {
                         ForEach(SourceRole.allCases, id: \.self) { Text(speakerLabel($0)).tag($0) }
                     }
                 }
             }
-            let turns = (model.snapshot?.transcript ?? []).sorted {
+            let turns = model.transcriptHistory.sorted {
                 ($0.timestamp ?? .distantPast) < ($1.timestamp ?? .distantPast)
             }
             if turns.isEmpty {
@@ -93,7 +99,7 @@ struct ContextInspector: View {
     }
 
     private var context: some View {
-        let items = model.snapshot?.learnedContext ?? []
+        let items = model.learnedContext
         let evidence = model.displayedAnswer?.state == .invalidated ? [] : model.displayedAnswer?.evidence ?? []
         return VStack(alignment: .leading, spacing: Studio.tight) {
             HStack {
@@ -164,6 +170,7 @@ struct ContextInspector: View {
 
 struct DiagnosticsView: View {
     @Bindable var model: WorkspaceModel
+    var showTitle = true
 
     private var summary: String {
         model.snapshot?.diagnosticSummary ?? "No active session."
@@ -171,7 +178,8 @@ struct DiagnosticsView: View {
 
     var body: some View {
         VStack(alignment: .leading, spacing: Studio.section) {
-            StudioHeading(title: "Diagnostics", detail: version)
+            if showTitle { StudioHeading(title: "Diagnostics", detail: version) }
+            else { Text(version).font(.callout).foregroundStyle(Studio.secondary) }
             StudioStatus(state: model.state)
             ScrollView {
                 Text(summary).font(.system(.callout, design: .monospaced))

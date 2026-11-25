@@ -56,7 +56,7 @@ struct ProviderSettingsView: View {
     @State private var selectedPreset: UUID?
     @State private var presetName = ""
 
-    private enum Category: String, CaseIterable, Identifiable {
+    enum Category: String, CaseIterable, Identifiable {
         case general = "General", audio = "Audio", ai = "AI and Models", answers = "Answer Preferences"
         case context = "Interview Context", privacy = "Privacy and Storage", diagnostics = "Diagnostics"
         var id: Self { self }
@@ -84,12 +84,18 @@ struct ProviderSettingsView: View {
     @AppStorage("contextSpeakingStyle") private var contextSpeakingStyle = false
     @State private var confirmClearContext = false
 
+    init(model: WorkspaceModel, initialCategory: Category = .general) {
+        self.model = model
+        _category = State(initialValue: initialCategory)
+    }
+
     var body: some View {
         HStack(spacing: 0) {
             List(Category.allCases, selection: $category) { item in
-                Label(item.rawValue, systemImage: item.icon).tag(item)
+                Label(item.rawValue, systemImage: item.icon)
+                    .lineLimit(2).fixedSize(horizontal: false, vertical: true).tag(item)
             }
-            .listStyle(.sidebar).frame(width: 170).accessibilityLabel("Settings categories")
+            .listStyle(.sidebar).frame(width: 190).accessibilityLabel("Settings categories")
             Divider()
             VStack(alignment: .leading, spacing: Studio.tight) {
                 StudioHeading(title: (category ?? .general).rawValue)
@@ -99,7 +105,7 @@ struct ProviderSettingsView: View {
                         .padding(.horizontal, Studio.page)
                 }
                 if category == .diagnostics {
-                    DiagnosticsView(model: model).padding(Studio.section)
+                    DiagnosticsView(model: model, showTitle: false).padding(Studio.section)
                 } else {
                     Form { categoryContent }.formStyle(.grouped).id(category)
                 }

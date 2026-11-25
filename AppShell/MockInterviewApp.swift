@@ -32,8 +32,8 @@ struct MockInterviewApp: App {
         .commands {
             #if M12_UI_FIXTURES
             CommandMenu("Verification") {
-                Button("Capture Window") { WorkspaceFixture.captureWindow() }
-                    .keyboardShortcut("8", modifiers: [.command, .option, .control])
+                Button("Load 200 Chat Entries") { model.seedChatLoad() }
+                    .keyboardShortcut("9", modifiers: [.command, .option, .control])
             }
             #endif
             CommandMenu("Interview") {

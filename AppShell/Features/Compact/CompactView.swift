@@ -65,18 +65,19 @@ struct SessionControlBar: View {
 
 struct CompactView: View {
     @Bindable var model: WorkspaceModel
+    var previewPresentation: InterviewPresentation?
     @Environment(\.openWindow) private var openWindow
     @AppStorage("compactOnTop") private var onTop = false
     @AppStorage("answerFontSize") private var fontSize = 16.0
 
     var body: some View {
         VStack(spacing: Studio.tight) {
-            if let error = model.error ?? model.snapshot?.issues.last {
+            if let error = model.error ?? model.lastIssue {
                 Label(error, systemImage: "exclamationmark.circle").font(.caption)
                     .foregroundStyle(model.error == nil ? Studio.warning : Studio.error)
                     .lineLimit(2).frame(maxWidth: .infinity, alignment: .leading)
             }
-            InterviewAnswerView(model: model, fontSize: fontSize, compact: true)
+            InterviewAnswerView(model: model, fontSize: fontSize, compact: true, previewPresentation: previewPresentation)
             Divider()
             HStack(spacing: Studio.tight) {
                 SessionControlBar(model: model, compact: true)
@@ -96,11 +97,25 @@ struct CompactView: View {
 
 private struct WindowLevel: NSViewRepresentable {
     let floating: Bool
-    func makeNSView(context: Context) -> NSView { NSView() }
-    func updateNSView(_ view: NSView, context: Context) {
-        DispatchQueue.main.async { [weak view] in
-            view?.window?.setFrameAutosaveName("MockInterview.Compact")
-            view?.window?.level = floating ? .floating : .normal
+    func makeNSView(context: Context) -> Host { Host() }
+    func updateNSView(_ view: Host, context: Context) {
+        view.floating = floating
+        view.applyLevel()
+    }
+
+    final class Host: NSView {
+        var floating = false
+
+        override func viewDidMoveToWindow() {
+            super.viewDidMoveToWindow()
+            window?.setFrameAutosaveName("MockInterview.Compact")
+            applyLevel()
+        }
+
+        func applyLevel() {
+            guard let window else { return }
+            let requested: NSWindow.Level = floating ? .floating : .normal
+            if window.level != requested { window.level = requested }
         }
     }
 }

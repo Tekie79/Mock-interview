@@ -1,8 +1,10 @@
 import AppKit
+import AVFoundation
 import ConversationCore
 import LocalAuthentication
 import Observation
 import Security
+import Speech
 import SwiftUI
 import UniformTypeIdentifiers
 
@@ -267,7 +269,22 @@ final class WorkspaceModel {
     }
     var replayAttribution: QuestionAudioAttribution = .unresolved
     private(set) var liveQuestionMode: QuestionAudioMode = .unresolved
-    var snapshot: InterviewSnapshot?
+    private(set) var snapshot: InterviewSnapshot? {
+        didSet {
+            if state != snapshot?.state ?? .idle { state = snapshot?.state ?? .idle }
+            if answerHistory != snapshot?.answers ?? [] { answerHistory = snapshot?.answers ?? [] }
+            if transcriptHistory != snapshot?.transcript ?? [] { transcriptHistory = snapshot?.transcript ?? [] }
+            if learnedContext != snapshot?.learnedContext ?? [] { learnedContext = snapshot?.learnedContext ?? [] }
+            if speakers != snapshot?.speakers ?? [] { speakers = snapshot?.speakers ?? [] }
+            if lastIssue != snapshot?.issues.last { lastIssue = snapshot?.issues.last }
+        }
+    }
+    private(set) var state: LiveState = .idle
+    private(set) var answerHistory: [InterviewAnswer] = []
+    private(set) var transcriptHistory: [InterviewTranscript] = []
+    private(set) var learnedContext: [LearnedContextItem] = []
+    private(set) var speakers: [DiarizedSpeaker] = []
+    private(set) var lastIssue: String?
     var error: String?
     var busy = false
     var testing = false
@@ -300,7 +317,6 @@ final class WorkspaceModel {
     private var captureTest: Task<Void, Never>?
     private var chatGPTTask: Task<Void, Never>?
 
-    var state: InterviewSnapshot.State { snapshot?.state ?? .idle }
     var requestsSpeakerLabels: Bool {
         route.requiresSpeakerLabels || (route.question == .replay && replayAttribution == .speakerLabels)
     }
@@ -344,6 +360,15 @@ final class WorkspaceModel {
         return microphones.first { $0.id == route.candidateMicrophoneUID }?.name ?? "Choose a microphone"
     }
 
+    var microphoneReadiness: String? {
+        guard route.candidateEnabled || route.question == .interviewerMicrophone || route.question == .sharedMicrophone else { return nil }
+        switch AVCaptureDevice.authorizationStatus(for: .audio) {
+        case .authorized: return nil
+        case .notDetermined: return "macOS will request microphone access when you start or test audio."
+        default: return "Microphone access is unavailable. Check macOS Privacy & Security settings."
+        }
+    }
+
     var providerReadiness: String {
         let defaults = UserDefaults.standard
         let speech = SpeechProvider(rawValue: defaults.string(forKey: "speechProvider") ?? "") ?? .openai
@@ -367,13 +392,20 @@ final class WorkspaceModel {
         if let missing = expected.first(where: { !configuredKeys.contains($0) }) {
             return "Add \(missing == "openai" ? "OpenAI" : missing.capitalized) key in Settings"
         }
+        if speech == .apple {
+            switch SFSpeechRecognizer.authorizationStatus() {
+            case .denied, .restricted: return "Speech Recognition is unavailable. Check macOS Privacy & Security."
+            case .notDetermined: return "Speech Recognition permission required on Start"
+            default: break
+            }
+        }
         return selectedQuestionMode == .unresolved ? "Configured · manual answers" : "Configured"
     }
 
     var displayedAnswer: InterviewAnswer? {
         if let selectedAnswer,
-           let result = snapshot?.answers.first(where: { $0.id == selectedAnswer }) { return result }
-        return snapshot?.answers.last
+           let result = answerHistory.first(where: { $0.id == selectedAnswer }) { return result }
+        return answerHistory.last
     }
 
     func load() async {
@@ -939,6 +971,7 @@ extension WorkspaceModel {
         Task {
             try? await Task.sleep(for: .milliseconds(250))
             await candidate.send("The Cedar project used a replay ledger. Correction: ordering was per key.", id: "candidate-1")
+            try? await Task.sleep(for: .milliseconds(850))
             for (index, text) in ["How would you recover an interrupted queue?",
                 "Which metric would make you stop the rollout?", "How would you verify message order after a restart?"].enumerated() {
                 await question.send(text, id: "question-\(index)")
@@ -946,5 +979,22 @@ extension WorkspaceModel {
             }
         }
     }
+
+    #if M12_UI_FIXTURES
+    func seedChatLoad() {
+        guard state.isRunning, let session else { return }
+        Task { @MainActor [weak self] in
+            for index in 1...200 {
+                guard self?.session === session, await session.current().state.isRunning else { return }
+                await session.manualQuestion("Load fixture \(index): How would you verify that checkpoint recovery is safe?")
+                for _ in 0..<50 {
+                    let state = await session.current()
+                    if !state.state.isRunning || state.answers.last?.state == .complete { break }
+                    try? await Task.sleep(for: .milliseconds(5))
+                }
+            }
+        }
+    }
+    #endif
 }
 #endif
