@@ -95,3 +95,7 @@ See `docs/verification/baseline.md` for the initial build/test run. No native Ma
 - GitHub Actions run [45504965184](https://github.com/Tekie79/Mock-interview/actions/runs/45504965184) passed the portable build, 22 deterministic tests and the unsigned Xcode Release app build at the M10 commit `fd6e322`.
 - Linux build and 24 deterministic tests passed on the hardening checkpoint. Verified fixed audio-slot capacity and reuse and separation of job requirements from approved facts. Native source parse and diff check passed.
 - Hardened capture with a preallocated lock-free slot pool, limited meter updates, and added sleep pause, WebSocket send cancellation and configurable local shortcuts. Added target/job context to generation independently of confirmed facts.
+
+## M10.1 development
+
+- A: Implemented — qualification pending. Transcript ingestion feeds a bounded independent classifier queue. Per-source lifecycle drives session state, with source/epoch/revision guards and an explicit overflow counter. Linux baseline and two targeted regressions passed.

@@ -201,7 +201,7 @@ final class WorkspaceModel: ObservableObject {
     private var captureTest: Task<Void, Never>?
 
     var state: InterviewSnapshot.State { snapshot?.state ?? .idle }
-    var active: Bool { state == .listening || state == .paused }
+    var active: Bool { state.isRunning || [.pausing, .paused, .stopping, .failed].contains(state) }
     var displayedAnswer: InterviewAnswer? {
         if let selectedAnswer,
            let result = snapshot?.answers.first(where: { $0.id == selectedAnswer }) { return result }
@@ -283,7 +283,7 @@ final class WorkspaceModel: ObservableObject {
     }
 
     func startOrResume() {
-        guard !busy, !testing, state != .listening else { return }
+        guard !busy, !testing, !state.isRunning else { return }
         busy = true
         error = nil
         Task {
@@ -358,11 +358,11 @@ final class WorkspaceModel: ObservableObject {
 
     func prepareForSleep() {
         captureTest?.cancel()
-        if state == .listening { pause() }
+        if state.isRunning { pause() }
     }
 
     func pause() {
-        guard let session, state == .listening, !busy else { return }
+        guard let session, state.isRunning, !busy else { return }
         busy = true
         Task {
             await session.pause()
@@ -558,7 +558,7 @@ private struct WorkspaceView: View {
                     .onSubmit(submit)
                 Button("Generate", action: submit).disabled(manualText.trimmingCharacters(in: .whitespaces).isEmpty)
             }
-            .disabled(model.state != .listening)
+            .disabled(!model.state.isRunning)
         }
         .padding(18)
         .task { await model.load() }
@@ -618,7 +618,7 @@ private struct WorkspaceView: View {
                 Button("Diagnostics") { showDiagnostics = true }
                 Button("Clear Session", action: model.clearSession).disabled(model.active || model.snapshot == nil)
             }
-            if model.state == .listening {
+            if model.state.isRunning {
                 Button("Pause", action: model.pause)
             } else {
                 Button(model.state == .paused ? "Resume" : "Start", action: model.startOrResume)
@@ -700,7 +700,7 @@ private struct WorkspaceView: View {
                               turn.isFinal ? nil : "Partial"].compactMap { $0 }.joined(separator: " · "))
                             .font(.caption).foregroundStyle(.secondary)
                         Text(turn.text).textSelection(.enabled)
-                        if turn.isFinal && model.state == .listening {
+                        if turn.isFinal && model.state.isRunning {
                             Button("Use as question") { manualText = turn.text }.buttonStyle(.link)
                         }
                     }
@@ -764,7 +764,7 @@ private struct AnswerPanel: View {
                             Button(format.rawValue) { model.regenerate(format) }
                         }
                     }
-                }.disabled(model.state != .listening)
+                }.disabled(!model.state.isRunning)
             } else {
                 Text("Accepted questions and suggested answers will appear here.")
                     .foregroundStyle(.secondary)
@@ -788,7 +788,7 @@ private struct CompactView: View {
                 Toggle("Always on Top", isOn: $onTop)
                 Spacer()
                 Button("Expand") { openWindow(id: "workspace") }
-                if model.state == .listening { Button("Pause", action: model.pause) }
+                if model.state.isRunning { Button("Pause", action: model.pause) }
                 if model.active { Button("Stop", action: model.stop) }
             }
             .font(.caption)
