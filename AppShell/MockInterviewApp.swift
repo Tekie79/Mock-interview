@@ -145,15 +145,18 @@ private struct SessionProviders {
     let classifier: any QuestionClassifier
     let generator: any TextGenerator
     let usesChatGPT: Bool
+    let activityThreshold: Float
 
     init(defaults: UserDefaults, diarize: Bool = false) async throws {
         let classification = try ProviderSelection.decode(defaults.string(forKey: "classificationProvider"), default: TextProvider.openai)
         let answer = try ProviderSelection.decode(defaults.string(forKey: "answerProvider"), default: TextProvider.openai)
-        let transcriber = try Self.transcriptionFactory(defaults: defaults, diarize: diarize)
+        let activityThreshold = Self.audioActivityThreshold(defaults: defaults)
+        let transcriber = try Self.transcriptionFactory(defaults: defaults, diarize: diarize, activityThreshold: activityThreshold)
         self.classifier = try await Self.questionClassifier(defaults: defaults, provider: classification)
         self.generator = try await Self.answerGenerator(defaults: defaults, provider: answer)
         self.transcriber = transcriber
         self.usesChatGPT = classification == .chatGPT || answer == .chatGPT
+        self.activityThreshold = activityThreshold
     }
 
     private static func key(_ account: String) throws -> String {
@@ -161,7 +164,12 @@ private struct SessionProviders {
         return value
     }
 
-    static func transcriptionFactory(defaults: UserDefaults, diarize: Bool = false) throws
+    static func audioActivityThreshold(defaults: UserDefaults) -> Float {
+        let stored = defaults.object(forKey: "vadThreshold") as? Double ?? 0.015
+        return (0.005...0.08).contains(stored) ? Float(stored) : 0.015
+    }
+
+    static func transcriptionFactory(defaults: UserDefaults, diarize: Bool = false, activityThreshold: Float? = nil) throws
         -> @Sendable () -> any StreamingSTT {
         let speech = try ProviderSelection.decode(defaults.string(forKey: "speechProvider"), default: SpeechProvider.openai)
         let language = defaults.string(forKey: "sttLanguage")
@@ -179,7 +187,7 @@ private struct SessionProviders {
             let config = ElevenLabsSpeechConfiguration(
                 model: model, language: language, detectLanguage: defaults.object(forKey: "elevenDetectLanguage") as? Bool ?? true,
                 strategy: strategy, silenceSeconds: defaults.object(forKey: "sttEndpoint") as? Double ?? 0.65,
-                vocabulary: vocabulary)
+                vocabulary: vocabulary, localActivityThreshold: activityThreshold ?? audioActivityThreshold(defaults: defaults))
             return { ElevenLabsTranscriber(apiKey: credential, configuration: config) }
         case .openai:
             let credential = try key("openai")
@@ -445,10 +453,9 @@ final class WorkspaceModel: ObservableObject {
                 let embedding = try? SessionProviders.embeddings(defaults: options)
                 let format = AnswerFormat(rawValue: options.string(forKey: "answerFormat") ?? "") ?? .brief
                 let threshold = options.object(forKey: "questionThreshold") as? Double ?? 0.8
-                let sensitivity = Float(options.object(forKey: "vadThreshold") as? Double ?? 0.015)
                 let profile = profiles.first(where: { $0.id == profileID })
                 let store = self.store
-                let channels = try makeChannels(providers.transcriber, sensitivity: sensitivity)
+                let channels = try makeChannels(providers.transcriber, sensitivity: providers.activityThreshold)
                 let responseLanguage = (profile?.answerLanguage.isEmpty == false)
                     ? profile?.answerLanguage : options.string(forKey: "answerLanguage")
                 let answerWords = options.integer(forKey: "answerWordLimit")
@@ -699,8 +706,9 @@ final class WorkspaceModel: ObservableObject {
             defer { busy = false }
             do {
                 let options = UserDefaults.standard
-                let speech = try SessionProviders.transcriptionFactory(defaults: options, diarize: route.question == .sharedMicrophone)
-                let sensitivity = Float(options.object(forKey: "vadThreshold") as? Double ?? 0.015)
+                let sensitivity = SessionProviders.audioActivityThreshold(defaults: options)
+                let speech = try SessionProviders.transcriptionFactory(defaults: options,
+                    diarize: route.question == .sharedMicrophone, activityThreshold: sensitivity)
                 let channels = try makeChannels(speech, sensitivity: sensitivity)
                 await session.replaceChannels(channels)
             } catch {

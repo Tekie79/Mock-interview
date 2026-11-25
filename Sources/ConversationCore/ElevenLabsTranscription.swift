@@ -10,23 +10,25 @@ public struct ElevenLabsSpeechConfiguration: Equatable, Sendable {
     public var strategy: TranscriptionCommitStrategy
     public var silenceSeconds: Double
     public var vocabulary: [String]
+    public var localActivityThreshold: Float
 
     public init(model: String = "scribe_v3_live", language: String? = nil, detectLanguage: Bool = true,
                 strategy: TranscriptionCommitStrategy = .semanticTurn, silenceSeconds: Double = 0.65,
-                vocabulary: [String] = []) {
+                vocabulary: [String] = [], localActivityThreshold: Float = 0.015) {
         self.model = model
         self.language = language
         self.detectLanguage = detectLanguage
         self.strategy = strategy
         self.silenceSeconds = silenceSeconds
         self.vocabulary = vocabulary
+        self.localActivityThreshold = localActivityThreshold
     }
 
     func request(key: String) throws -> URLRequest {
         guard !key.isEmpty else { throw ProviderFailure.missingCredentials }
         let capabilities = ProviderCapabilities.describe(.elevenLabs, model: model)
         guard capabilities.models.contains(model), capabilities.commits.contains(strategy),
-              silenceSeconds.isFinite, (0.192...3).contains(silenceSeconds) else {
+              silenceSeconds.isFinite, (0.192...3).contains(silenceSeconds), (0.005...0.08).contains(localActivityThreshold) else {
             throw ProviderFailure.unsupportedCapability
         }
         if let language, !language.isEmpty,
@@ -230,7 +232,7 @@ public actor ElevenLabsTranscriber: StreamingSTT {
         guard output != nil, inputState == .open else { throw ProviderFailure.disconnected }
         guard frame.sampleRate == behavior.sampleRate, !frame.pcm.isEmpty,
               frame.pcm.count.isMultiple(of: 2), frame.pcm.count <= 24_000 else { throw CaptureFailure.invalidFormat }
-        if endpoint.observe(frame).level >= 0.015 {
+        if endpoint.observe(frame).level >= config.localActivityThreshold {
             let start = sentSamples + Int64(chunk.count / 2)
             let end = start + Int64(frame.pcm.count / 2)
             if let last = voice.last, last.end == start, start != lastCommitRequest {

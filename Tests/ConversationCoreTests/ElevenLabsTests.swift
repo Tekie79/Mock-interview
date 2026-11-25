@@ -273,6 +273,29 @@ final class ElevenLabsTests: XCTestCase {
         await provider.close()
     }
 
+    func testGracefulDrainTracksQuietSpeechAtTheConfiguredSensitivity() async throws {
+        let socket = ScriptedSocket()
+        let provider = ElevenLabsTranscriber(apiKey: "synthetic",
+            configuration: .init(strategy: .voiceActivity, localActivityThreshold: 0.005), socket: { _ in socket })
+        await socket.enqueue(scribeReady)
+        let stream = try await provider.connect(source: source, epoch: UUID())
+        var cursor = stream.makeAsyncIterator()
+        // 257/32768 is below the default threshold and above this session's threshold.
+        try await provider.append(.init(source: source, sampleRate: 24_000, startSample: 0,
+                                       pcm: Data(repeating: 1, count: 4_800)))
+        try await provider.finishInput()
+        let commits = try await commitFlags(socket)
+        XCTAssertEqual(commits, [false, true])
+
+        await socket.enqueue(detailed("Quiet speech", 0.02, 0.09))
+        await socket.fail()
+        let final = try await cursor.next()
+        let end = try await cursor.next()
+        XCTAssertEqual(final?.text, "Quiet speech")
+        XCTAssertNil(end)
+        await provider.close()
+    }
+
     func testEmptyAndUnpositionedEventsCannotAcknowledgePendingCommit() async throws {
         let (provider, socket, stream) = try await connect()
         try await provider.append(audio(at: 0))
