@@ -142,3 +142,7 @@ The native follow-up verified physical speaker RMS, then six live Zoom transcrip
 Add a shared, persistent presentation preference for Focus and Chat across the workspace and Compact. Hide the question header in answer-only mode and preserve the answer revision, actions and transcript. Verify native toggling and persistence with the synthetic fixture and rebuild the unsigned package.
 
 Build 12.2 passed 165 local tests and unsigned universal packaging. Native verification exercised Focus, Chat, Compact, restoration of question headers and persistence across relaunch.
+
+## M12 personal local signing
+
+Reviewed starting commit `03cd472e8ec392b2604d2fdcd566f1d2a3357209`. Build the existing native Release, sign it with the owner’s persistent login Keychain identity, pin the certificate for later builds, verify the extracted ZIP and record exact artifact evidence. The owner authorized installation at `/Applications/MockInterview.app`. Check for and back up any existing bundle before installation. Preserve the application identifier, local data locations and unsigned CI workflow. Record physical audio, OpenAI, UI lifecycle and same-certificate upgrade observations separately from signature verification.

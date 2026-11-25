@@ -60,3 +60,7 @@ Build 12.1 makes the automatic and manual choice visible when starting with an u
 ### Answers Only
 
 Build 12.2 adds an optional Answers Only mode from the answer toolbar and General settings. Native fixture checks confirmed question headers disappear in Focus and Chat, answer content and Copy and Regenerate stay available, Compact and the workspace share the preference, and relaunch retains it.
+
+### Personal local signing
+
+The personal-use signing workflow and verification are tracked in the [local signing report](m12-local-signing.md). The unsigned hosted CI workflow remains available.
