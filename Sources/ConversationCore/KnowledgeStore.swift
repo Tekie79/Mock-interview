@@ -3,6 +3,27 @@ import Foundation
 import PDFKit
 #endif
 
+public struct ProfileAnswerTraining: Codable, Equatable, Sendable {
+    public var skills: String
+    public var speakingSample: String
+
+    public init(skills: String = "", speakingSample: String = "") {
+        self.skills = skills
+        self.speakingSample = speakingSample
+    }
+
+    func limited(to budget: ContextBudget) -> Self? {
+        let skills = skills.trimmingCharacters(in: .whitespacesAndNewlines)
+        let sample = speakingSample.trimmingCharacters(in: .whitespacesAndNewlines)
+        let skillsBudget = sample.isEmpty ? budget : budget.share(35)
+        let keptSkills = skillsBudget.limit([skills]).first ?? ""
+        let sampleBudget = ContextBudget(turns: budget.turns, tokenBudget: budget.tokenBudget - keptSkills.utf8.count)
+        let keptSample = sampleBudget.limit([sample]).first ?? ""
+        guard !keptSkills.isEmpty || !keptSample.isEmpty else { return nil }
+        return .init(skills: keptSkills, speakingSample: keptSample)
+    }
+}
+
 public struct InterviewProfile: Codable, Identifiable, Equatable, Sendable {
     public let id: UUID
     public var name: String
@@ -11,9 +32,11 @@ public struct InterviewProfile: Codable, Identifiable, Equatable, Sendable {
     public var industry: String
     public var instructions: String
     public var answerLanguage: String
+    public var answerTraining: ProfileAnswerTraining?
 
     public init(id: UUID = UUID(), name: String, role: String = "", seniority: String = "",
-                industry: String = "", instructions: String = "", answerLanguage: String = "") {
+                industry: String = "", instructions: String = "", answerLanguage: String = "",
+                answerTraining: ProfileAnswerTraining? = nil) {
         self.id = id
         self.name = name
         self.role = role
@@ -21,6 +44,7 @@ public struct InterviewProfile: Codable, Identifiable, Equatable, Sendable {
         self.industry = industry
         self.instructions = instructions
         self.answerLanguage = answerLanguage
+        self.answerTraining = answerTraining
     }
 }
 
@@ -104,6 +128,8 @@ public struct ProfileDocument: Codable, Identifiable, Equatable, Sendable {
 }
 
 public struct ExperienceFact: Codable, Identifiable, Equatable, Sendable {
+    public static let projectStoryCategory = "Project story"
+
     public enum Status: String, Codable, CaseIterable, Identifiable, Sendable {
         case pending, confirmed, rejected
         public var id: String { rawValue }
@@ -262,6 +288,37 @@ public actor KnowledgeStore {
             try SQLiteDatabase.decode(ExperienceFact.self, from: $0)
         }.filter { $0.status == .confirmed }
     }
+
+    public func pastWorkExamples(profile: UUID) throws -> [ExperienceFact] {
+        let candidates = try database.query("""
+            SELECT facts.data, json_extract(documents.data, '$.kind')
+            FROM facts LEFT JOIN documents ON documents.id=facts.document AND documents.profile=facts.profile
+            WHERE facts.profile=? AND json_extract(facts.data, '$.status')=?
+              AND (facts.document IS NULL OR json_extract(documents.data, '$.kind') IN (?, ?))
+            ORDER BY CASE WHEN json_extract(facts.data, '$.category')=? THEN 0
+                          WHEN json_extract(documents.data, '$.kind')=? THEN 1 ELSE 2 END,
+                     facts.rowid DESC LIMIT 96
+            """, [profile.uuidString, ExperienceFact.Status.confirmed.rawValue, ProfileDocument.Kind.resume.rawValue,
+                  ProfileDocument.Kind.project.rawValue, ExperienceFact.projectStoryCategory,
+                  ProfileDocument.Kind.project.rawValue]) { row in
+            (try SQLiteDatabase.decode(ExperienceFact.self, from: row), SQLiteDatabase.text(row, 1))
+        }
+        return candidates.lazy.filter { fact, kind in
+            fact.category == ExperienceFact.projectStoryCategory || kind == ProfileDocument.Kind.project.rawValue
+                || Self.looksLikeWork(fact.claim)
+        }.prefix(6).map(\.0)
+    }
+
+    private static func looksLikeWork(_ claim: String) -> Bool {
+        let opening = claim.lowercased().split { !$0.isLetter }.prefix(5)
+        return opening.contains { workVerbs.contains(String($0)) }
+    }
+
+    private static let workVerbs: Set<String> = [
+        "built", "created", "implemented", "designed", "developed", "delivered", "maintained", "managed", "led",
+        "migrated", "integrated", "owned", "worked", "improved", "automated", "configured", "tested", "deployed",
+        "orchestrated", "processed", "loaded", "ingested", "transformed", "supported", "optimized", "operated"
+    ]
 
     private static func enableExistingProfileEvidence(in database: SQLiteDatabase) throws {
         while true {

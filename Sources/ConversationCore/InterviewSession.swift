@@ -183,6 +183,8 @@ public actor InterviewSession {
     private let generationTimeout: Duration
     private let classificationEvidence: @Sendable (String) async -> [String]
     private let evidence: @Sendable (String) async -> [String]
+    private let pastWorkEvidence: @Sendable () async -> [String]
+    private let profileTraining: ProfileAnswerTraining?
     private let questionNow: @Sendable () -> ContinuousClock.Instant
     private let questionSleep: @Sendable (ContinuousClock.Instant) async throws -> Void
     private var questionWait: Duration
@@ -218,12 +220,14 @@ public actor InterviewSession {
     public init(channels: [TranscriptionChannel], detector: QuestionDetector, generator: any TextGenerator,
                 format: AnswerFormat = .brief, preferences: String = "", interviewContext: [String] = [],
                 answerWordLimit: Int = 0,
+                profileTraining: ProfileAnswerTraining? = nil,
                 questionWait: Duration = .zero,
                 questionNow: @escaping @Sendable () -> ContinuousClock.Instant = { .now },
                 questionSleep: @escaping @Sendable (ContinuousClock.Instant) async throws -> Void = { try await Task.sleep(until: $0) },
                 queueLimit: Int = 32, classificationBudget: ContextBudget = .init(),
                 answerBudget: ContextBudget = .init(), generationTimeout: Duration = .seconds(45),
                 classificationEvidence: @escaping @Sendable (String) async -> [String] = { _ in [] },
+                pastWorkEvidence: @escaping @Sendable () async -> [String] = { [] },
                 evidence: @escaping @Sendable (String) async -> [String] = { _ in [] }) {
         self.channels = channels
         self.queueLimit = min(256, max(1, queueLimit))
@@ -237,6 +241,8 @@ public actor InterviewSession {
         self.questionSleep = questionSleep
         self.interviewContext = interviewContext
         self.evidence = evidence
+        self.pastWorkEvidence = pastWorkEvidence
+        self.profileTraining = profileTraining
         self.classificationBudget = classificationBudget
         self.answerBudget = answerBudget
         self.generationTimeout = generationTimeout
@@ -896,28 +902,37 @@ public actor InterviewSession {
         }
         context.append(contentsOf: interviewContext)
         var evidenceTerms = [question.normalized] + question.parts + [question.original]
+        var usePastWork = question.requestsPastWork
         if let previousID = question.previousQuestionID, conversation.contains(where: { $0.questionID == previousID }),
            let prior = snapshot.answers.first(where: { $0.id == previousID && $0.state != .invalidated }) {
             context.insert("Previous interviewer question: " + prior.question.original, at: 0)
             evidenceTerms += [prior.question.normalized, prior.question.original]
+            usePastWork = usePastWork || prior.question.requestsPastWork
         }
         // Use one retrieval query so finding additional terms does not add provider round trips.
         var seenTerms: Set<String> = []
         let evidenceQuery = evidenceTerms.filter { seenTerms.insert($0).inserted }.joined(separator: "\n")
-        let limitedContext = answerBudget.share(70).limit(context)
+        let training = profileTraining?.limited(to: answerBudget.share(20))
         generationDeadline = Task { [weak self, generationTimeout] in
             do {
                 try await Task.sleep(for: generationTimeout)
                 await self?.timeout(revision)
             } catch {}
         }
-        generation = Task { [weak self, generator, evidence, preferences, limitedContext, answerBudget, answerWordLimit] in
+        generation = Task { [weak self, generator, evidence, pastWorkEvidence, preferences, context,
+                             usePastWork, answerBudget, answerWordLimit] in
             do {
                 await self?.mark(revision, \.retrievalStarted)
-                let facts = answerBudget.share(30).limit(await evidence(evidenceQuery))
+                let matches = await evidence(evidenceQuery)
+                try Task.checkCancellation()
+                let facts = answerBudget.share(30).limit(matches)
+                let candidates = usePastWork ? await pastWorkEvidence() : []
+                let examples = answerBudget.share(30).limit(candidates.filter { !facts.contains($0) })
+                let contextShare = 70 - (examples.isEmpty ? 0 : 30) - (training == nil ? 0 : 20)
+                let limitedContext = answerBudget.share(contextShare).limit(context)
                 await self?.mark(revision, \.retrievalFinished)
                 try Task.checkCancellation()
-                await self?.recordEvidence(facts, revision)
+                await self?.recordEvidence(facts + examples, revision)
                 let text = ([question.normalized] + question.parts).joined(separator: "\n")
                 let multipart = question.parts.count > 1
                     ? "Address all \(question.parts.count) requested parts in their original order within the selected format. " : ""
@@ -925,7 +940,8 @@ public actor InterviewSession {
                                             instructions: format.instructions(wordLimit: answerWordLimit) + " " + multipart + preferences,
                                             evidence: facts, interviewContext: limitedContext,
                                             questionParts: question.parts.count > 1 ? question.parts : [],
-                                            originalQuestion: question.original == question.normalized ? nil : question.original)
+                                            originalQuestion: question.original == question.normalized ? nil : question.original,
+                                            pastWorkExamples: examples, profileTraining: training)
                 await self?.mark(revision, \.requestStarted)
                 for try await event in try await generator.stream(request) {
                     try Task.checkCancellation()

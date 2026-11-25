@@ -145,3 +145,5 @@ See `docs/verification/baseline.md` for the initial build/test run. No native Ma
 - Experience answers use specific, directly relevant profile facts or a labeled practice scenario. Talking points use words the candidate can say aloud. Retrieval includes the original wording and a trusted prior question when referenced. The workspace remembers the selected profile for the next session.
 
 - Question classification and Answer generation have independent model and reasoning menus for OpenAI and Anthropic. Custom model IDs and existing presets are retained. Reasoning settings are saved with provider presets, and account-specific model access is checked through the existing connection tests.
+
+- **Answer training** in Profiles stores skills and a sample of the candidate's speaking style. Recorded project stories become individual experience facts with optional source, destination, data and outcome. Broad past-work questions can retrieve approved project examples independently of their wording, and the generation policy favors an actual project in first-person past tense.

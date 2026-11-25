@@ -519,11 +519,15 @@ final class WorkspaceModel: ObservableObject {
                                                completionGrace: .seconds(grace)),
                     generator: providers.generator,
                     format: format, preferences: preferences, interviewContext: context, answerWordLimit: answerWords,
+                    profileTraining: profile?.answerTraining,
                     questionWait: Self.questionWaitDuration(options.object(forKey: "questionWaitSeconds") as? Double ?? 2),
                     classificationBudget: classificationBudget, answerBudget: answerBudget,
                     generationTimeout: .seconds(timeout), classificationEvidence: { question in
                         guard let store, let profile else { return [] }
                         return (try? await store.retrieve(question, profile: profile.id))?.map(\.promptText) ?? []
+                    }, pastWorkEvidence: {
+                        guard let store, let profile else { return [] }
+                        return (try? await store.pastWorkExamples(profile: profile.id))?.map(\.promptText) ?? []
                     }, evidence: { question in
                         guard let store, let profile else { return [] }
                         if let embedding,
@@ -1765,6 +1769,7 @@ private struct ProfileEditor: View {
     @State private var picker = false
     @State private var attaching = false
     @State private var showingPaste = false
+    @State private var showingProjectStory = false
     @State private var message: String?
     @State private var selectedFact: ExperienceFact?
     @State private var deleteConfirmation = false
@@ -1797,6 +1802,16 @@ private struct ProfileEditor: View {
                 TextField("Industry", text: $profile.industry)
                 TextField("Answer language", text: $profile.answerLanguage)
                 TextField("Response instructions", text: $profile.instructions)
+                DisclosureGroup("Answer training") {
+                    TextField("Skills you’ve used", text: trainingField(\.skills), axis: .vertical)
+                        .lineLimit(1...2)
+                    TextField("Sample answer in your own words", text: trainingField(\.speakingSample), axis: .vertical)
+                        .lineLimit(2...4)
+                    Text("The sample guides tone and phrasing. Add real projects below to teach the app what you did.")
+                        .font(.caption).foregroundStyle(.secondary)
+                    Button("Add Project Story…") { showingProjectStory = true }
+                        .disabled(!hasProfileName)
+                }
             }
             .disabled(attaching)
             Divider()
@@ -1812,6 +1827,7 @@ private struct ProfileEditor: View {
                     ForEach(facts) { fact in
                         HStack {
                             Text(fact.claim)
+                                .lineLimit(fact.category == ExperienceFact.projectStoryCategory ? 2 : nil)
                             Spacer()
                             if fact.status == .rejected { Text("Excluded").foregroundStyle(.secondary) }
                             Button("Edit") { selectedFact = fact }.buttonStyle(.borderless)
@@ -1865,6 +1881,11 @@ private struct ProfileEditor: View {
                 Task { await change { id in try await store.deleteFact(fact.id, profile: id) } }
             })
         }
+        .sheet(isPresented: $showingProjectStory) {
+            ProjectStoryEditor { story in
+                Task { await change { id in try await store.save(story, profile: id) } }
+            }
+        }
         .confirmationDialog("Delete this profile and its documents and facts?", isPresented: $deleteConfirmation) {
             Button("Delete Profile", role: .destructive) {
                 Task {
@@ -1876,6 +1897,17 @@ private struct ProfileEditor: View {
                 }
             }
         }
+    }
+
+    private func trainingField(_ key: WritableKeyPath<ProfileAnswerTraining, String>) -> Binding<String> {
+        Binding(
+            get: { profile.answerTraining?[keyPath: key] ?? "" },
+            set: { value in
+                var training = profile.answerTraining ?? .init()
+                training[keyPath: key] = value
+                profile.answerTraining = training
+            }
+        )
     }
 
     private var attachmentControls: some View {
@@ -2012,6 +2044,50 @@ private struct ProfileEditor: View {
         } catch {
             if profile.id == target.id { message = "Could not save. Enter a profile name and check the document or fact." }
         }
+    }
+}
+
+private struct ProjectStoryEditor: View {
+    let save: (ExperienceFact) -> Void
+    @Environment(\.dismiss) private var dismiss
+    @State private var title = ""
+    @State private var source = ""
+    @State private var destination = ""
+    @State private var data = ""
+    @State private var contribution = ""
+    @State private var outcome = ""
+
+    var body: some View {
+        Form {
+            Text("Project Story").font(.title2)
+            TextField("Project name", text: $title)
+            TextField("Source systems", text: $source)
+            TextField("Destination", text: $destination)
+            TextField("Types of data", text: $data)
+            TextField("What I did", text: $contribution, axis: .vertical).lineLimit(2...5)
+            TextField("Outcome", text: $outcome, axis: .vertical).lineLimit(1...3)
+            HStack {
+                Spacer()
+                Button("Cancel") { dismiss() }.keyboardShortcut(.cancelAction)
+                Button("Save Project Story", action: saveStory)
+                    .keyboardShortcut(.defaultAction)
+                    .disabled(title.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+                              || contribution.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
+            }
+        }
+        .padding(18)
+        .frame(minWidth: 470)
+    }
+
+    private func saveStory() {
+        let fields = [("Project", title), ("Source", source), ("Destination", destination), ("Data", data),
+                      ("What I did", contribution), ("Outcome", outcome)]
+        let claim = fields.compactMap { label, value -> String? in
+            let text = value.trimmingCharacters(in: .whitespacesAndNewlines)
+            return text.isEmpty ? nil : label + ": " + text
+        }.joined(separator: "\n")
+        save(.init(category: ExperienceFact.projectStoryCategory, claim: claim, status: .confirmed))
+        dismiss()
     }
 }
 

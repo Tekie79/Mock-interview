@@ -193,16 +193,21 @@ public struct AnswerRequest: Equatable, Sendable {
     public let questionParts: [String]
     public let instructions: String
     public let evidence: [String]
+    public let pastWorkExamples: [String]
+    public let profileTraining: ProfileAnswerTraining?
     public let coaching: CoachingInput?
     public let interviewContext: [String]
 
     public init(question: String, instructions: String, evidence: [String], coaching: CoachingInput? = nil,
-                interviewContext: [String] = [], questionParts: [String] = [], originalQuestion: String? = nil) {
+                interviewContext: [String] = [], questionParts: [String] = [], originalQuestion: String? = nil,
+                pastWorkExamples: [String] = [], profileTraining: ProfileAnswerTraining? = nil) {
         self.question = question
         self.originalQuestion = originalQuestion
         self.questionParts = questionParts
         self.instructions = instructions
         self.evidence = evidence
+        self.pastWorkExamples = pastWorkExamples
+        self.profileTraining = profileTraining
         self.coaching = coaching
         self.interviewContext = interviewContext
     }

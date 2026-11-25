@@ -99,26 +99,78 @@ extension AnswerStreamingTests {
         let policy = AnswerPrompt.instructions(request)
         XCTAssertTrue(policy.contains("lead with a practical first-person"))
         XCTAssertTrue(policy.contains("I would first verify the scope of the incident"))
-        XCTAssertTrue(policy.contains("Do not state or imply a lack of experience"))
-        XCTAssertTrue(policy.contains("Use only approved facts for personal claims"))
+        XCTAssertTrue(policy.contains("Do not infer a lack of experience"))
+        XCTAssertTrue(policy.contains("Use approved facts and approved work examples for claims about past projects"))
         XCTAssertTrue(policy.contains("only when it is confirmed and directly relevant"))
         XCTAssertTrue(AnswerFormat.star.instructions(wordLimit: 0).contains("describe the actions and expected result conditionally"))
     }
 
-    func testPastExperiencePolicyRequiresASpeakableExampleAndConcretePracticeFallback() {
+    func testPastExperiencePolicyPrefersAnActualExampleAndKeepsStyleSeparate() {
         let request = AnswerRequest(question: "What did you build with dbt?",
                                     instructions: AnswerFormat.bullets.instructions(wordLimit: 60),
                                     evidence: ["Maintained a Snowflake staging area."])
         let policy = AnswerPrompt.instructions(request)
         XCTAssertTrue(policy.contains("Write the words the candidate could say aloud"))
         XCTAssertTrue(policy.contains("Avoid phrases like “I would describe,”"))
-        XCTAssertTrue(policy.contains("lead with one real example"))
-        XCTAssertTrue(policy.contains("A fact about a related"))
-        XCTAssertTrue(policy.contains("give one concrete example labeled “Practice scenario”"))
-        XCTAssertTrue(policy.contains("how you would validate it, and the expected result"))
-        XCTAssertTrue(policy.contains("Use conditional language throughout"))
+        XCTAssertTrue(policy.contains("in the candidate's first-person, past-tense voice"))
+        XCTAssertTrue(policy.contains("introduce it as the closest example and state its actual scope"))
+        XCTAssertTrue(policy.contains("Use the supplied source, destination, data type, actions, and results"))
+        XCTAssertTrue(policy.contains("a relevant project example"))
+        XCTAssertTrue(policy.contains("substitute a fictional project"))
+        XCTAssertTrue(policy.contains("Use it for style only"))
         XCTAssertTrue(request.instructions.contains("candidate's speaking voice"))
         XCTAssertTrue(request.instructions.contains("Use at most 60 words."))
+    }
+
+    func testBroadPastWorkQuestionCarriesARealStoryEvenWithoutKeywordMatches() async throws {
+        let store = try KnowledgeStore()
+        let profile = InterviewProfile(name: "Synthetic profile",
+            answerTraining: .init(skills: "ETL and SQL", speakingSample: "I start with the practical detail."))
+        try await store.save(profile)
+        let story = ExperienceFact(category: ExperienceFact.projectStoryCategory,
+            claim: "Project: Reporting refresh\nSource: Vendor SFTP\nDestination: PostgreSQL\nData: CSV sales extracts\nWhat I did: Validated schemas and built the loader.",
+            status: .confirmed)
+        try await store.save(story, profile: profile.id)
+
+        let stt = InjectedSTT()
+        let generator = ControlledGenerator()
+        let session = InterviewSession(
+            channels: [.init(source: .init(id: "question", role: .interviewer), audio: HeldAudio(), makeSTT: { stt })],
+            detector: .init(classifier: HeldClassifier(slow: false)), generator: generator,
+            profileTraining: profile.answerTraining, pastWorkEvidence: {
+                (try? await store.pastWorkExamples(profile: profile.id))?.map(\.promptText) ?? []
+            }, evidence: { query in
+                (try? await store.retrieve(query, profile: profile.id))?.map(\.promptText) ?? []
+            }
+        )
+        await session.start()
+        try await eventually { await session.current().state == .listening }
+        await stt.send("Could you share one specific example of the kind of work you have worked on?", item: "example")
+        try await eventually { await generator.submitted.count == 1 }
+        let submitted = await generator.submitted
+        let request = try XCTUnwrap(submitted.first)
+        let payload = try XCTUnwrap(JSONSerialization.jsonObject(with: Data(try AnswerPrompt.input(request).utf8)) as? [String: [String]])
+        XCTAssertEqual(payload["approved_facts"], [])
+        XCTAssertEqual(payload["approved_work_examples"], [story.promptText])
+        XCTAssertEqual(payload["profile_skills"], ["ETL and SQL"])
+        XCTAssertEqual(payload["speaking_sample"], ["I start with the practical detail."])
+        let answer = await session.current().answers.first
+        XCTAssertEqual(answer?.evidence, [story.promptText])
+        await session.stop()
+    }
+
+    func testTechnicalAndHypotheticalQuestionsOmitBroadProjectShortlist() async throws {
+        let generator = ControlledGenerator()
+        let session = InterviewSession(channels: [], detector: .init(classifier: NeverClassify()), generator: generator,
+                                       pastWorkEvidence: { ["Confirmed project story"] })
+        await session.start()
+        var started = generator.started.makeAsyncIterator()
+        for question in ["What is a dead-letter queue?", "How would you handle a load failure?"] {
+            await session.manualQuestion(question)
+            let request = await started.next()
+            XCTAssertEqual(request?.pastWorkExamples, [])
+        }
+        await session.stop()
     }
 
     func testAutomaticAnswerUsesProfileEvidenceFromOriginalWordingAndTrustedFollowUp() async throws {

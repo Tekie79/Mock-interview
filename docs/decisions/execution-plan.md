@@ -67,3 +67,12 @@ Add provider-specific model and reasoning dropdowns to Question classification a
 - Exercise provider payloads and older presets with offline tests, then build and package the native app and run hosted portable and macOS checks. Higher effort can increase answer time and token usage. The connection test checks model access under the user's account.
 
 Local Swift builds and tests passed with 120 Linux Swift 6.2.3 and 130 Apple Silicon macOS XCTest cases. Unsigned arm64/x86_64 packaging passed with one App Intents metadata warning. The isolated native form verified both model menus, independent reasoning choices, the disabled state for GPT-4.1 mini, and custom model entry. Fixtures checked provider request fields and legacy preset decoding. No live provider credentials were used.
+
+## Profile training and first-person project answers
+
+Add profile inputs for skills and a sample of the candidate's speaking style. Let the candidate record a real project with its source, destination, data, contribution, and outcome as one reusable experience fact. Existing profile records and attachments remain usable.
+
+- Broaden retrieval for past-work questions by supplying a bounded shortlist of approved project examples alongside query matches. Keep sample text as style context and job requirements as role context. Use a suitable real project for broad questions and state the actual scope for related experience. Reserve hypothetical answers for questions requesting hypothetical work.
+- Verify profile persistence, source and status boundaries, the automatic broad-question path, prompt separation, native editing, portable builds and unsigned packaging. Live model adherence needs separate verification.
+
+Local builds passed with 123 Linux Swift 6.2.3 and 133 Apple Silicon macOS XCTest cases, all passing. The unsigned universal app built with one App Intents metadata warning. The isolated native profile accepted skills, a speaking sample, and a saved synthetic project with source, destination, data and contribution. Deterministic tests verified the broad-question payload, project evidence isolation and the ordinary technical path. The check used no personal profile or live provider.

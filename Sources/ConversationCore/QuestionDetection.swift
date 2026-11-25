@@ -6,14 +6,26 @@ public struct AcceptedQuestion: Identifiable, Equatable, Sendable, Codable {
     public let normalized: String
     public let parts: [String]
     public let previousQuestionID: UUID?
+    public let category: String?
 
     public init(id: UUID = UUID(), original: String, normalized: String, parts: [String] = [],
-                previousQuestionID: UUID? = nil) {
+                previousQuestionID: UUID? = nil, category: String? = nil) {
         self.id = id
         self.original = original
         self.normalized = normalized
         self.parts = parts
         self.previousQuestionID = previousQuestionID
+        self.category = category
+    }
+
+    var requestsPastWork: Bool {
+        if category == "past_work" { return true }
+        return [normalized, original].contains { text in
+            let words = " " + text.lowercased().split { !$0.isLetter }.joined(separator: " ") + " "
+            return ["did you", "have you worked", "you have worked", "you worked", "your experience",
+                    "your past work", "your previous project", "your projects", "you ve built"]
+                .contains { words.contains(" " + $0 + " ") }
+        }
     }
 }
 
@@ -165,7 +177,8 @@ public actor QuestionDetector {
         })?.id : nil
         let contextualReference = result.isFollowUp || result.isIntentionalRepeat ? matched ?? context.last?.id : nil
         let question = AcceptedQuestion(original: text, normalized: normalized, parts: result.parts,
-                                        previousQuestionID: priorRepeat ?? contextualReference)
+                                        previousQuestionID: priorRepeat ?? contextualReference,
+                                        category: result.category == "past_work" ? result.category : nil)
         let detection = Detection(question: question, transcriptIDs: transcriptIDs)
         recent.append(detection)
         if recent.count > 8 { recent.removeFirst() }

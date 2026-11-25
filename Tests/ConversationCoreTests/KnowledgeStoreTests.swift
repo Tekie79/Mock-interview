@@ -3,6 +3,33 @@ import XCTest
 @testable import ConversationCore
 
 final class KnowledgeStoreTests: XCTestCase {
+    func testProfileTrainingRoundTripsAndBroadExamplesRespectIsolationAndExclusion() async throws {
+        let store = try KnowledgeStore()
+        let original = InterviewProfile(name: "Synthetic profile")
+        try await store.save(original)
+        let old = try await store.profiles()
+        XCTAssertNil(old.first?.answerTraining)
+        var profile = original
+        profile.answerTraining = .init(skills: "SQL", speakingSample: "I start with a concrete example.")
+        try await store.save(profile)
+        let updated = try await store.profiles()
+        XCTAssertEqual(updated.first?.answerTraining, profile.answerTraining)
+
+        let another = InterviewProfile(name: "Another profile")
+        try await store.save(another)
+        let story = ExperienceFact(category: ExperienceFact.projectStoryCategory,
+                                   claim: "Warehouse delivery project", status: .confirmed)
+        try await store.save(story, profile: profile.id)
+        try await store.save(.init(category: ExperienceFact.projectStoryCategory,
+                                   claim: "Excluded project story", status: .rejected), profile: profile.id)
+        try await store.save(.init(claim: "Built a monitoring app.", status: .confirmed), profile: another.id)
+        let resume = ProfileDocument(kind: .resume, title: "Resume.md", text: "- Tools: SQL and PostgreSQL\n- Built an ingestion pipeline.")
+        let job = ProfileDocument(kind: .jobDescription, title: "Role.md", text: "Built cloud pipelines for finance.")
+        try await store.add(resume, to: profile.id)
+        try await store.add(job, to: profile.id)
+        let examples = try await store.pastWorkExamples(profile: profile.id)
+        XCTAssertEqual(examples.map(\.claim), [story.claim, "Built an ingestion pipeline."])
+    }
     func testMarkdownAttachmentsAreUsableWithCleanFactsAndSourceLines() async throws {
         let folder = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString, isDirectory: true)
         try FileManager.default.createDirectory(at: folder, withIntermediateDirectories: true)
