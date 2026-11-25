@@ -89,6 +89,7 @@ private enum Keychain {
 
 private enum SpeechProvider: String, CaseIterable, Identifiable {
     case apple = "Apple Speech"
+    case eleven = "ElevenLabs"
     case openai = "OpenAI"
     case deepgram = "Deepgram"
     var id: String { rawValue }
@@ -123,6 +124,16 @@ private struct SessionProviders {
             let vocabulary = (defaults.string(forKey: "speechVocabulary") ?? "").split(separator: ",")
                 .map { $0.trimmingCharacters(in: .whitespacesAndNewlines) }
             transcriber = { AppleSpeechTranscriber(locale: locale, mode: mode, vocabulary: vocabulary) }
+        case .eleven:
+            let credential = try key("elevenlabs")
+            let model = defaults.string(forKey: "elevenModel") ?? "scribe_v3_live"
+            let strategy = TranscriptionCommitStrategy(rawValue: defaults.string(forKey: "elevenCommit") ?? "") ?? .manual
+            let config = ElevenLabsSpeechConfiguration(
+                model: model, language: language, detectLanguage: defaults.object(forKey: "elevenDetectLanguage") as? Bool ?? true,
+                strategy: strategy, silenceSeconds: defaults.object(forKey: "sttEndpoint") as? Double ?? 0.65,
+                vocabulary: (defaults.string(forKey: "speechVocabulary") ?? "").split(separator: ",")
+                    .map { $0.trimmingCharacters(in: .whitespacesAndNewlines) })
+            transcriber = { ElevenLabsTranscriber(apiKey: credential, configuration: config) }
         case .openai:
             let credential = try key("openai")
             let model = defaults.string(forKey: "sttModel") ?? "gpt-live-transcribe"
@@ -193,7 +204,7 @@ final class WorkspaceModel: ObservableObject {
     @Published var endedAt: Date?
     @Published var providerTest: String?
     @Published var checkingProvider = false
-    @Published var configuredKeys = Set(["openai", "deepgram", "anthropic"].filter { Keychain.load($0) != nil })
+    @Published var configuredKeys = Set(["openai", "deepgram", "anthropic", "elevenlabs"].filter { Keychain.load($0) != nil })
 
     private(set) var store: KnowledgeStore?
     private var session: InterviewSession?
@@ -887,6 +898,10 @@ private struct ProviderSettingsView: View {
     @AppStorage("appleSpeechLocale") private var appleLocale = "en-US"
     @AppStorage("appleSpeechMode") private var appleMode = AppleRecognitionMode.onDevice
     @AppStorage("speechVocabulary") private var speechVocabulary = ""
+    @AppStorage("elevenModel") private var elevenModel = "scribe_v3_live"
+    @AppStorage("elevenCommit") private var elevenCommit = TranscriptionCommitStrategy.manual
+    @AppStorage("elevenDetectLanguage") private var elevenDetectLanguage = true
+    @AppStorage("sttEndpoint") private var sttEndpoint = 0.65
     @AppStorage("classificationProvider") private var classification = TextProvider.openai
     @AppStorage("answerProvider") private var answer = TextProvider.openai
     @AppStorage("deepgramModel") private var deepgramModel = "nova-3"
@@ -910,6 +925,9 @@ private struct ProviderSettingsView: View {
         Form {
             Section("Providers") {
                 ProviderKeyField(model: model, provider: "OpenAI", account: "openai")
+                if speech == .eleven {
+                    ProviderKeyField(model: model, provider: "ElevenLabs", account: "elevenlabs")
+                }
                 if speech == .deepgram {
                     ProviderKeyField(model: model, provider: "Deepgram", account: "deepgram")
                 }
@@ -932,6 +950,23 @@ private struct ProviderSettingsView: View {
                         Text("This locale has no on-device recognizer. Choose another locale or explicitly enable network processing.")
                     }
                     TextField("Vocabulary hints (comma separated)", text: $speechVocabulary)
+                } else if speech == .eleven {
+                    Picker("Scribe model", selection: $elevenModel) {
+                        ForEach(ProviderCapabilities.describe(.elevenLabs).models, id: \.self) { Text($0).tag($0) }
+                    }
+                    Picker("Commit strategy", selection: $elevenCommit) {
+                        ForEach(TranscriptionCommitStrategy.allCases.filter {
+                            ProviderCapabilities.describe(.elevenLabs, model: elevenModel).commits.contains($0)
+                        }) { Text($0.rawValue).tag($0) }
+                    }
+                    if !ProviderCapabilities.describe(.elevenLabs, model: elevenModel).commits.contains(elevenCommit) {
+                        Text("Choose a commit strategy supported by this Scribe model.")
+                    }
+                    Toggle("Automatic language detection", isOn: $elevenDetectLanguage)
+                    Slider(value: $sttEndpoint, in: 0.3...3) { Text("Provider endpoint silence") }
+                    TextField("Vocabulary hints (comma separated)", text: $speechVocabulary)
+                    Text("ElevenLabs bills streamed audio, including silence. Model availability depends on your account.")
+                        .font(.caption).foregroundStyle(.secondary)
                 } else {
                     TextField("Transcription model", text: speech == .openai ? $sttModel : $deepgramModel)
                 }

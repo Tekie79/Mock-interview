@@ -13,6 +13,8 @@ public enum ProviderFailure: Error, Equatable, Sendable {
     case disconnected
     case timeout
     case incompleteTranscription
+    case unsupportedCapability
+    case quotaExhausted
 }
 
 public enum OpenAIRealtimeWire {

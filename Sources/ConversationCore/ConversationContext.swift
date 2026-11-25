@@ -54,6 +54,7 @@ public struct ContextBudget: Equatable, Sendable {
 
 struct ClassifierContext: Encodable {
     let latest: String
+    let providerTurnProbability: Double?
     let previousQuestions: [String]
     let conversation: [ConversationTurn]
     let approvedEvidence: [String]
@@ -61,6 +62,7 @@ struct ClassifierContext: Encodable {
 
     init(_ input: QuestionInput) {
         latest = input.turn.text
+        providerTurnProbability = input.turn.turnProbability
         previousQuestions = input.previousQuestions
         conversation = input.conversation
         approvedEvidence = input.approvedEvidence

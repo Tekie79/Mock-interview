@@ -353,6 +353,11 @@ public actor InterviewSession {
         case .transcript(let event):
             guard epochs[event.source.id] == event.epoch else { return }
             let id = event.epoch.uuidString + "/" + event.source.id + "/" + event.itemID
+            if event.state == .final && event.text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
+                snapshot.transcript.removeAll { $0.id == id && !$0.isFinal }
+                publish()
+                return
+            }
             var speakerID: DiarizedSpeaker.ID?
             var role = event.source.role
             if role == .unknown, let number = event.speaker, number >= 0, event.state == .final {

@@ -97,7 +97,8 @@ public actor QuestionDetector {
         }
 
         let turn = TranscriptEvent(source: event.source, epoch: event.epoch, itemID: event.itemID,
-                                   previousItemID: event.previousItemID, text: text, state: .final, speaker: event.speaker)
+                                   previousItemID: event.previousItemID, text: text, state: .final, speaker: event.speaker,
+                                   turnProbability: event.turnProbability)
         let context = recent
         let result = try await classifier.classify(QuestionInput(
             turn: turn,

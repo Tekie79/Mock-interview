@@ -7,6 +7,10 @@ public func publicErrorMessage(_ error: Error) -> String {
         "Add the provider key in Settings."
     case ProviderFailure.authentication:
         "The provider rejected the key. Update it in Settings."
+    case ProviderFailure.unsupportedCapability:
+        "The selected model does not support this language, service, or processing option."
+    case ProviderFailure.quotaExhausted:
+        "The provider reports that the available allowance has been exhausted."
     case ProviderFailure.rateLimited:
         "The provider rate limit was reached."
     case ProviderFailure.incompleteTranscription:
