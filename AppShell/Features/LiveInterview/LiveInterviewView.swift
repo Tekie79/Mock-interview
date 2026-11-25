@@ -23,6 +23,14 @@ struct WorkspaceView: View {
             if model.state == .idle && model.answerHistory.isEmpty {
                 preparation
             } else {
+                if model.state.isRunning && model.liveQuestionMode == .unresolved {
+                    HStack(spacing: Studio.tight) {
+                        Label("Listening to mixed audio. Use a transcript turn to request an answer.", systemImage: "waveform")
+                            .font(.callout).foregroundStyle(Studio.secondary)
+                        Spacer(minLength: 0)
+                        if !showInspector { Button("Show Transcript") { showInspector = true } }
+                    }
+                }
                 HStack(spacing: Studio.section) {
                     InterviewAnswerView(model: model, fontSize: fontSize)
                         .frame(maxWidth: .infinity, maxHeight: .infinity)
@@ -96,6 +104,8 @@ struct WorkspaceView: View {
                 Divider()
                 setupRow("Candidate microphone", icon: "mic") { Text(model.candidateSourceLabel) }
                 Divider()
+                setupRow("Answer mode", icon: "text.bubble") { Text(model.answerModeLabel) }
+                Divider()
                 setupRow("AI connection", icon: "network") { Text(model.providerReadiness) }
                 Divider()
                 setupRow("Interview context", icon: "text.magnifyingglass") { Text(contextMode.rawValue) }
@@ -106,8 +116,8 @@ struct WorkspaceView: View {
                     .font(.callout).foregroundStyle(Studio.warning)
             }
             HStack {
-                Button("Start Interview", systemImage: "play.fill", action: model.startOrResume)
-                    .buttonStyle(.borderedProminent).disabled(!model.canStartOrResume)
+                InterviewStartControl(model: model, label: "Start Interview")
+                    .buttonStyle(.borderedProminent)
                 Button("Configure Audio", systemImage: "slider.horizontal.3") { model.showAudioConfiguration = true }
             }
         }
@@ -202,6 +212,8 @@ struct AudioSourceEditor: View {
                 .disabled((model.route.question == .application && model.route.applicationID == nil)
                           || (model.route.question == .outputDevice && model.route.outputUID == nil)
                           || (model.route.question == .replay && model.replayURL == nil))
+                Text("Interviewer-only audio enables automatic answers for this source. Choose it only if the feed carries the interviewer alone.")
+                    .font(.caption).foregroundStyle(Studio.secondary)
                 if model.requestsSpeakerLabels && !supportsSpeakerLabels {
                     Text("This transcription model supplies no speaker labels. Use ElevenLabs Scribe v3 Live, a supported Deepgram Nova model, or ask manually.")
                         .font(.caption).foregroundStyle(.secondary)

@@ -118,6 +118,9 @@ private struct AudioConfigurationSheet: View {
                 Spacer()
                 Button("Done") { dismiss() }.keyboardShortcut(.cancelAction)
             }
+            if let issue = model.error {
+                Label(issue, systemImage: "exclamationmark.circle").foregroundStyle(Studio.warning)
+            }
             AudioSourceEditor(model: model)
         }
         .padding(Studio.page)

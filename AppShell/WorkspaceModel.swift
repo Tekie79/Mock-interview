@@ -78,6 +78,12 @@ enum SpeechProvider: String, CaseIterable, Identifiable {
     }
 }
 
+enum WorkspaceAudioChannel: String {
+    case question = "Question"
+    case replay = "Replay"
+    case candidate = "Candidate microphone"
+}
+
 enum TextProvider: String, CaseIterable, Identifiable {
     case openai = "OpenAI"
     case anthropic = "Anthropic"
@@ -269,6 +275,7 @@ final class WorkspaceModel {
     }
     var replayAttribution: QuestionAudioAttribution = .unresolved
     private(set) var liveQuestionMode: QuestionAudioMode = .unresolved
+    private(set) var liveQuestionChannel = WorkspaceAudioChannel.question
     private(set) var snapshot: InterviewSnapshot? {
         didSet {
             if state != snapshot?.state ?? .idle { state = snapshot?.state ?? .idle }
@@ -341,6 +348,32 @@ final class WorkspaceModel {
         }
     }
     var canStartOrResume: Bool { startActionLabel != nil && !busy && !testing && !chatGPTBusy }
+
+    var answerModeLabel: String {
+        switch active ? liveQuestionMode : selectedQuestionMode {
+        case .trustedInterviewerOnly, .separateChannels: "Automatic answers"
+        case .diarized: "Automatic after speaker assignment"
+        case .unresolved: "Manual answers"
+        }
+    }
+
+    var offersInterviewerOutputConfirmation: Bool {
+        !active && route.canDesignateInterviewerOutput && route.outputAttribution == .unresolved
+    }
+
+    var questionMeterChannel: WorkspaceAudioChannel {
+        active ? liveQuestionChannel : configuredQuestionChannel
+    }
+
+    private var configuredQuestionChannel: WorkspaceAudioChannel {
+        route.question == .replay ? .replay : .question
+    }
+
+    func startWithConfirmedInterviewerOutput(_ confirmedRoute: AudioRoutePreference) {
+        guard canStartOrResume, offersInterviewerOutputConfirmation, route == confirmedRoute else { return }
+        route.outputAttribution = .interviewerOnly
+        startOrResume()
+    }
 
     var selectedProfileName: String { profiles.first { $0.id == profileID }?.name ?? "General practice" }
 
@@ -647,6 +680,7 @@ final class WorkspaceModel {
                 observations?.cancel()
                 session = next
                 liveQuestionMode = selectedQuestionMode
+                liveQuestionChannel = configuredQuestionChannel
                 sessionUsesChatGPT = providers.usesChatGPT
                 selectedAnswer = nil
                 pinned = false
@@ -870,7 +904,7 @@ final class WorkspaceModel {
     private func makeChannels(_ transcriber: @escaping @Sendable () -> any StreamingSTT, sensitivity: Float) throws -> [TranscriptionChannel] {
         try captureSources().map { source, audio in
             TranscriptionChannel(source: source, audio: audio, threshold: sensitivity,
-                                 replay: source.id == "Replay", makeSTT: transcriber)
+                                 replay: source.id == WorkspaceAudioChannel.replay.rawValue, makeSTT: transcriber)
         }
     }
 
@@ -887,6 +921,7 @@ final class WorkspaceModel {
                     diarize: requestsSpeakerLabels, activityThreshold: sensitivity)
                 let channels = try makeChannels(speech, sensitivity: sensitivity)
                 liveQuestionMode = selectedQuestionMode
+                liveQuestionChannel = configuredQuestionChannel
                 await session.replaceChannels(channels)
             } catch {
                 self.error = publicErrorMessage(error)
@@ -900,8 +935,7 @@ final class WorkspaceModel {
             guard let value else { throw CaptureFailure.sourceUnavailable }
             return value
         }
-        let question = CaptureSource(id: route.question == .replay ? "Replay" : "Question",
-                                     role: selectedQuestionMode.questionRole)
+        let question = CaptureSource(id: configuredQuestionChannel.rawValue, role: selectedQuestionMode.questionRole)
         let audio: any AudioSource
         switch route.question {
         case .defaultOutput: audio = MacAudioSource(source: question, input: .output(uid: nil))
@@ -921,7 +955,7 @@ final class WorkspaceModel {
         }
         var result = [(question, audio)]
         if route.candidateEnabled {
-            let candidate = CaptureSource(id: "Candidate microphone", role: .candidate)
+            let candidate = CaptureSource(id: WorkspaceAudioChannel.candidate.rawValue, role: .candidate)
             result.append((candidate, MacAudioSource(source: candidate,
                           input: .microphone(uid: try required(route.candidateMicrophoneUID)))))
         }
@@ -956,8 +990,8 @@ extension WorkspaceModel {
         configuredKeys = ["openai"]
         let question = FixtureRecognition(), candidate = FixtureRecognition()
         let next = InterviewSession(channels: [
-            .init(source: .init(id: "Question", role: .interviewer), audio: FixtureAudio(), makeSTT: { question }),
-            .init(source: .init(id: "Candidate", role: .candidate), audio: FixtureAudio(), makeSTT: { candidate })
+            .init(source: .init(id: WorkspaceAudioChannel.question.rawValue, role: .interviewer), audio: FixtureAudio(), makeSTT: { question }),
+            .init(source: .init(id: WorkspaceAudioChannel.candidate.rawValue, role: .candidate), audio: FixtureAudio(), makeSTT: { candidate })
         ], detector: .init(classifier: FixtureClassifier()), generator: FixtureAnswer(), format: .technical,
             evidence: { _ in ["Cedar replay project — implemented dry-runs and reviewed audit output."] })
         session = next

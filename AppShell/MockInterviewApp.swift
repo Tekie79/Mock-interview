@@ -37,7 +37,9 @@ struct MockInterviewApp: App {
             }
             #endif
             CommandMenu("Interview") {
-                Button("Start or Resume") { model.startOrResume() }
+                Button(model.offersInterviewerOutputConfirmation ? "Start With Manual Answers" : "Start or Resume") {
+                    model.startOrResume()
+                }
                     .keyboardShortcut(.return, modifiers: [.command, .shift])
                 Button("Pause") { model.pause() }
                     .keyboardShortcut(KeyEquivalent(pauseShortcut.first ?? "p"), modifiers: [.command, .shift])

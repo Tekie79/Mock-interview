@@ -47,4 +47,12 @@ The burst is reproducible by building with the synthetic fixture configuration a
 - Supported clean installation and upgrade on both macOS tracks. Unsigned bundle loading is development evidence.
 - Full assistive-technology and keyboard certification, timed rendering under sustained streams, and coverage on each supported physical macOS version.
 
-M12 used no paid provider calls. Optional provider live qualification was deferred. The ChatGPT subscription integration stays gated. No production release was signed, notarized or published.
+The initial M12 redesign verification used no paid provider calls. The system-output follow-up below includes a short live OpenAI run. Optional provider live qualification was deferred. The ChatGPT subscription integration stays gated. No production release was signed, notarized or published.
+
+### System output follow-up
+
+On 2026-11-25, the original build captured seven seconds and finalized four segments from MacBook Pro Speakers. Mixed audio mode marked all four segments ineligible for automatic answers. Local Test Audio subsequently measured normalized RMS of approximately 0.0087 with controlled playback on that hardware. macOS requested system audio permission again for the unsigned bundle and frames arrived after authorization.
+
+The owner identified the live Zoom output as interviewer-only. After saving that attribution for MacBook Pro Speakers, the standard app submitted 16 seconds of PCM, finalized six transcript segments and completed two automatic answers using `gpt-live-transcribe`, GPT-6 Luna with no reasoning for classification, and GPT-6.2 Sol at low reasoning for generation. A third accepted question was still in progress at Stop. The session then reported zero connected sources. This short observation uses a live, owner-designated interviewer feed and carries no release endurance or independent latency qualification.
+
+Build 12.1 makes the automatic and manual choice visible when starting with an unconfirmed output. It shows listening and manual-answer status together for unresolved audio, exposes the transcript path and uses capture-source identities for meters. Automatic attribution remains scoped to the selected source. A different unconfirmed output still requires speaker assignment or a deliberate interviewer-only designation.

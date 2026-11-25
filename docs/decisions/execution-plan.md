@@ -130,3 +130,9 @@ Base `a843a565ef0c9f7ed5d4c9a3bb3bd9bb5a318d0a` on `feature/m12-modern-ui`.
 - Run deterministic regressions, unsigned Release packaging and hosted Linux, macOS 15 and macOS 26. Inspect the native UI with synthetic content. Keep OpenAI hardware, independent accuracy/display timing, endurance and distribution qualification separate.
 
 M12 verified the local Swift package and unsigned native Release and Debug builds. Native synthetic runs exercised shared windows, Chat follow controls, attributions, withdrawn answers and the seven settings categories. A two-window Chat burst exposed a layout stall. M12 replaced the eager stack layout with a native virtualized list and passed a 200-answer synthetic retest. PR #4 records exact hosted checks and archive verification. Physical dual-source, independent OpenAI accuracy and latency, remote endurance, and clean installation and upgrade remain open.
+
+### M12 system-output follow-up
+
+Reproduce the reported silent speaker route on the running unsigned archive. Compare actual submitted frames, transcript results and question dispositions. Retest physical speaker capture with local audio while Zoom is open. Keep mixed-source attribution fail closed. Make the active answer mode and transcript path visible, verify meter identities, run the regression suite and rebuild the unsigned app. macOS may request authorization when an unsigned build changes identity.
+
+The native follow-up verified physical speaker RMS, then six live Zoom transcript finals and two completed automatic answers after the owner confirmed the interviewer-only route. The 12.1 fixture displayed both Start options for an unconfirmed system output. Local portable build, 165 tests and unsigned universal Release packaging passed. Hosted evidence is linked from PR #4.

@@ -11,9 +11,10 @@ struct SessionControlBar: View {
             StudioStatus(state: model.state, detail: detail)
                 .lineLimit(1)
             if !compact {
-                meter(model.route.question == .replay ? "Replay" : "Question", title: "Interviewer")
-                if model.route.candidateEnabled || model.snapshot?.sources["Candidate"] != nil {
-                    meter("Candidate", title: "Candidate")
+                let channel = model.questionMeterChannel
+                meter(channel, title: channel == .replay ? "Replay" : "Question audio")
+                if model.active ? model.snapshot?.sources[WorkspaceAudioChannel.candidate.rawValue] != nil : model.route.candidateEnabled {
+                    meter(.candidate, title: "Candidate")
                 }
             }
             Spacer(minLength: 0)
@@ -24,7 +25,7 @@ struct SessionControlBar: View {
             if model.state.isRunning {
                 controls("Pause", icon: "pause.fill", disabled: model.busy, action: model.pause)
             } else if let label = model.startActionLabel {
-                controls(label, icon: "play.fill", disabled: !model.canStartOrResume, action: model.startOrResume)
+                InterviewStartControl(model: model, label: label, compact: compact)
             }
             if model.active {
                 controls("Stop", icon: "stop.fill", disabled: model.busy, action: model.stop)
@@ -40,6 +41,7 @@ struct SessionControlBar: View {
         if model.snapshot?.waitingForQuestionEnd == true { return "Listening · Waiting for question" }
         if model.snapshot?.classifyingQuestion == true { return "Listening · Classifying" }
         if model.snapshot?.answers.last?.state == .generating { return "Listening · Generating" }
+        if model.liveQuestionMode == .unresolved { return "Listening · Manual answers" }
         return nil
     }
 
@@ -52,13 +54,45 @@ struct SessionControlBar: View {
         .disabled(disabled)
     }
 
-    private func meter(_ key: String, title: String) -> some View {
-        let level = Double(model.snapshot?.levels[key] ?? model.testLevels[key] ?? 0)
+    private func meter(_ channel: WorkspaceAudioChannel, title: String) -> some View {
+        let level = Double(model.snapshot?.levels[channel.rawValue] ?? model.testLevels[channel.rawValue] ?? 0)
         return HStack(spacing: Studio.small) {
             Text(title).font(.caption).foregroundStyle(Studio.secondary)
             ProgressView(value: min(1, max(0, level * 5))).frame(width: 44)
                 .tint(Studio.success)
                 .accessibilityLabel(title + " input level")
+        }
+    }
+}
+
+struct InterviewStartControl: View {
+    @Bindable var model: WorkspaceModel
+    let label: String
+    var compact = false
+    @State private var confirmsOutput = false
+    @State private var routeToConfirm: AudioRoutePreference?
+
+    var body: some View {
+        Button {
+            if model.offersInterviewerOutputConfirmation {
+                routeToConfirm = model.route
+                confirmsOutput = true
+            }
+            else { model.startOrResume() }
+        } label: {
+            if compact { Image(systemName: "play.fill") }
+            else { Label(label, systemImage: "play.fill") }
+        }
+        .studioIcon(label)
+        .disabled(!model.canStartOrResume)
+        .confirmationDialog("Choose how to answer", isPresented: $confirmsOutput, titleVisibility: .visible) {
+            Button("Interviewer Only · Start Automatic Answers") {
+                guard let routeToConfirm else { return }
+                model.startWithConfirmedInterviewerOutput(routeToConfirm)
+            }
+            Button("Mixed Audio · Start With Manual Answers", action: model.startOrResume)
+        } message: {
+            Text("Use automatic answers when \(model.questionSourceLabel) carries only the interviewer. This choice is saved for that source. For mixed audio, start with manual answers or assign speakers in Audio settings using a compatible provider.")
         }
     }
 }
