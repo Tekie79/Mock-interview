@@ -14,6 +14,7 @@ struct InterviewAnswerView: View {
     var compact = false
     @State var previewPresentation: InterviewPresentation?
     @AppStorage("interviewPresentation") private var presentation = InterviewPresentation.focus
+    @AppStorage("interviewAnswersOnly") private var answersOnly = false
 
     private var presentationSelection: Binding<InterviewPresentation> {
         Binding(get: { previewPresentation ?? presentation }, set: { selection in
@@ -32,16 +33,24 @@ struct InterviewAnswerView: View {
                 .frame(width: compact ? 124 : 164)
                 .accessibilityLabel("Answer view")
                 Spacer(minLength: Studio.small)
+                Toggle(isOn: $answersOnly) {
+                    if compact { Image(systemName: "eye.slash") }
+                    else { Label("Answers Only", systemImage: "eye.slash") }
+                }
+                .toggleStyle(.button)
+                .studioIcon("Answers Only")
+                .help(answersOnly ? "Show the interview question above each answer" : "Hide the interview question above each answer")
                 if (previewPresentation ?? presentation) == .focus { focusControls }
             }
             if model.active, model.sessionUsesChatGPT, let url = SessionProviders.usageURL {
                 Link("Manage ChatGPT plan usage", destination: url).font(.caption)
             }
             if (previewPresentation ?? presentation) == .chat {
-                InterviewChatView(model: model, fontSize: fontSize, compact: compact).id(model.startedAt)
+                InterviewChatView(model: model, fontSize: fontSize, compact: compact, answersOnly: answersOnly)
+                    .id(model.startedAt)
             } else if let answer = model.displayedAnswer {
                 ScrollView {
-                    AnswerEntry(answer: answer, number: nil, fontSize: fontSize, compact: compact, model: model)
+                    AnswerEntry(answer: answer, number: nil, fontSize: fontSize, compact: compact, answersOnly: answersOnly, model: model)
                         .frame(maxWidth: 690, alignment: .leading)
                         .padding(compact ? Studio.tight : Studio.page)
                         .frame(maxWidth: .infinity, alignment: .center)
@@ -74,6 +83,7 @@ private struct InterviewChatView: View {
     @Bindable var model: WorkspaceModel
     let fontSize: Double
     let compact: Bool
+    let answersOnly: Bool
     @State private var followsLatest = true
     @State private var pendingNew = 0
     @State private var scheduledFollow: Task<Void, Never>?
@@ -111,7 +121,7 @@ private struct InterviewChatView: View {
                     List {
                         ForEach(Array(answers.enumerated()), id: \.element.id) { index, answer in
                             AnswerEntry(answer: answer, number: index + 1, fontSize: fontSize,
-                                        compact: compact, model: model)
+                                        compact: compact, answersOnly: answersOnly, model: model)
                                 .equatable()
                                 .frame(maxWidth: 690, alignment: .leading)
                                 .padding(.horizontal, compact ? Studio.small : Studio.section)
@@ -179,26 +189,29 @@ private struct AnswerEntry: View, Equatable {
     let number: Int?
     let fontSize: Double
     let compact: Bool
+    let answersOnly: Bool
     let model: WorkspaceModel
 
     static func == (lhs: Self, rhs: Self) -> Bool {
         lhs.answer == rhs.answer && lhs.number == rhs.number && lhs.fontSize == rhs.fontSize
-            && lhs.compact == rhs.compact
+            && lhs.compact == rhs.compact && lhs.answersOnly == rhs.answersOnly
     }
 
     var body: some View {
         VStack(alignment: .leading, spacing: Studio.row) {
-            HStack(alignment: .firstTextBaseline, spacing: Studio.small) {
-                if let number { Text("Q\(number)").foregroundStyle(Studio.accent).fontWeight(.semibold) }
-                if let origin = answer.originLabel { Text(origin) }
-                Text(answer.format.rawValue)
-                Spacer(minLength: 0)
-                if let date = answer.createdAt, !compact { Text(date, style: .time) }
+            if !answersOnly {
+                HStack(alignment: .firstTextBaseline, spacing: Studio.small) {
+                    if let number { Text("Q\(number)").foregroundStyle(Studio.accent).fontWeight(.semibold) }
+                    if let origin = answer.originLabel { Text(origin) }
+                    Text(answer.format.rawValue)
+                    Spacer(minLength: 0)
+                    if let date = answer.createdAt, !compact { Text(date, style: .time) }
+                }
+                .font(.caption).foregroundStyle(Studio.secondary).accessibilityElement(children: .combine)
+                Text(answer.question.original)
+                    .font(compact ? .headline : .title3.weight(.semibold))
+                    .foregroundStyle(Studio.primary).textSelection(.enabled).accessibilityAddTraits(.isHeader)
             }
-            .font(.caption).foregroundStyle(Studio.secondary).accessibilityElement(children: .combine)
-            Text(answer.question.original)
-                .font(compact ? .headline : .title3.weight(.semibold))
-                .foregroundStyle(Studio.primary).textSelection(.enabled).accessibilityAddTraits(.isHeader)
             if answer.state == .invalidated {
                 Label(answer.failure ?? "Answer withdrawn", systemImage: "exclamationmark.circle")
                     .font(.callout).foregroundStyle(Studio.warning)

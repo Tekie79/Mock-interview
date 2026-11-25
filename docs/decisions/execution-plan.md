@@ -136,3 +136,9 @@ M12 verified the local Swift package and unsigned native Release and Debug build
 Reproduce the reported silent speaker route on the running unsigned archive. Compare actual submitted frames, transcript results and question dispositions. Retest physical speaker capture with local audio while Zoom is open. Keep mixed-source attribution fail closed. Make the active answer mode and transcript path visible, verify meter identities, run the regression suite and rebuild the unsigned app. macOS may request authorization when an unsigned build changes identity.
 
 The native follow-up verified physical speaker RMS, then six live Zoom transcript finals and two completed automatic answers after the owner confirmed the interviewer-only route. The 12.1 fixture displayed both Start options for an unconfirmed system output. Local portable build, 165 tests and unsigned universal Release packaging passed. Hosted evidence is linked from PR #4.
+
+### M12 Answers Only
+
+Add a shared, persistent presentation preference for Focus and Chat across the workspace and Compact. Hide the question header in answer-only mode and preserve the answer revision, actions and transcript. Verify native toggling and persistence with the synthetic fixture and rebuild the unsigned package.
+
+Build 12.2 passed 165 local tests and unsigned universal packaging. Native verification exercised Focus, Chat, Compact, restoration of question headers and persistence across relaunch.

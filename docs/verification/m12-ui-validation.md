@@ -56,3 +56,7 @@ On 2026-11-25, the original build captured seven seconds and finalized four segm
 The owner identified the live Zoom output as interviewer-only. After saving that attribution for MacBook Pro Speakers, the standard app submitted 16 seconds of PCM, finalized six transcript segments and completed two automatic answers using `gpt-live-transcribe`, GPT-6 Luna with no reasoning for classification, and GPT-6.2 Sol at low reasoning for generation. A third accepted question was still in progress at Stop. The session then reported zero connected sources. This short observation uses a live, owner-designated interviewer feed and carries no release endurance or independent latency qualification.
 
 Build 12.1 makes the automatic and manual choice visible when starting with an unconfirmed output. It shows listening and manual-answer status together for unresolved audio, exposes the transcript path and uses capture-source identities for meters. Automatic attribution remains scoped to the selected source. A different unconfirmed output still requires speaker assignment or a deliberate interviewer-only designation.
+
+### Answers Only
+
+Build 12.2 adds an optional Answers Only mode from the answer toolbar and General settings. Native fixture checks confirmed question headers disappear in Focus and Chat, answer content and Copy and Regenerate stay available, Compact and the workspace share the preference, and relaunch retains it.

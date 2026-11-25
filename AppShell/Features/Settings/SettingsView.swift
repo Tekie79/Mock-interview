@@ -76,6 +76,7 @@ struct ProviderSettingsView: View {
     @State private var category: Category? = .general
     @AppStorage("interviewAppearance") private var appearance = InterviewAppearance.system
     @AppStorage("interviewPresentation") private var presentation = InterviewPresentation.focus
+    @AppStorage("interviewAnswersOnly") private var answersOnly = false
     @AppStorage("compactOnTop") private var compactOnTop = false
     @AppStorage("fitLatestAnswer") private var fitLatest = false
     @AppStorage("interviewContextMode") private var contextMode = InterviewContextMode.adaptive
@@ -133,6 +134,7 @@ struct ProviderSettingsView: View {
                 Picker("Default answer view", selection: $presentation) {
                     ForEach(InterviewPresentation.allCases) { Text($0.rawValue).tag($0) }
                 }
+                Toggle("Answers Only", isOn: $answersOnly)
                 Slider(value: $fontSize, in: 12...30, step: 1) { Text("Answer text size") }
                 Toggle("Keep Compact on top", isOn: $compactOnTop)
                 Toggle("Fit latest answer in Chat", isOn: $fitLatest)
