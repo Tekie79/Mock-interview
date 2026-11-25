@@ -229,10 +229,12 @@ private struct SessionProviders {
         switch provider {
         case .openai:
             return OpenAIQuestionClassifier(apiKey: try key("openai"),
-                model: defaults.string(forKey: "questionModel") ?? "gpt-4.1-mini", guidance: instructions)
+                model: defaults.string(forKey: "questionModel") ?? "gpt-4.1-mini", guidance: instructions,
+                reasoning: reasoning(defaults, "openAIQuestionReasoning"))
         case .anthropic:
             return AnthropicQuestionClassifier(apiKey: try key("anthropic"),
-                model: defaults.string(forKey: "anthropicQuestionModel") ?? "claude-haiku-4-5", guidance: instructions)
+                model: defaults.string(forKey: "anthropicQuestionModel") ?? "claude-haiku-4-5", guidance: instructions,
+                reasoning: reasoning(defaults, "anthropicQuestionReasoning"))
         case .chatGPT:
             guard let chatGPT else { throw PlanAuthorizationFailure.unavailable }
             return try await chatGPT.classifier(model: defaults.string(forKey: "chatGPTQuestionModel") ?? "", guidance: instructions)
@@ -250,14 +252,20 @@ private struct SessionProviders {
         switch answer {
         case .openai:
             return OpenAITextGenerator(apiKey: try key("openai"),
-                                       model: defaults.string(forKey: "answerModel") ?? "gpt-4.1-mini")
+                model: defaults.string(forKey: "answerModel") ?? "gpt-4.1-mini",
+                reasoning: reasoning(defaults, "openAIAnswerReasoning"))
         case .anthropic:
             return AnthropicTextGenerator(apiKey: try key("anthropic"),
-                model: defaults.string(forKey: "anthropicAnswerModel") ?? "claude-haiku-4-5")
+                model: defaults.string(forKey: "anthropicAnswerModel") ?? "claude-haiku-4-5",
+                reasoning: reasoning(defaults, "anthropicAnswerReasoning"))
         case .chatGPT:
             guard let chatGPT else { throw PlanAuthorizationFailure.unavailable }
             return try await chatGPT.generator(model: defaults.string(forKey: "chatGPTAnswerModel") ?? "")
         }
+    }
+
+    private static func reasoning(_ defaults: UserDefaults, _ key: String) -> ReasoningEffort {
+        defaults.string(forKey: key).flatMap(ReasoningEffort.init(rawValue:)) ?? .modelDefault
     }
 
     static func testTextProvider(_ service: ProviderService, defaults: UserDefaults, question: String) async throws {
@@ -1255,6 +1263,10 @@ private struct ProviderSettingsView: View {
     @AppStorage("sttModel") private var sttModel = "gpt-live-transcribe"
     @AppStorage("questionModel") private var questionModel = "gpt-4.1-mini"
     @AppStorage("answerModel") private var answerModel = "gpt-4.1-mini"
+    @AppStorage("openAIQuestionReasoning") private var openAIQuestionReasoning = ReasoningEffort.modelDefault
+    @AppStorage("openAIAnswerReasoning") private var openAIAnswerReasoning = ReasoningEffort.modelDefault
+    @AppStorage("anthropicQuestionReasoning") private var anthropicQuestionReasoning = ReasoningEffort.modelDefault
+    @AppStorage("anthropicAnswerReasoning") private var anthropicAnswerReasoning = ReasoningEffort.modelDefault
     @AppStorage("sttLanguage") private var sttLanguage = ""
     @AppStorage("answerFormat") private var format = AnswerFormat.brief
     @AppStorage("answerInstructions") private var instructions = ""
@@ -1439,7 +1451,10 @@ private struct ProviderSettingsView: View {
             if classification == .chatGPT {
                 chatGPTModelPicker($chatGPTQuestionModel)
             } else {
-                TextField("Model", text: classification == .openai ? $questionModel : $anthropicQuestionModel)
+                TextModelSettings(provider: classification.provider, service: .classification,
+                    modelID: classification == .openai ? $questionModel : $anthropicQuestionModel,
+                    reasoning: classification == .openai ? $openAIQuestionReasoning : $anthropicQuestionReasoning)
+                    .id(classification)
             }
             Slider(value: $confidence, in: 0.5...1) { Text("Question confidence") }
             Slider(value: $questionWaitSeconds, in: 0...6, step: 0.5) {
@@ -1467,7 +1482,10 @@ private struct ProviderSettingsView: View {
             if answer == .chatGPT {
                 chatGPTModelPicker($chatGPTAnswerModel)
             } else {
-                TextField("Model", text: answer == .openai ? $answerModel : $anthropicAnswerModel)
+                TextModelSettings(provider: answer.provider, service: .answer,
+                    modelID: answer == .openai ? $answerModel : $anthropicAnswerModel,
+                    reasoning: answer == .openai ? $openAIAnswerReasoning : $anthropicAnswerReasoning)
+                    .id(answer)
             }
             Picker("Format", selection: $format) {
                 ForEach(AnswerFormat.allCases) { Text($0.rawValue).tag($0) }
@@ -1588,7 +1606,11 @@ private struct ProviderSettingsView: View {
                 : answer == .openai ? answerModel : anthropicAnswerModel,
             language: speech == .apple ? appleLocale : sttLanguage, appleRecognitionMode: appleMode,
             commit: speech == .eleven ? elevenCommit : speech == .deepgram ? .voiceActivity : .manual,
-            embeddingsModel: semanticRetrieval ? embeddingModel : nil)
+            embeddingsModel: semanticRetrieval ? embeddingModel : nil,
+            classificationReasoning: classification == .chatGPT ? nil : classification == .openai
+                ? openAIQuestionReasoning : anthropicQuestionReasoning,
+            answerReasoning: answer == .chatGPT ? nil : answer == .openai
+                ? openAIAnswerReasoning : anthropicAnswerReasoning)
     }
 
     private func apply(_ preset: ProviderPreset) {
@@ -1611,13 +1633,21 @@ private struct ProviderSettingsView: View {
         }
         if speech != .apple { sttLanguage = preset.language }
         switch classification {
-        case .openai: questionModel = preset.classificationModel
-        case .anthropic: anthropicQuestionModel = preset.classificationModel
+        case .openai:
+            questionModel = preset.classificationModel
+            openAIQuestionReasoning = preset.classificationReasoning ?? .modelDefault
+        case .anthropic:
+            anthropicQuestionModel = preset.classificationModel
+            anthropicQuestionReasoning = preset.classificationReasoning ?? .modelDefault
         case .chatGPT: chatGPTQuestionModel = preset.classificationModel
         }
         switch answer {
-        case .openai: answerModel = preset.answerModel
-        case .anthropic: anthropicAnswerModel = preset.answerModel
+        case .openai:
+            answerModel = preset.answerModel
+            openAIAnswerReasoning = preset.answerReasoning ?? .modelDefault
+        case .anthropic:
+            anthropicAnswerModel = preset.answerModel
+            anthropicAnswerReasoning = preset.answerReasoning ?? .modelDefault
         case .chatGPT: chatGPTAnswerModel = preset.answerModel
         }
         semanticRetrieval = preset.embeddingsModel != nil
@@ -1626,6 +1656,51 @@ private struct ProviderSettingsView: View {
 
     private func persistPresets() {
         if let encoded = try? JSONEncoder().encode(presets) { storedPresets = encoded }
+    }
+}
+
+private struct TextModelSettings: View {
+    let provider: ProviderID
+    let service: ProviderService
+    @Binding var modelID: String
+    @Binding var reasoning: ReasoningEffort
+    @State private var customDraft: String?
+
+    var body: some View {
+        let models = ProviderCapabilities.textModels(provider)
+        let custom = customDraft == modelID || !models.contains(modelID)
+        let efforts = ProviderCapabilities.reasoningEfforts(provider, model: modelID, service: service)
+        Picker("Model", selection: Binding(
+            get: { custom ? "" : modelID },
+            set: { selection in
+                customDraft = selection.isEmpty ? modelID : nil
+                if !selection.isEmpty { modelID = selection }
+            }
+        )) {
+            ForEach(models, id: \.self) { Text($0).tag($0) }
+            Text("Custom model ID…").tag("")
+        }
+        .pickerStyle(.menu)
+        if custom {
+            TextField("Custom model ID", text: Binding(
+                get: { modelID },
+                set: { value in
+                    modelID = value
+                    customDraft = value
+                }
+            ))
+        }
+
+        Picker("Reasoning", selection: Binding(
+            get: { efforts.contains(reasoning) ? reasoning : .modelDefault },
+            set: { reasoning = $0 }
+        )) {
+            Text(efforts.isEmpty ? "Unavailable for this model" : ReasoningEffort.modelDefault.label)
+                .tag(ReasoningEffort.modelDefault)
+            ForEach(efforts, id: \.self) { Text($0.label).tag($0) }
+        }
+        .pickerStyle(.menu)
+        .disabled(efforts.isEmpty)
     }
 }
 

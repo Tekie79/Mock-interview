@@ -13,11 +13,14 @@ public struct ProviderPreset: Codable, Identifiable, Equatable, Sendable {
     public var appleRecognitionMode: AppleRecognitionMode
     public var commit: TranscriptionCommitStrategy
     public var embeddingsModel: String?
+    public var classificationReasoning: ReasoningEffort?
+    public var answerReasoning: ReasoningEffort?
 
     public init(id: UUID = UUID(), name: String, transcription: ProviderID, transcriptionModel: String,
                 classifier: ProviderID, classificationModel: String, answer: ProviderID, answerModel: String,
                 language: String = "", appleRecognitionMode: AppleRecognitionMode = .onDevice,
-                commit: TranscriptionCommitStrategy = .manual, embeddingsModel: String? = nil) {
+                commit: TranscriptionCommitStrategy = .manual, embeddingsModel: String? = nil,
+                classificationReasoning: ReasoningEffort? = nil, answerReasoning: ReasoningEffort? = nil) {
         self.id = id
         self.name = name
         self.transcription = transcription
@@ -30,6 +33,8 @@ public struct ProviderPreset: Codable, Identifiable, Equatable, Sendable {
         self.appleRecognitionMode = appleRecognitionMode
         self.commit = commit
         self.embeddingsModel = embeddingsModel
+        self.classificationReasoning = classificationReasoning
+        self.answerReasoning = answerReasoning
     }
 
     public var unavailableReason: String? {

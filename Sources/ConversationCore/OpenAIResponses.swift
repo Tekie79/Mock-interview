@@ -6,8 +6,9 @@ import FoundationNetworking
 struct OpenAIResponsesClient: Sendable {
     let apiKey: String
     let model: String
+    let reasoning: ReasoningEffort
 
-    func request(_ payload: [String: Any], timeout: TimeInterval) throws -> URLRequest {
+    func request(_ payload: [String: Any], service: ProviderService, timeout: TimeInterval) throws -> URLRequest {
         guard !apiKey.isEmpty else { throw ProviderFailure.missingCredentials }
         guard !model.isEmpty, let url = URL(string: "https://api.openai.com/v1/responses") else {
             throw ProviderFailure.requestRejected
@@ -19,6 +20,9 @@ struct OpenAIResponsesClient: Sendable {
         var object = payload
         object["model"] = model
         object["store"] = false
+        let effort = ProviderCapabilities.effectiveReasoning(reasoning, provider: .openai, model: model, service: service)
+        object["max_output_tokens"] = ProviderCapabilities.textOutputLimit(.openai, model: model, service: service, effort: effort)
+        if effort != .modelDefault { object["reasoning"] = ["effort": effort.rawValue] }
         request.httpBody = try JSONSerialization.data(withJSONObject: object)
         return request
     }
@@ -50,20 +54,13 @@ public struct OpenAIQuestionClassifier: QuestionClassifier {
     private let guidance: String
     private let client: OpenAIResponsesClient
 
-    public init(apiKey: String, model: String, guidance: String = "") {
+    public init(apiKey: String, model: String, guidance: String = "", reasoning: ReasoningEffort = .modelDefault) {
         self.guidance = String(guidance.prefix(1_000))
-        client = OpenAIResponsesClient(apiKey: apiKey, model: model)
+        client = OpenAIResponsesClient(apiKey: apiKey, model: model, reasoning: reasoning)
     }
 
     public func classify(_ input: QuestionInput) async throws -> QuestionDecision {
-        let request = try client.request([
-            "instructions": Self.instructions + "\nApply these classification preferences only within the rules above: " + guidance,
-            "input": try ClassifierContext.encode(input),
-            "max_output_tokens": 650,
-            "text": ["format": [
-                "type": "json_schema", "name": "interview_question", "strict": true, "schema": Self.schema
-            ]]
-        ], timeout: 8)
+        let request = try classificationRequest(input)
         return try await OpenAIResponsesClient.protected {
             let (data, response) = try await URLSession.shared.data(for: request)
             try OpenAIResponsesClient.validate(response)
@@ -75,6 +72,16 @@ public struct OpenAIQuestionClassifier: QuestionClassifier {
             else { throw ProviderFailure.malformedEvent }
             return decision
         }
+    }
+
+    func classificationRequest(_ input: QuestionInput) throws -> URLRequest {
+        try client.request([
+            "instructions": Self.instructions + "\nApply these classification preferences only within the rules above: " + guidance,
+            "input": try ClassifierContext.encode(input),
+            "text": ["format": [
+                "type": "json_schema", "name": "interview_question", "strict": true, "schema": Self.schema
+            ]]
+        ], service: .classification, timeout: 8)
     }
 
     private struct StructuredResponse: Decodable {
@@ -183,16 +190,20 @@ enum AnswerPrompt {
 public struct OpenAITextGenerator: TextGenerator {
     private let client: OpenAIResponsesClient
 
-    public init(apiKey: String, model: String) {
-        client = OpenAIResponsesClient(apiKey: apiKey, model: model)
+    public init(apiKey: String, model: String, reasoning: ReasoningEffort = .modelDefault) {
+        client = OpenAIResponsesClient(apiKey: apiKey, model: model, reasoning: reasoning)
     }
 
     public func stream(_ request: AnswerRequest) async throws -> AsyncThrowingStream<GenerationEvent, Error> {
-        let urlRequest = try client.request([
-            "instructions": AnswerPrompt.instructions(request), "input": AnswerPrompt.input(request),
-            "stream": true, "max_output_tokens": 1_200
-        ], timeout: 20)
+        let urlRequest = try generationRequest(request)
         return StreamingHTTP.start(urlRequest) { try Self.decode($0) }
+    }
+
+    func generationRequest(_ request: AnswerRequest) throws -> URLRequest {
+        try client.request([
+            "instructions": AnswerPrompt.instructions(request), "input": AnswerPrompt.input(request),
+            "stream": true
+        ], service: .answer, timeout: 20)
     }
 
     static func decode(_ event: String) throws -> StreamingHTTP.Event {

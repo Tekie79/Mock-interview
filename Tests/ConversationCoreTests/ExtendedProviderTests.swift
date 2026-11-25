@@ -6,6 +6,53 @@ import XCTest
 @testable import ConversationCore
 
 final class ExtendedProviderTests: XCTestCase {
+    private func body(_ request: URLRequest) throws -> [String: Any] {
+        try XCTUnwrap(JSONSerialization.jsonObject(with: XCTUnwrap(request.httpBody)) as? [String: Any])
+    }
+
+    private func sampleQuestion() -> QuestionInput {
+        .init(turn: .init(source: .init(id: "fixture", role: .interviewer), epoch: UUID(), itemID: "q",
+                          text: "How would you handle retries?", state: .final), previousQuestions: [])
+    }
+
+    func testOpenAITextRequestsSendOnlySupportedReasoning() throws {
+        let classifier = OpenAIQuestionClassifier(apiKey: "synthetic", model: "gpt-6-luna", reasoning: .none)
+        let classification = try body(classifier.classificationRequest(sampleQuestion()))
+        XCTAssertEqual(classification["reasoning"] as? [String: String], ["effort": "none"])
+        XCTAssertEqual(classification["max_output_tokens"] as? Int, 650)
+        XCTAssertNotNil((classification["text"] as? [String: Any])?["format"])
+        let request = AnswerRequest(question: "Explain retries.", instructions: "", evidence: [])
+        let generator = OpenAITextGenerator(apiKey: "synthetic", model: "gpt-6.2-sol", reasoning: .medium)
+        let answer = try body(generator.generationRequest(request))
+        XCTAssertEqual(answer["reasoning"] as? [String: String], ["effort": "medium"])
+        XCTAssertEqual(answer["max_output_tokens"] as? Int, 4_096)
+        XCTAssertEqual(answer["stream"] as? Bool, true)
+        XCTAssertEqual(answer["store"] as? Bool, false)
+        let legacy = OpenAITextGenerator(apiKey: "synthetic", model: "gpt-4.1-mini", reasoning: .high)
+        let legacyBody = try body(legacy.generationRequest(request))
+        XCTAssertNil(legacyBody["reasoning"])
+        XCTAssertEqual(legacyBody["max_output_tokens"] as? Int, 1_200)
+    }
+
+    func testAnthropicReasoningPreservesSchemaAndHidesThinking() throws {
+        let classifier = AnthropicQuestionClassifier(apiKey: "synthetic", model: "claude-sonnet-4-6", reasoning: .low)
+        let classification = try body(classifier.classificationRequest(sampleQuestion()))
+        let output = try XCTUnwrap(classification["output_config"] as? [String: Any])
+        XCTAssertEqual(output["effort"] as? String, "low")
+        XCTAssertNotNil(output["format"])
+        XCTAssertEqual(classification["thinking"] as? [String: String], ["type": "adaptive", "display": "omitted"])
+        XCTAssertEqual(classification["max_tokens"] as? Int, 2_048)
+        let request = AnswerRequest(question: "Explain retries.", instructions: "", evidence: [])
+        let generator = AnthropicTextGenerator(apiKey: "synthetic", model: "claude-haiku-5-5", reasoning: .xhigh)
+        let answer = try body(generator.generationRequest(request))
+        XCTAssertEqual((answer["output_config"] as? [String: String])?["effort"], "xhigh")
+        XCTAssertEqual(answer["max_tokens"] as? Int, 16_384)
+        let legacy = AnthropicTextGenerator(apiKey: "synthetic", model: "claude-haiku-4-5", reasoning: .high)
+        let legacyBody = try body(legacy.generationRequest(request))
+        XCTAssertNil(legacyBody["thinking"])
+        XCTAssertNil(legacyBody["output_config"])
+    }
+
     func testDeepgramCombinesFinalSegmentsUntilEndpoint() throws {
         let source = CaptureSource(id: "remote", role: .interviewer)
         let epoch = UUID()
@@ -68,6 +115,9 @@ final class ExtendedProviderTests: XCTestCase {
     func testAnthropicDecodesTextStopAndReportedUsage() throws {
         let state = AnthropicStreamDecoder()
         _ = try state.receive(#"{"type":"message_start","message":{"usage":{"input_tokens":25,"cache_creation_input_tokens":7,"cache_read_input_tokens":11,"output_tokens":1}}}"#)
+        guard case .ignore = try state.receive(#"{"type":"content_block_delta","delta":{"type":"thinking_delta","thinking":"Synthetic private reasoning."}}"#) else {
+            return XCTFail("Expected thinking to stay outside the answer")
+        }
         if case .text(let delta) = try state.receive(#"{"type":"content_block_delta","delta":{"type":"text_delta","text":"Example."}}"#) {
             XCTAssertEqual(delta, "Example.")
         } else {

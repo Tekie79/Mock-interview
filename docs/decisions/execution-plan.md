@@ -58,3 +58,12 @@ The owner reported that Talking points returned advice about what to mention ins
 - Verify automatic retrieval with a synthetic résumé, a competing job description, and a classifier that drops an acronym. Check shared generation inputs and instructions with relevant evidence, unrelated evidence and no profile. Run deterministic build and tests, unsigned packaging, and hosted CI. Live model adherence is distinct from the prompt and retrieval checks.
 
 Local portable builds passed with 117 Linux Swift 6.2.3 and 127 Apple Silicon macOS XCTest cases, all passing. Unsigned arm64/x86_64 packaging passed with one App Intents metadata warning. Synthetic checks verify that the résumé reaches the answer request, job requirements and excluded claims stay out of the evidence, and a trusted follow-up retains access to the applicable facts. No personal profile or live provider was used.
+
+## AI model and reasoning settings
+
+Add provider-specific model and reasoning dropdowns to Question classification and Answer generation. Keep existing model settings and custom IDs. Store the choices independently by provider and service, and include them in saved presets. Keep the account-specific ChatGPT catalog and its eligibility gate.
+
+- Centralize supported effort levels in the text model catalog. Keep live classification to low-effort choices within its current deadline. Use documented request fields and allow token headroom for reasoning while retaining the existing time limits.
+- Exercise provider payloads and older presets with offline tests, then build and package the native app and run hosted portable and macOS checks. Higher effort can increase answer time and token usage. The connection test checks model access under the user's account.
+
+Local Swift builds and tests passed with 120 Linux Swift 6.2.3 and 130 Apple Silicon macOS XCTest cases. Unsigned arm64/x86_64 packaging passed with one App Intents metadata warning. The isolated native form verified both model menus, independent reasoning choices, the disabled state for GPT-4.1 mini, and custom model entry. Fixtures checked provider request fields and legacy preset decoding. No live provider credentials were used.

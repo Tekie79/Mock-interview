@@ -143,3 +143,5 @@ See `docs/verification/baseline.md` for the initial build/test run. No native Ma
 - Profile attachments and directly added experience are ready for answers without a per-fact review step. The one-time profile database upgrade enables legacy pending items and preserves exclusions. The editor supports optional corrections and a **Use in answers** toggle.
 
 - Experience answers use specific, directly relevant profile facts or a labeled practice scenario. Talking points use words the candidate can say aloud. Retrieval includes the original wording and a trusted prior question when referenced. The workspace remembers the selected profile for the next session.
+
+- Question classification and Answer generation have independent model and reasoning menus for OpenAI and Anthropic. Custom model IDs and existing presets are retained. Reasoning settings are saved with provider presets, and account-specific model access is checked through the existing connection tests.

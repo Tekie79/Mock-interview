@@ -58,10 +58,22 @@ extension CapabilityTests {
 }
 
 extension CapabilityTests {
+    func testTextModelChoicesRespectProviderAndService() {
+        XCTAssertTrue(ProviderCapabilities.textModels(.openai).contains("gpt-6-luna"))
+        XCTAssertTrue(ProviderCapabilities.textModels(.anthropic).contains("claude-sonnet-4-6"))
+        XCTAssertTrue(ProviderCapabilities.textModels(.chatGPTSubscription).isEmpty)
+        XCTAssertEqual(ProviderCapabilities.reasoningEfforts(.openai, model: "gpt-6-luna", service: .classification), [.none, .low])
+        XCTAssertFalse(ProviderCapabilities.reasoningEfforts(.openai, model: "gpt-6.2-sol", service: .answer).contains(.none))
+        XCTAssertFalse(ProviderCapabilities.reasoningEfforts(.anthropic, model: "claude-sonnet-4-6", service: .answer).contains(.xhigh))
+        XCTAssertEqual(ProviderCapabilities.effectiveReasoning(.low, provider: .openai, model: "custom-snapshot", service: .answer), .modelDefault)
+    }
+
     func testPresetsRoundTripAndUnsupportedServicesNeverSubstituteOtherProviders() throws {
         let defaults = ProviderPreset.defaults()
         let roundTrip = try JSONDecoder().decode([ProviderPreset].self, from: JSONEncoder().encode(defaults))
         XCTAssertEqual(roundTrip, defaults)
+        XCTAssertNil(roundTrip.first?.classificationReasoning)
+        XCTAssertNil(roundTrip.first?.answerReasoning)
         let blocked = try XCTUnwrap(roundTrip.first)
         XCTAssertEqual(blocked.classifier, .chatGPTSubscription)
         XCTAssertNotNil(blocked.unavailableReason)
@@ -74,6 +86,14 @@ extension CapabilityTests {
         var invalid = duplicate
         invalid.answer = .deepgram
         XCTAssertNotNil(invalid.unavailableReason)
+
+        var reasoning = duplicate
+        reasoning.classificationModel = "gpt-6-luna"
+        reasoning.classificationReasoning = ReasoningEffort.none
+        reasoning.answerModel = "gpt-6.2-sol"
+        reasoning.answerReasoning = .high
+        let restored = try JSONDecoder().decode(ProviderPreset.self, from: JSONEncoder().encode(reasoning))
+        XCTAssertEqual(restored, reasoning)
     }
 }
 
