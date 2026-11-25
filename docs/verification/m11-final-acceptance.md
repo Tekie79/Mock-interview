@@ -4,14 +4,14 @@
 
 ## Release candidate after f726664
 
-The source revision, regression counts and artifact checksum are recorded on [draft PR #3](https://github.com/Tekie79/Mock-interview/pull/3). The physical host is the Mac17,8 Apple M5 Pro on macOS 26.3.2 (25D2150), with Xcode 26.6 (17F113) and SDK 26.5. The unsigned bundle is version 1.0.0 (11.1), universal arm64/x86_64, with a 14.2 deployment target.
+The source revision, hosted regression counts and artifact checksum are recorded on [draft PR #3](https://github.com/Tekie79/Mock-interview/pull/3). The physical host is the Mac17,8 Apple M5 Pro on macOS 26.3.2 (25D2150), with Xcode 26.6 (17F113) and SDK 26.5. The local regression suite passed 153 tests. The unsigned bundle is version 1.0.0 (11.1), universal arm64/x86_64, with a 14.2 deployment target.
 
 | Acceptance cases | RC evidence and disposition |
 |---|---|
 | AT-01 | Historical live process smoke. Current selected-source output start hit a pending system audio authorization. Native repeat remains open. |
 | AT-02, AT-18 | Deterministic separation, unknown-role rejection, mapping changes and late provenance invalidation passed. Independent microphone, overlap, and mixed native role assignment remain open. |
 | AT-03, AT-04, AT-06, AT-09 | Deterministic requests, logistics, follow-up and intentional-repeat regressions passed. The frozen one-second replay recovered 40/40 labeled requests with a fixture classifier. Current live accuracy remains unmeasured. |
-| AT-05, AT-07 | Clock-controlled pause, overlapping and delayed finals, unresolved partials, multipart and replay drain regressions passed. No RC visible answer completeness or premature-rate measurement. |
+| AT-05, AT-07 | Clock-controlled pause, overlapping and delayed finals, unresolved partials, multipart and replay drain regressions passed. A human Q&A audio probe exercised 0, 0.5, 1 and 2 seconds with controlled finals. No RC visible answer completeness or premature-rate measurement. |
 | AT-08, AT-10, AT-17 | Deterministic transport ordering, deduplication, backpressure, cancellation, concurrent capture/generation, replay and diagnostics passed. |
 | AT-11 | PDFKit, wrapped Markdown, profile switching, pending/excluded evidence, ownership and untrusted prompt boundaries exercised in tests. The requested word limit is advisory. Live conflict, exclusions and curated unsupported-claim rate remain open. |
 | AT-12, AT-13 | Deterministic late-event, timeout and fresh-epoch recovery passed. A sample shows the HAL startup wait on a worker. Full physical startup/Stop, teardown and live network interruption remain open. |

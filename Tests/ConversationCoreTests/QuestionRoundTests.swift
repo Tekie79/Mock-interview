@@ -201,6 +201,29 @@ final class QuestionRoundTests: XCTestCase {
         await fixture.session.stop()
     }
 
+    func testContinuousSpeechAdmitsLongContinuationButCannotExtendPastTheHardLimit() async throws {
+        let fixture = RoundFixture(questionWait: .seconds(1))
+        try await fixture.start()
+        try await fixture.send("Describe the deployment.", id: "initial")
+        for index in 0..<15 {
+            fixture.clock.advance(.milliseconds(500))
+            let sequence = Int64(index * 2_400)
+            await fixture.audio.send(.init(source: fixture.source, sampleRate: 24_000, startSample: sequence,
+                                           pcm: Data(repeating: 64, count: 4_800), capturedAt: fixture.clock.now()))
+            try await eventually { await fixture.stt.appendedFrames == index + 1 }
+            if index == 9 {
+                try await fixture.send("What did you verify before rolling it out?", id: "continuation")
+            }
+        }
+        let early = await fixture.generator.submitted
+        XCTAssertTrue(early.isEmpty)
+        fixture.clock.advance(.milliseconds(500))
+        try await eventually { await fixture.generator.submitted.count == 1 }
+        let requests = await fixture.generator.submitted
+        XCTAssertEqual(requests[0].questionParts.count, 2)
+        await fixture.session.stop()
+    }
+
     func testLateFinalAndTwoQuestionsProduceOneRequestWithBothParts() async throws {
         let fixture = RoundFixture()
         try await fixture.start()

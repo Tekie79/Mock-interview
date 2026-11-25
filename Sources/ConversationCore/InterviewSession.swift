@@ -740,7 +740,9 @@ public actor InterviewSession {
     }
 
     private func roundDeadline(_ round: QuestionRound, key: RoundKey) -> ContinuousClock.Instant {
-        let limit = round.start.advanced(by: min(.seconds(8), questionWait + .seconds(3)))
+        // A continuation can start within the quiet interval and speak for several seconds
+        // before its final. Bound the total packet age independently of that interval.
+        let limit = round.start.advanced(by: .seconds(8))
         // Raw speech activity has no speaker identity in a mixed stream.
         let speech = key.speaker == nil ? questionSpeechAt[key.sourceID] : nil
         let lastActivity = max(round.lastEndpoint, speech ?? round.lastEndpoint)
