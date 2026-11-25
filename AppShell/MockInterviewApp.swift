@@ -509,6 +509,7 @@ final class WorkspaceModel: ObservableObject {
                                                completionGrace: .seconds(grace)),
                     generator: providers.generator,
                     format: format, preferences: preferences, interviewContext: context, answerWordLimit: answerWords,
+                    questionWait: Self.questionWaitDuration(options.object(forKey: "questionWaitSeconds") as? Double ?? 2),
                     classificationBudget: classificationBudget, answerBudget: answerBudget,
                     generationTimeout: .seconds(timeout), classificationEvidence: { question in
                         guard let store, let profile else { return [] }
@@ -634,6 +635,14 @@ final class WorkspaceModel: ObservableObject {
 
     func responseVisible(_ revision: UUID) {
         Task { await session?.responseVisible(revision) }
+    }
+
+    func updateQuestionWait(_ seconds: Double) {
+        Task { await session?.setQuestionWait(Self.questionWaitDuration(seconds)) }
+    }
+
+    private static func questionWaitDuration(_ seconds: Double) -> Duration {
+        .seconds(seconds.isFinite ? min(6, max(0, seconds)) : 2)
     }
 
     func cancelAnswer() {
@@ -1047,6 +1056,9 @@ private struct AnswerPanel: View {
                     Link("Manage usage", destination: url)
                 }.font(.caption)
             }
+            if model.snapshot?.waitingForQuestionEnd == true {
+                Text("Waiting for a pause…").font(.caption).foregroundStyle(.secondary)
+            }
             if let answer = model.displayedAnswer {
                 ScrollView {
                     VStack(alignment: .leading, spacing: 14) {
@@ -1257,6 +1269,7 @@ private struct ProviderSettingsView: View {
     @AppStorage("answerContextBudget") private var answerBudget = 3_000
     @AppStorage("answerContextTurns") private var answerTurns = 12
     @AppStorage("completionGrace") private var completionGrace = 3.0
+    @AppStorage("questionWaitSeconds") private var questionWaitSeconds = 2.0
     @AppStorage("generationTimeout") private var generationTimeout = 45.0
     @AppStorage("answerLanguage") private var answerLanguage = ""
     @AppStorage("answerWordLimit") private var answerWordLimit = 0
@@ -1426,6 +1439,12 @@ private struct ProviderSettingsView: View {
                 TextField("Model", text: classification == .openai ? $questionModel : $anthropicQuestionModel)
             }
             Slider(value: $confidence, in: 0.5...1) { Text("Question confidence") }
+            Slider(value: $questionWaitSeconds, in: 0...6, step: 0.5) {
+                Text("Wait for silence")
+            }
+            .onChange(of: questionWaitSeconds) { _, seconds in model.updateQuestionWait(seconds) }
+            Text("\(questionWaitSeconds.formatted(.number.precision(.fractionLength(0...1)))) seconds. Questions within this window are answered together. Use 0 to answer finalized questions immediately.")
+                .font(.caption).foregroundStyle(.secondary)
             Slider(value: $completionGrace, in: 0.5...6, step: 0.5) { Text("Continuation window") }
             Stepper("Context turns: \(classifierTurns)", value: $classifierTurns, in: 0...32)
             Stepper("Context budget: \(classifierBudget)", value: $classifierBudget, in: 500...8_000, step: 250)

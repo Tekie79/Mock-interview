@@ -21,3 +21,13 @@ The owner requested an explicit mode for a Mac microphone that hears the candida
 - Exercise mixed, unknown, candidate, interviewer, duplicate, reset, and merge cases with synthetic events. Run portable build/test and unsigned macOS packaging. Keep real-room accuracy and live account qualification separate from deterministic evidence.
 
 The local Swift build and 117 XCTest cases passed. The unsigned arm64/x86_64 app built with Xcode 26.6. The native walkthrough toggled the room route, verified the microphone picker and provider guidance, and restored the previous Zoom source. The test left capture idle. These checks use synthetic speaker events. Live provider behavior and physical room attribution still need qualification.
+
+## Adjustable quiet window for question rounds
+
+The owner reported that short pauses triggered answers early and rapid questions superseded one another. Add a session-level quiet window that collects successive finalized turns from the same interviewer and capture epoch before classification. Start the native default at two seconds and let the user adjust it during a session. Keep the provider's audio commit and the detector's incomplete-phrase timeout independent. Voice activity and new partials extend waiting. Partial text never enters an automatic request.
+
+- Bound staged rounds and retain transcripts when staging overflows. Preserve source roles, transcript identities, late-attribution revocation, manual generation and lifecycle cancellation.
+- Classify each collected round once. Preserve every accepted request in order in the generated text. Treat a question after an expired quiet window as a separate round under the existing supersession rule.
+- Add clock-controlled tests for speech restarting, grouped/staggered finals, unresolved partials and cancellation. Run Swift build/test, unsigned packaging and the hosted CI matrix. This deliberately adds question latency and needs measured live acceptance.
+
+Local Swift build and tests passed with 121 XCTest cases on the Apple Silicon Mac and 111 in the pinned Linux Swift container. The native unsigned package built and launched. The Settings walkthrough changed **Wait for silence** from 2 to 2.5 seconds, confirmed the displayed value, and restored 2 seconds. Clock-controlled cases cover resumed audio, two finalized questions, delayed finals, missing finals, pause, and a live timing change. No live capture or provider credentials were used for this check.

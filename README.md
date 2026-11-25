@@ -15,6 +15,8 @@ Requires Apple Silicon, macOS 14.2 or later, and Xcode with a macOS SDK that sup
 
 For an interview running on a second device, turn on **Interview on another device**, choose the Mac’s **Room microphone**, and play the call through the other device’s speakers. Select ElevenLabs Scribe v3 Live or a supported Deepgram Nova model for transcription. After **Start**, match the detected speakers in **Transcript** and assign **Interviewer** and **Candidate**. Confirm labels again after a reconnect or speaker merge.
 
+In **Settings → Question classification**, adjust **Wait for silence** to hold short pauses open. It starts at two seconds and can be changed during a session. Finalized pieces from the same speaker within the quiet window are answered together. Choose **0** for immediate handling of finalized questions.
+
 The app accepts raw mono signed PCM16 little-endian replay at 24 kHz. Live replay uses the selected transcription provider. The deterministic developer replay test uses synthetic audio and test transports.
 
 ## Develop

@@ -85,16 +85,20 @@ public actor QuestionDetector {
     public func receive(_ event: TranscriptEvent, conversation: [ConversationTurn] = [],
                         approvedEvidence: [String] = [], interviewContext: [String] = [],
                         budget: ContextBudget = .init()) async throws -> AcceptedQuestion? {
-        try await detect(event, conversation: conversation, approvedEvidence: approvedEvidence,
+        try await detect([event], conversation: conversation, approvedEvidence: approvedEvidence,
                          interviewContext: interviewContext, budget: budget)?.question
     }
 
-    func detect(_ event: TranscriptEvent, conversation: [ConversationTurn], approvedEvidence: [String],
+    func detect(_ segments: [TranscriptEvent], conversation: [ConversationTurn], approvedEvidence: [String],
                 interviewContext: [String], budget: ContextBudget, trustedQuestionIDs: Set<UUID>? = nil) async throws -> Detection? {
-        guard event.state == .final,
+        guard let event = segments.last, segments.count <= 64,
               var channel = channels[event.source.id], channel.source == event.source,
-              channel.epoch == event.epoch, channel.finalizedIDs.count < 16_384,
-              channel.finalizedIDs.insert(event.itemID).inserted else { return nil }
+              channel.epoch == event.epoch, channel.finalizedIDs.count + segments.count <= 16_384,
+              segments.allSatisfy({ $0.state == .final && $0.source == event.source && $0.epoch == event.epoch
+                  && $0.speaker == event.speaker }) else { return nil }
+        let itemIDs = Set(segments.map(\.itemID))
+        guard itemIDs.count == segments.count, channel.finalizedIDs.isDisjoint(with: itemIDs) else { return nil }
+        channel.finalizedIDs.formUnion(itemIDs)
         channels[event.source.id] = channel
         guard AutomaticQuestionRoleGate.permitsClassification(for: Self.role(of: event, channel: channel)) else {
             channels[event.source.id]?.pending = nil
@@ -102,11 +106,10 @@ public actor QuestionDetector {
         }
 
         let arrived = now()
-        var transcriptIDs = [event.transcriptID]
-        var text = event.text.trimmingCharacters(in: .whitespacesAndNewlines)
-        let folded = text.lowercased().replacingOccurrences(of: "’", with: "'")
-            .trimmingCharacters(in: .punctuationCharacters)
-        if text.isEmpty || Self.obviousNonQuestions.contains(folded) || Self.isOnlyCallLogistics(folded) {
+        let substantiveSegments = segments.filter { !Self.isObviousNonQuestion($0.text) }
+        var transcriptIDs = substantiveSegments.map(\.transcriptID)
+        var text = substantiveSegments.map { $0.text.trimmingCharacters(in: .whitespacesAndNewlines) }.joined(separator: "\n")
+        if text.isEmpty {
             channels[event.source.id] = channel
             return nil
         }
@@ -118,7 +121,7 @@ public actor QuestionDetector {
         channel.pending = nil
         channels[event.source.id] = channel
         guard text.utf8.count <= 16_000, transcriptIDs.count <= 64 else { return nil }
-        let lastWord = folded.split(whereSeparator: { !$0.isLetter }).last
+        let lastWord = text.lowercased().split(whereSeparator: { !$0.isLetter }).last
         if text.hasSuffix("...") || text.hasSuffix("…") || ["and", "or", "then", "because"].contains(lastWord.map(String.init) ?? "") {
             channels[event.source.id]?.pending = (text, arrived, event.speaker, transcriptIDs)
             return nil
@@ -185,5 +188,11 @@ public actor QuestionDetector {
         return sentences.count > 1 && sentences.allSatisfy {
             obviousNonQuestions.contains($0.trimmingCharacters(in: .whitespacesAndNewlines))
         }
+    }
+
+    private static func isObviousNonQuestion(_ text: String) -> Bool {
+        let folded = text.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
+            .replacingOccurrences(of: "’", with: "'").trimmingCharacters(in: .punctuationCharacters)
+        return folded.isEmpty || obviousNonQuestions.contains(folded) || isOnlyCallLogistics(folded)
     }
 }

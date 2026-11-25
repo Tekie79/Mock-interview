@@ -135,3 +135,5 @@ See `docs/verification/baseline.md` for the initial build/test run. No native Ma
 - The owner-requested answer layouts now use the selected format to render short paragraphs, Talking points, STAR headings, and technical sections and code. The native Word limit accepts exact counts and the generation regression verifies that a custom limit replaces the format default. [M11 native verification](verification/m11-final-acceptance.md)
 
 - **Interview on another device** exposes the shared-microphone workflow with confirmed speaker roles. The ElevenLabs Scribe v3 Live path pairs indexed speech commits and speaker labels. The Deepgram Nova path remains available. Physical room tests and live shared-mic account qualification remain open.
+
+- **Wait for silence** collects finalized pieces into question rounds, with live adjustment from 0 to 6 seconds and a two-second default. Resumed speech extends waiting. Each classified round generates one answer containing its approved requests in order. Live end-to-end latency and complex room pauses remain to be measured.

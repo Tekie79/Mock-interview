@@ -8,6 +8,7 @@ public enum ChannelEvent: Sendable {
     case dropped(source: CaptureSource, chunks: Int)
     case sentAudio(source: CaptureSource, samples: Int)
     case candidateSpeech(source: CaptureSource, epoch: UUID, start: ContinuousClock.Instant, end: ContinuousClock.Instant)
+    case questionSpeech(source: CaptureSource, epoch: UUID)
 }
 
 enum TranscriptionRecoveryFailure: Error {
@@ -104,6 +105,7 @@ public struct TranscriptionChannel: Sendable {
                 var latest: AudioFrame?
                 var latestVoicedAt: ContinuousClock.Instant?
                 var lastSpeechReport: ContinuousClock.Instant?
+                var lastQuestionReport: ContinuousClock.Instant?
                 var sampleUsage = 0
 
                 func send(_ frame: AudioFrame, voiced: Bool = false) async throws {
@@ -132,6 +134,11 @@ public struct TranscriptionChannel: Sendable {
                     let voiced = activity.level >= threshold
                     if voiced {
                         latestVoicedAt = frame.capturedAt.advanced(by: .seconds(Double(frame.pcm.count / 2) / 24_000))
+                    }
+                    if source.role != .candidate, voiced,
+                       lastQuestionReport.map({ $0.duration(to: frame.capturedAt) >= .milliseconds(100) }) != false {
+                        lastQuestionReport = frame.capturedAt
+                        await events(.questionSpeech(source: source, epoch: epoch))
                     }
                     await events(.level(source: source, value: activity.level))
                     if source.role == .candidate, let end = latestVoicedAt, voiced || activity.shouldCommit {
