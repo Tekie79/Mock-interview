@@ -11,16 +11,30 @@ public enum AnswerFormat: String, Codable, CaseIterable, Identifiable, Sendable 
 
     public var id: String { rawValue }
 
-    var instruction: String {
-        switch self {
-        case .ultraBrief: "Use one or two sentences."
-        case .brief: "Use three to five sentences, roughly 45 to 85 words."
-        case .standard: "Aim for 100 to 150 words."
-        case .detailed: "Use up to 250 words."
-        case .bullets: "Use concise talking points."
-        case .star: "Use situation, task, action, and result sections when appropriate."
-        case .technical: "Use a short technical example or pseudocode where useful. Do not claim it was tested."
+    func instructions(wordLimit: Int) -> String {
+        let format: (structure: String, defaultLength: String) = switch self {
+        case .ultraBrief:
+            ("Give the direct answer in one paragraph without headings or a list.", "Use one or two sentences.")
+        case .brief:
+            ("Start with the direct answer, then add the main reason or an example in a short paragraph.",
+             "Use three to five sentences, roughly 45 to 85 words.")
+        case .standard:
+            ("Use short paragraphs for the answer, reasoning, and a concrete example when helpful.",
+             "Aim for 100 to 150 words.")
+        case .detailed:
+            ("Lead with the main point. Use Markdown headings for the relevant approach, rationale, and trade-offs.",
+             "Use up to 250 words.")
+        case .bullets:
+            ("Write Markdown bullets in the candidate's speaking voice. Each bullet should move the same answer forward.",
+             "Use three to five bullets.")
+        case .star:
+            ("Use the Markdown headings Situation, Task, Action, and Result. For a proposed scenario, describe the actions and expected result conditionally.",
+             "Keep each section to one or two sentences.")
+        case .technical:
+            ("Use Markdown sections for Approach and Validation, plus Trade-offs when relevant. Put code or pseudocode in a fenced block and never claim it was tested.",
+             "Keep sections concise.")
         }
+        return format.structure + " " + (wordLimit > 0 ? "Use at most \(wordLimit) words." : format.defaultLength)
     }
 }
 
@@ -111,10 +125,19 @@ public enum LiveState: String, Sendable {
     }
 }
 
+public enum QuestionDisposition: String, Hashable, Sendable {
+    case accepted, irrelevant, deferred, uncertain, ineligible, expired, capacity, partialRetained, invalidated, failed
+}
+
 public struct InterviewSnapshot: Sendable {
     public typealias State = LiveState
     public internal(set) var sources: [String: LiveState] = [:]
     public internal(set) var discardedQuestions = 0
+    public internal(set) var questionDispositions: [QuestionDisposition: Int] = [:]
+    public internal(set) var questionQueuePeak = 0
+    public internal(set) var sessionSummariesCompleted = 0
+    public internal(set) var sessionSummariesFailed = 0
+    public internal(set) var waitingForQuestionEnd = false
     public internal(set) var droppedAudioChunks = 0
     public internal(set) var submittedAudioSamples: [String: Int] = [:]
     public internal(set) var recognitionSeconds: [String: Double] = [:]
@@ -134,33 +157,68 @@ public struct InterviewSnapshot: Sendable {
 public actor InterviewSession {
     private struct QuestionWork: Sendable {
         let event: TranscriptEvent
+        var earlierEvents: [TranscriptEvent] = []
         let speaker: DiarizedSpeaker.ID?
         let sequence: UInt64
         let contextTurnIDs: Set<String>
         let transcriptID: String
         let holdUntil: ContinuousClock.Instant?
+
+        var events: [TranscriptEvent] { earlierEvents + [event] }
+        var transcriptIDs: [String] { events.map(\.transcriptID) }
+    }
+
+    private struct RoundKey: Hashable {
+        let sourceID: String
+        let epoch: UUID
+        let speaker: Int?
+    }
+
+    private struct QuestionRound {
+        var works: [QuestionWork] = []
+        var bytes = 0
+        let start: ContinuousClock.Instant
+        var lastFinal: ContinuousClock.Instant
+        var lastEndpoint: ContinuousClock.Instant
+    }
+
+    private enum QuestionJob: Sendable {
+        case evaluate(QuestionWork)
+        case endReplay(CaptureSource, UUID)
     }
     private var channels: [TranscriptionChannel]
     private let detector: QuestionDetector
     private let generator: any TextGenerator
+    private let summarizer: (any SessionSummarizing)?
     private let preferences: String
+    private let answerWordLimit: Int
     private let interviewContext: [String]
     private let classificationBudget: ContextBudget
     private let answerBudget: ContextBudget
     private let generationTimeout: Duration
     private let classificationEvidence: @Sendable (String) async -> [String]
     private let evidence: @Sendable (String) async -> [String]
+    private let pastWorkEvidence: @Sendable () async -> [String]
+    private let profileTraining: ProfileAnswerTraining?
+    private let questionNow: @Sendable () -> ContinuousClock.Instant
+    private let questionSleep: @Sendable (ContinuousClock.Instant) async throws -> Void
+    private var questionWait: Duration
+    private var pendingRounds: [RoundKey: QuestionRound] = [:]
+    private var questionSpeechAt: [String: ContinuousClock.Instant] = [:]
+    private var questionPartials: [RoundKey: [String: ContinuousClock.Instant]] = [:]
+    private var roundTimer: (deadline: ContinuousClock.Instant, task: Task<Void, Never>)?
     private var captureID: UUID?
     private var cleanup: Task<Void, Never>?
     private var captureTasks: [Task<Void, Never>] = []
     private let queueLimit: Int
-    private var questionQueue: AsyncStream<QuestionWork>.Continuation?
+    private var questionQueue: AsyncStream<QuestionJob>.Continuation?
     private var questionWorker: Task<Void, Never>?
-    private var classification: (work: QuestionWork, task: Task<QuestionDetector.Detection?, Error>)?
+    private var classification: (work: QuestionWork, task: Task<QuestionDetector.Evaluation, Error>)?
     private var ingressSequence: UInt64 = 0
     private var manualBarrier: UInt64 = 0
     private var timeline: [UUID: PipelineTiming] = [:]
-    private var conversation: [ConversationTurn] = []
+    private var memory = SessionMemory()
+    private var summaryWork: (id: UUID, sources: Set<String>, task: Task<Void, Never>)?
     private var recentCandidateAudio: [CrossSourceAttribution.Evidence] = []
     private var candidateSpeech: [CrossSourceAttribution.SpeechWindow] = []
     private var recentInterviewerAudio: [CrossSourceAttribution.Evidence] = []
@@ -176,19 +234,33 @@ public actor InterviewSession {
     private var subscriber: AsyncStream<InterviewSnapshot>.Continuation?
 
     public init(channels: [TranscriptionChannel], detector: QuestionDetector, generator: any TextGenerator,
+                summarizer: (any SessionSummarizing)? = nil,
                 format: AnswerFormat = .brief, preferences: String = "", interviewContext: [String] = [],
+                answerWordLimit: Int = 0,
+                profileTraining: ProfileAnswerTraining? = nil,
+                questionWait: Duration = .zero,
+                questionNow: @escaping @Sendable () -> ContinuousClock.Instant = { .now },
+                questionSleep: @escaping @Sendable (ContinuousClock.Instant) async throws -> Void = { try await Task.sleep(until: $0) },
                 queueLimit: Int = 32, classificationBudget: ContextBudget = .init(),
                 answerBudget: ContextBudget = .init(), generationTimeout: Duration = .seconds(45),
                 classificationEvidence: @escaping @Sendable (String) async -> [String] = { _ in [] },
+                pastWorkEvidence: @escaping @Sendable () async -> [String] = { [] },
                 evidence: @escaping @Sendable (String) async -> [String] = { _ in [] }) {
         self.channels = channels
+        self.summarizer = summarizer
         self.queueLimit = min(256, max(1, queueLimit))
         self.detector = detector
         self.generator = generator
         self.format = format
         self.preferences = preferences
+        self.answerWordLimit = min(400, max(0, answerWordLimit))
+        self.questionWait = min(.seconds(6), max(.zero, questionWait))
+        self.questionNow = questionNow
+        self.questionSleep = questionSleep
         self.interviewContext = interviewContext
         self.evidence = evidence
+        self.pastWorkEvidence = pastWorkEvidence
+        self.profileTraining = profileTraining
         self.classificationBudget = classificationBudget
         self.answerBudget = answerBudget
         self.generationTimeout = generationTimeout
@@ -212,12 +284,12 @@ public actor InterviewSession {
         snapshot.state = channels.isEmpty ? .degraded : .connecting
         snapshot.issues.removeAll()
         snapshot.sources = Dictionary(channels.map { ($0.source.id, .connecting) }, uniquingKeysWith: { first, _ in first })
-        let (work, queue) = AsyncStream<QuestionWork>.makeStream(bufferingPolicy: .bufferingOldest(queueLimit))
+        let (work, queue) = AsyncStream<QuestionJob>.makeStream(bufferingPolicy: .bufferingOldest(queueLimit))
         questionQueue = queue
         questionWorker = Task { [weak self] in
             for await item in work {
                 guard !Task.isCancelled else { return }
-                await self?.classify(item, activation: id)
+                await self?.process(item, activation: id)
             }
         }
         for channel in channels {
@@ -226,7 +298,7 @@ public actor InterviewSession {
                     try await channel.run { [weak self] event in
                         await self?.receive(event, activation: id)
                     }
-                    await self?.channelEnded(channel.source, activation: id, failure: nil)
+                    await self?.channelEnded(channel.source, activation: id, failure: nil, replay: channel.isReplay)
                 } catch {
                     await self?.channelEnded(channel.source, activation: id, failure: Task.isCancelled ? nil : publicErrorMessage(error))
                 }
@@ -258,11 +330,19 @@ public actor InterviewSession {
 
     public func setFormat(_ format: AnswerFormat) { self.format = format }
 
+    public func setQuestionWait(_ duration: Duration) {
+        questionWait = min(.seconds(6), max(.zero, duration))
+        flushQuietRounds(at: questionNow())
+        scheduleRoundTimer()
+        publish()
+    }
+
     public func manualQuestion(_ text: String) {
         guard captureID != nil else { return }
         let question = text.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !question.isEmpty else { return }
         manualBarrier = ingressSequence
+        clearQuestionRounds()
         generate(AcceptedQuestion(original: question, normalized: question), format: format)
     }
 
@@ -270,22 +350,24 @@ public actor InterviewSession {
         guard captureID != nil,
               let answer = snapshot.answers.first(where: { $0.id == id }) else { return }
         manualBarrier = ingressSequence
+        clearQuestionRounds()
         generate(answer.question, format: format ?? answer.format)
     }
 
     public func assignSpeaker(_ id: DiarizedSpeaker.ID, role: SourceRole) async {
         guard captureID != nil, epochs[id.sourceID] == id.epoch,
               let index = snapshot.speakers.firstIndex(where: { $0.id == id }) else { return }
-        let revoked = snapshot.speakers[index].role == .interviewer && role != .interviewer
+        let priorRole = snapshot.speakers[index].role
+        let revoked = priorRole != .unknown && role != priorRole
         snapshot.speakers[index].role = role
         if revoked {
             roleBarriers[id] = ingressSequence
             if classification?.work.speaker == id { classification?.task.cancel() }
             let prefix = id.epoch.uuidString + "/" + id.sourceID + "/"
             var affected = Set(snapshot.transcript.lazy.filter {
-                $0.role == .interviewer && $0.speaker == id.number && $0.id.hasPrefix(prefix)
+                $0.role == priorRole && $0.speaker == id.number && $0.id.hasPrefix(prefix)
             }.map(\.id))
-            for answer in snapshot.answers {
+            for answer in snapshot.answers where priorRole == .interviewer {
                 if let origin = answer.automaticProvenance, origin.sourceID == id.sourceID,
                    origin.captureEpoch == id.epoch, origin.speaker == id.number {
                     affected.formUnion(origin.contributingTranscriptIDs)
@@ -300,6 +382,42 @@ public actor InterviewSession {
         publish()
     }
 
+    private func mergeSpeakers(from: Int, to: Int, source: CaptureSource, epoch: UUID) async {
+        guard source.role == .unknown, from >= 0, to >= 0, from != to else { return }
+        let retired = DiarizedSpeaker.ID(sourceID: source.id, epoch: epoch, number: from)
+        let survivor = DiarizedSpeaker.ID(sourceID: source.id, epoch: epoch, number: to)
+        let ids = [retired, survivor]
+        let known = snapshot.speakers.filter { ids.contains($0.id) }
+        snapshot.speakers.removeAll { ids.contains($0.id) }
+        for id in ids where known.contains(where: { $0.id == id }) { roleBarriers[id] = ingressSequence }
+
+        let prefix = epoch.uuidString + "/" + source.id + "/"
+        var affected: Set<String> = []
+        for index in snapshot.transcript.indices where snapshot.transcript[index].id.hasPrefix(prefix) {
+            guard let speaker = snapshot.transcript[index].speaker, speaker == from || speaker == to else { continue }
+            snapshot.transcript[index].speaker = to
+            affected.insert(snapshot.transcript[index].id)
+        }
+        for answer in snapshot.answers {
+            if let origin = answer.automaticProvenance, origin.sourceID == source.id, origin.captureEpoch == epoch,
+               origin.speaker == from || origin.speaker == to {
+                affected.formUnion(origin.contributingTranscriptIDs)
+            }
+        }
+
+        invalidateAttribution(affected, correctedRole: .unknown)
+        updateRunningState()
+        publish()
+        await detector.revokeAttribution(affected)
+        for id in ids where known.contains(where: { $0.id == id }) {
+            await detector.assignSpeaker(id.number, role: .unknown, sourceID: source.id, epoch: epoch)
+        }
+        if !known.isEmpty, captureID != nil, epochs[source.id] == epoch {
+            snapshot.speakers.append(.init(id: survivor, role: .unknown))
+            publish()
+        }
+    }
+
     public func cancelAnswer() {
         invalidateAnswer(.cancelled)
         publish()
@@ -312,6 +430,11 @@ public actor InterviewSession {
             return
         }
         captureID = nil
+        summaryWork?.task.cancel()
+        summaryWork = nil
+        clearQuestionRounds()
+        questionSpeechAt.removeAll()
+        questionPartials.removeAll()
         epochs.removeAll()
         lastMeterUpdate.removeAll()
         roleBarriers.removeAll()
@@ -348,6 +471,7 @@ public actor InterviewSession {
             snapshot.transcript.removeAll { !$0.isFinal }
             publish()
             if final == .stopped {
+                memory.finish()
                 subscriber?.finish()
                 subscriber = nil
             }
@@ -412,6 +536,15 @@ public actor InterviewSession {
                 $0.received.duration(to: now) <= CrossSourceAttribution.retention && window.makesAmbiguous($0)
             }.map(\.id))
             if revoked.isEmpty { return }
+        case .questionSpeech(let source, let epoch):
+            guard questionWait > .zero, source.role == .interviewer, epochs[source.id] == epoch else { return }
+            let now = questionNow()
+            let waiting = snapshot.waitingForQuestionEnd
+            flushQuietRounds(at: now)
+            questionSpeechAt[source.id] = now
+            scheduleRoundTimer()
+            if waiting != snapshot.waitingForQuestionEnd { publish() }
+            return
         case .dropped(_, let chunks):
             snapshot.droppedAudioChunks += chunks
         case .level(let source, let value):
@@ -421,9 +554,17 @@ public actor InterviewSession {
             snapshot.levels[source.id] = value
         case .transcript(let event):
             guard epochs[event.source.id] == event.epoch else { return }
+            if case .speakerMerge(let from, let to) = event.state {
+                await mergeSpeakers(from: from, to: to, source: event.source, epoch: event.epoch)
+                return
+            }
             let id = event.transcriptID
             let transcriptIndex = snapshot.transcript.firstIndex(where: { $0.id == id })
             if let transcriptIndex, snapshot.transcript[transcriptIndex].isFinal { return }
+            let roundKey = RoundKey(sourceID: event.source.id, epoch: event.epoch, speaker: event.speaker)
+            let now = questionNow()
+            if questionWait > .zero { flushQuietRounds(at: now) }
+            if event.state == .final { removePartial(event.utteranceID, from: roundKey) }
             if event.state == .final, let usage = event.recognitionUsage {
                 switch usage {
                 case .audioSeconds(let seconds) where seconds.isFinite && (0...86_400).contains(seconds):
@@ -442,13 +583,22 @@ public actor InterviewSession {
             }
             var speakerID: DiarizedSpeaker.ID?
             var role = event.source.role
-            if role == .unknown, let number = event.speaker, number >= 0, event.state == .final {
+            if role == .unknown, let number = event.speaker, number >= 0 {
                 let speaker = DiarizedSpeaker.ID(sourceID: event.source.id, epoch: event.epoch, number: number)
                 speakerID = speaker
                 if let known = snapshot.speakers.first(where: { $0.id == speaker }) {
                     role = known.role
-                } else if snapshot.speakers.count < 32 {
+                } else if event.state == .final, snapshot.speakers.count < 32 {
                     snapshot.speakers.append(DiarizedSpeaker(id: speaker, role: .unknown))
+                }
+            }
+            if questionWait > .zero, role == .interviewer, event.state == .partial,
+               !event.text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
+                // Partial revisions cannot reset their original time.
+                if questionPartials[roundKey] == nil, questionPartials.count < 32 { questionPartials[roundKey] = [:] }
+                if var partials = questionPartials[roundKey], partials.count < 16, partials[event.utteranceID] == nil {
+                    partials[event.utteranceID] = now
+                    questionPartials[roundKey] = partials
                 }
             }
             let received = ContinuousClock.now
@@ -490,17 +640,19 @@ public actor InterviewSession {
             }
             if event.state == .final, role == .interviewer {
                 ingressSequence += 1
+                let context = classificationBudget.relevant(memory.turns, to: event.text)
+                    + answerBudget.relevant(memory.turns, to: event.text)
                 let work = QuestionWork(event: event, speaker: speakerID, sequence: ingressSequence,
-                                        contextTurnIDs: Set(classificationBudget.recent(conversation).map(\.id)), transcriptID: id,
+                                        contextTurnIDs: Set(context.map(\.id)), transcriptID: id,
                                         holdUntil: hasCandidateChannel ? received.advanced(by: CrossSourceAttribution.hold) : nil)
-                if case .dropped = questionQueue?.yield(work) {
-                    snapshot.discardedQuestions += 1
-                    recordIssue("Question queue full. Transcript retained. Use the transcript to ask manually.")
-                }
+                stageQuestion(work)
+            } else if event.state == .final {
+                recordDisposition(.ineligible)
             }
+            if questionWait > .zero { scheduleRoundTimer() }
             if event.state == .final, role != .unknown {
-                conversation.append(.init(id: id, role: role, text: String(event.text.prefix(4_000))))
-                if conversation.count > 64 { conversation.removeFirst() }
+                memory.append(.init(id: id, role: role, text: event.text))
+                summarizeOlderTurns(activation: activation)
             }
         }
         if captureID == activation {
@@ -519,7 +671,7 @@ public actor InterviewSession {
 
     private func invalidateAttribution(_ transcriptIDs: Set<String>, correctedRole: SourceRole) {
         guard !transcriptIDs.isEmpty else { return }
-        var questionIDs = Set(conversation.lazy.filter { transcriptIDs.contains($0.id) }.compactMap(\.questionID))
+        var questionIDs = Set(memory.turns.lazy.filter { transcriptIDs.contains($0.id) }.compactMap(\.questionID))
         for index in snapshot.transcript.indices where transcriptIDs.contains(snapshot.transcript[index].id) {
             snapshot.transcript[index].role = correctedRole
         }
@@ -532,8 +684,15 @@ public actor InterviewSession {
             snapshot.answers[index].failure = "Interviewer attribution was withdrawn."
             questionIDs.insert(origin.questionID)
         }
-        conversation.removeAll { transcriptIDs.contains($0.id) || $0.questionID.map(questionIDs.contains) == true }
-        if let classification, transcriptIDs.contains(classification.work.transcriptID) { classification.task.cancel() }
+        let removed = memory.revoke(transcriptIDs, questions: questionIDs)
+        if let summaryWork, !summaryWork.sources.isDisjoint(with: removed) { summaryWork.task.cancel() }
+        pendingRounds = pendingRounds.filter { _, round in
+            !round.works.contains { transcriptIDs.contains($0.transcriptID) }
+        }
+        scheduleRoundTimer()
+        if let classification, classification.work.transcriptIDs.contains(where: transcriptIDs.contains) {
+            classification.task.cancel()
+        }
     }
 
     private func clearAttribution(_ source: CaptureSource) {
@@ -542,85 +701,281 @@ public actor InterviewSession {
         recentInterviewerAudio.removeAll { $0.sourceID == source.id }
     }
 
+    private func stageQuestion(_ work: QuestionWork) {
+        let bytes = work.event.text.utf8.count + 1
+        guard bytes <= 16_000 else { reportQuestionOverflow(); return }
+        guard !QuestionDetector.isObviousNonQuestion(work.event.text) else {
+            recordDisposition(.irrelevant)
+            return
+        }
+        guard questionWait > .zero else {
+            enqueueQuestion(work)
+            return
+        }
+        let now = questionNow()
+        let key = RoundKey(sourceID: work.event.source.id, epoch: work.event.epoch, speaker: work.event.speaker)
+        if pendingRounds[key] == nil, pendingRounds.count >= queueLimit {
+            reportQuestionOverflow()
+            return
+        }
+        if let current = pendingRounds[key],
+           current.works.count == min(64, queueLimit) || current.bytes + bytes > 16_000 {
+            // Evaluate the finalized prefix before admitting another segment.
+            flushRounds([key])
+        }
+        // Credit recent provider or local endpoint silence only when it maps to this clock.
+        let endpoint = work.event.timing.endpoint.flatMap {
+            $0 <= now && $0.duration(to: now) <= .seconds(3) ? $0 : nil
+        } ?? now
+        var round = pendingRounds[key] ?? QuestionRound(start: now, lastFinal: now, lastEndpoint: endpoint)
+        round.lastFinal = now
+        round.lastEndpoint = max(round.lastEndpoint, endpoint)
+        round.bytes += bytes
+        round.works.append(work)
+        pendingRounds[key] = round
+        flushQuietRounds(at: now)
+        scheduleRoundTimer()
+    }
+
+    private func enqueueQuestion(_ work: QuestionWork) {
+        switch questionQueue?.yield(.evaluate(work)) {
+        case .enqueued(let remaining):
+            snapshot.questionQueuePeak = max(snapshot.questionQueuePeak, queueLimit - remaining)
+        case .dropped: reportQuestionOverflow()
+        default: break
+        }
+    }
+
+    private func reportQuestionOverflow() {
+        recordDisposition(.capacity)
+        snapshot.discardedQuestions += 1
+        recordIssue("Question buffer full. Transcript retained. Use the transcript to ask manually.")
+    }
+
+    private func roundDeadline(_ round: QuestionRound, key: RoundKey) -> ContinuousClock.Instant {
+        // A continuation can start within the quiet interval and speak for several seconds
+        // before its final. Bound the total packet age independently of that interval.
+        let limit = round.start.advanced(by: .seconds(8))
+        // Raw speech activity has no speaker identity in a mixed stream.
+        let speech = key.speaker == nil ? questionSpeechAt[key.sourceID] : nil
+        let lastActivity = max(round.lastEndpoint, speech ?? round.lastEndpoint)
+        let quiet = lastActivity.advanced(by: questionWait)
+        guard questionWait > .zero, let partial = pendingPartial(after: round, key: key) else { return min(limit, quiet) }
+        return min(limit, max(quiet, partial.advanced(by: questionWait + .seconds(2))))
+    }
+
+    private func pendingPartial(after round: QuestionRound, key: RoundKey) -> ContinuousClock.Instant? {
+        questionPartials[key]?.values.filter { $0 >= round.lastFinal }.min()
+    }
+
+    private func removePartial(_ utterance: String, from key: RoundKey) {
+        questionPartials[key]?.removeValue(forKey: utterance)
+        if questionPartials[key]?.isEmpty == true { questionPartials.removeValue(forKey: key) }
+    }
+
+    private func recordDisposition(_ disposition: QuestionDisposition, count: Int = 1) {
+        guard count > 0 else { return }
+        snapshot.questionDispositions[disposition, default: 0] += count
+    }
+
+    private func flushQuietRounds(at now: ContinuousClock.Instant) {
+        let ready = pendingRounds.filter { key, round in
+            questionWait == .zero || roundDeadline(round, key: key) <= now
+        }
+        flushRounds(Array(ready.keys))
+    }
+
+    private func flushRounds(_ keys: [RoundKey]) {
+        let rounds = keys.compactMap { key in pendingRounds.removeValue(forKey: key).map { (key, $0) } }
+        let ordered = rounds.sorted { ($0.1.works.first?.sequence ?? 0) < ($1.1.works.first?.sequence ?? 0) }
+        for (key, round) in ordered {
+            guard let first = round.works.first, let last = round.works.last else { continue }
+            if pendingPartial(after: round, key: key) != nil {
+                recordDisposition(.partialRetained)
+                recordIssue("An interviewer transcript did not finalize. Use the retained text to ask manually.")
+            }
+            // Classify only finalized segments. A later partial cannot erase a complete prefix.
+            var work = QuestionWork(event: last.event, speaker: last.speaker, sequence: last.sequence,
+                                    contextTurnIDs: first.contextTurnIDs, transcriptID: last.transcriptID,
+                                    holdUntil: last.holdUntil)
+            work.earlierEvents = round.works.dropLast().map(\.event)
+            enqueueQuestion(work)
+            if let partials = questionPartials[key]?.filter({ $0.value > round.lastFinal }) {
+                questionPartials[key] = partials.isEmpty ? nil : partials
+            }
+        }
+    }
+
+    private func scheduleRoundTimer() {
+        snapshot.waitingForQuestionEnd = pendingRounds.values.contains { !$0.works.isEmpty }
+        guard let activation = captureID, let deadline = pendingRounds.map({ key, round in
+            roundDeadline(round, key: key)
+        }).min() else {
+            roundTimer?.task.cancel()
+            roundTimer = nil
+            return
+        }
+        if let timer = roundTimer {
+            if timer.deadline <= deadline { return }
+            timer.task.cancel()
+        }
+        let task = Task { [weak self, questionSleep] in
+            do { try await questionSleep(deadline) } catch { return }
+            await self?.roundTimerFired(activation: activation)
+        }
+        roundTimer = (deadline, task)
+    }
+
+    private func roundTimerFired(activation: UUID) {
+        guard !Task.isCancelled, captureID == activation else { return }
+        roundTimer = nil
+        flushQuietRounds(at: questionNow())
+        scheduleRoundTimer()
+        publish()
+    }
+
+    private func clearQuestionRounds() {
+        recordDisposition(.invalidated, count: pendingRounds.count)
+        pendingRounds.removeAll()
+        scheduleRoundTimer()
+    }
+
+    private func process(_ job: QuestionJob, activation: UUID) async {
+        guard captureID == activation else { return }
+        switch job {
+        case .evaluate(let work):
+            await classify(work, activation: activation)
+        case .endReplay(let source, let epoch):
+            let unfinished = await detector.discardPending(source, epoch: epoch)
+            guard captureID == activation, epochs[source.id] == epoch else { return }
+            recordDisposition(.expired, count: unfinished)
+            snapshot.discardedQuestions += unfinished
+            publish()
+        }
+    }
+
     private func eligible(_ work: QuestionWork, activation: UUID) -> Bool {
-        guard captureID == activation, work.sequence > manualBarrier, !ambiguousAudio.contains(work.transcriptID),
-              snapshot.transcript.contains(where: { $0.id == work.transcriptID && $0.role == .interviewer }),
+        guard captureID == activation, work.sequence > manualBarrier,
               epochs[work.event.source.id] == work.event.epoch else { return false }
+        let trusted = Set(snapshot.transcript.lazy.filter { $0.role == .interviewer }.map(\.id))
+        guard work.transcriptIDs.allSatisfy({ trusted.contains($0) && !ambiguousAudio.contains($0) }) else { return false }
         guard let speaker = work.speaker else { return work.event.source.role == .interviewer }
         return work.sequence > (roleBarriers[speaker] ?? 0)
             && snapshot.speakers.first(where: { $0.id == speaker })?.role == .interviewer
     }
 
     private func classify(_ work: QuestionWork, activation: UUID) async {
-        guard eligible(work, activation: activation) else { return }
+        guard eligible(work, activation: activation) else {
+            if captureID == activation { recordDisposition(.invalidated); publish() }
+            return
+        }
         if let holdUntil = work.holdUntil, holdUntil > .now {
             do { try await Task.sleep(until: holdUntil) } catch { return }
             guard eligible(work, activation: activation) else { return }
         }
-        if let remote = recentInterviewerAudio.first(where: { $0.id == work.transcriptID }),
-           candidateSpeech.contains(where: { $0.received.duration(to: .now) <= CrossSourceAttribution.retention && $0.makesAmbiguous(remote) }) {
-            let revoked = vetoAttribution([work.transcriptID])
+        let ids = Set(work.transcriptIDs)
+        let ambiguous = recentInterviewerAudio.filter { remote in
+            ids.contains(remote.id) && candidateSpeech.contains {
+                $0.received.duration(to: .now) <= CrossSourceAttribution.retention && $0.makesAmbiguous(remote)
+            }
+        }
+        if !ambiguous.isEmpty {
+            let revoked = vetoAttribution(ambiguous.map(\.id))
             publish()
             await detector.revokeAttribution(revoked)
             return
         }
         if let ingested = work.event.timing.final, ingested.duration(to: .now) > .seconds(12) {
             snapshot.discardedQuestions += 1
+            recordDisposition(.expired)
             recordIssue("A question expired in the classifier queue. Use the transcript to ask manually.")
             publish()
             return
         }
         var timing = work.event.timing
         timing.classificationStarted = .now
-        let context = conversation.filter { work.contextTurnIDs.contains($0.id) }
-        let trustedQuestionIDs = Set(conversation.compactMap(\.questionID))
+        let context = memory.turns.filter { work.contextTurnIDs.contains($0.id) }
+        let trustedQuestionIDs = Set(memory.turns.compactMap(\.questionID))
         let job = Task { [detector, classificationBudget, classificationEvidence, interviewContext] in
-            let facts = await classificationEvidence(work.event.text)
+            let segments = work.events
+            let facts = await classificationEvidence(segments.map(\.text).joined(separator: "\n"))
             try Task.checkCancellation()
-            return try await detector.detect(work.event, conversation: context,
+            return try await detector.detect(segments, conversation: context,
                                              approvedEvidence: facts, interviewContext: interviewContext,
                                              budget: classificationBudget, trustedQuestionIDs: trustedQuestionIDs)
         }
         classification = (work, job)
         defer { if classification?.work.sequence == work.sequence { classification = nil } }
         do {
-            if let detection = try await job.value, eligible(work, activation: activation) {
+            let evaluation = try await job.value
+            guard eligible(work, activation: activation) else {
+                if captureID == activation { recordDisposition(.invalidated); publish() }
+                return
+            }
+            if evaluation.expiredContinuation {
+                snapshot.discardedQuestions += 1
+                recordDisposition(.expired)
+                recordIssue("An incomplete question expired. Use the retained transcript to ask manually.")
+            }
+            switch evaluation.decision {
+            case .complete(let detection):
                 let trusted = Set(snapshot.transcript.filter { $0.role == .interviewer }.map(\.id))
-                let latestContext = conversation.filter { work.contextTurnIDs.contains($0.id) }
+                let latestContext = memory.turns.filter { work.contextTurnIDs.contains($0.id) }
                 guard detection.transcriptIDs.allSatisfy(trusted.contains), latestContext == context else {
-                    await detector.revokeAttribution([work.transcriptID])
+                    recordDisposition(.invalidated)
+                    publish()
+                    await detector.revokeAttribution(Set(detection.transcriptIDs))
                     return
                 }
                 let question = detection.question
                 timing.classificationFinished = .now
-                for index in conversation.indices where detection.transcriptIDs.contains(conversation[index].id) {
-                    let turn = conversation[index]
-                    conversation[index] = .init(id: turn.id, role: turn.role, text: turn.text, questionID: question.id)
-                }
+                memory.associate(Set(detection.transcriptIDs), with: question.id)
                 let origin = InterviewAnswer.AutomaticProvenance(sourceID: work.event.source.id,
-                    captureEpoch: work.event.epoch, transcriptID: work.transcriptID,
+                    captureEpoch: work.event.epoch, transcriptID: detection.transcriptIDs.last ?? work.transcriptID,
                     contributingTranscriptIDs: detection.transcriptIDs, questionID: question.id, speaker: work.speaker?.number)
+                recordDisposition(.accepted)
                 generate(question, format: format, origin: .automatic(origin), timing: timing, conversation: context)
+            case .incomplete, .continuation: recordDisposition(.deferred)
+            case .irrelevant: recordDisposition(.irrelevant)
+            case .uncertain: recordDisposition(.uncertain)
+            case .invalidated: recordDisposition(.invalidated)
+            case .capacity: reportQuestionOverflow()
             }
+            publish()
         } catch where !(error is CancellationError) && eligible(work, activation: activation) {
+            recordDisposition(.failed)
             recordIssue("Question classification failed. Select transcript text to ask manually.")
             publish()
         } catch {}
     }
 
     private func invalidateSourceWork(_ source: CaptureSource) {
+        recordDisposition(.invalidated, count: pendingRounds.keys.filter { $0.sourceID == source.id }.count)
+        pendingRounds = pendingRounds.filter { $0.key.sourceID != source.id }
+        questionSpeechAt.removeValue(forKey: source.id)
+        questionPartials = questionPartials.filter { $0.key.sourceID != source.id }
+        scheduleRoundTimer()
         if classification?.work.event.source.id == source.id { classification?.task.cancel() }
         if let activeRevision, snapshot.answers.first(where: { $0.revision == activeRevision })?
             .automaticProvenance?.sourceID == source.id { invalidateAnswer(.cancelled) }
     }
 
-    private func channelEnded(_ source: CaptureSource, activation: UUID, failure: String?) async {
+    private func channelEnded(_ source: CaptureSource, activation: UUID, failure: String?, replay: Bool = false) async {
         guard captureID == activation else { return }
         if failure != nil { epochs.removeValue(forKey: source.id) }
         snapshot.sources[source.id] = failure == nil ? .stopped : .failed
         snapshot.connected.remove(source.id)
         snapshot.levels.removeValue(forKey: source.id)
-        if failure == nil, source.id == "Replay" {
+        if failure == nil, replay, let epoch = epochs[source.id] {
+            let keys = pendingRounds.keys.filter { $0.sourceID == source.id && $0.epoch == epoch }
+            flushRounds(keys)
+            let partials = questionPartials.filter { $0.key.sourceID == source.id && $0.key.epoch == epoch }
+            if keys.isEmpty {
+                recordDisposition(.partialRetained, count: partials.values.reduce(0) { $0 + $1.count })
+            }
+            for key in partials.keys { questionPartials.removeValue(forKey: key) }
+            if case .dropped = questionQueue?.yield(.endReplay(source, epoch)) { reportQuestionOverflow() }
+            scheduleRoundTimer()
             recordIssue("Replay audio finished. Pending questions can finish from the retained transcript.")
         }
         if let failure {
@@ -635,6 +990,31 @@ public actor InterviewSession {
             updateRunningState()
             publish()
         }
+    }
+
+    private func summarizeOlderTurns(activation: UUID) {
+        guard let summarizer, summaryWork == nil, let batch = memory.takeSummaryBatch() else { return }
+        let id = UUID()
+        let sources = Set(batch.map(\.id))
+        let task = Task(priority: .utility) { [weak self] in
+            let result: String?
+            do { result = try await summarizer.summarize(batch) }
+            catch { result = nil }
+            await self?.receiveSummary(result, id: id, activation: activation, cancelled: Task.isCancelled)
+        }
+        summaryWork = (id, sources, task)
+    }
+
+    private func receiveSummary(_ result: String?, id: UUID, activation: UUID, cancelled: Bool) {
+        guard captureID == activation, let work = summaryWork, work.id == id else { return }
+        summaryWork = nil
+        guard !cancelled else { return }
+        if let result, memory.installSummary(result, sourceIDs: work.sources) {
+            snapshot.sessionSummariesCompleted += 1
+        } else {
+            snapshot.sessionSummariesFailed += 1
+        }
+        publish()
     }
 
     private func generate(_ question: AcceptedQuestion, format: AnswerFormat, origin: InterviewAnswer.Origin = .manual,
@@ -653,33 +1033,55 @@ public actor InterviewSession {
         }
         publish()
         let began = ContinuousClock.now
-        var context = answerBudget.recent(contextOverride ?? conversation).reversed().map { turn in
+        var context = answerBudget.relevant(contextOverride ?? memory.turns, to: question.original).reversed().map { turn in
             let speaker = turn.role == .candidate ? "Actual candidate speech (unverified)" : "Interviewer speech"
             return speaker + ": " + turn.text
         }
         context.append(contentsOf: interviewContext)
-        if let previousID = question.previousQuestionID, conversation.contains(where: { $0.questionID == previousID }),
+        var evidenceTerms = [question.normalized] + question.parts + [question.original]
+        var usePastWork = question.requestsPastWork
+        if let previousID = question.previousQuestionID, memory.turns.contains(where: { $0.questionID == previousID }),
            let prior = snapshot.answers.first(where: { $0.id == previousID && $0.state != .invalidated }) {
             context.insert("Previous interviewer question: " + prior.question.original, at: 0)
+            evidenceTerms += [prior.question.normalized, prior.question.original]
+            usePastWork = usePastWork || prior.question.requestsPastWork
         }
-        let limitedContext = answerBudget.share(70).limit(context)
+        // Use one retrieval query so finding additional terms does not add provider round trips.
+        var seenTerms: Set<String> = []
+        let evidenceQuery = evidenceTerms.filter { seenTerms.insert($0).inserted }.joined(separator: "\n")
+        let training = profileTraining?.limited(to: answerBudget.share(20))
+        let summaryText = answerBudget.turns == 0 ? [] : memory.summaries.reversed().map(\.text)
         generationDeadline = Task { [weak self, generationTimeout] in
             do {
                 try await Task.sleep(for: generationTimeout)
                 await self?.timeout(revision)
             } catch {}
         }
-        generation = Task { [weak self, generator, evidence, preferences, limitedContext, answerBudget] in
+        generation = Task { [weak self, generator, evidence, pastWorkEvidence, preferences, context,
+                             usePastWork, answerBudget, answerWordLimit, summaryText] in
             do {
                 await self?.mark(revision, \.retrievalStarted)
-                let facts = answerBudget.share(30).limit(await evidence(question.normalized))
+                let matches = await evidence(evidenceQuery)
+                try Task.checkCancellation()
+                let facts = answerBudget.share(30).limit(matches)
+                let candidates = usePastWork ? await pastWorkEvidence() : []
+                let examples = answerBudget.share(30).limit(candidates.filter { !facts.contains($0) })
+                let contextShare = 70 - (examples.isEmpty ? 0 : 30) - (training == nil ? 0 : 20)
+                let summaryShare = min(15, contextShare / 3)
+                let summaries = answerBudget.share(summaryShare).limit(summaryText)
+                let limitedContext = answerBudget.share(contextShare - (summaries.isEmpty ? 0 : summaryShare)).limit(context)
                 await self?.mark(revision, \.retrievalFinished)
                 try Task.checkCancellation()
-                await self?.recordEvidence(facts, revision)
+                await self?.recordEvidence(facts + examples, revision)
                 let text = ([question.normalized] + question.parts).joined(separator: "\n")
+                let multipart = question.parts.count > 1
+                    ? "Address all \(question.parts.count) requested parts in their original order within the selected format. " : ""
                 let request = AnswerRequest(question: text,
-                                            instructions: format.instruction + " " + preferences,
-                                            evidence: facts, interviewContext: limitedContext)
+                                            instructions: format.instructions(wordLimit: answerWordLimit) + " " + multipart + preferences,
+                                            evidence: facts, interviewContext: limitedContext,
+                                            questionParts: question.parts.count > 1 ? question.parts : [],
+                                            originalQuestion: question.original == question.normalized ? nil : question.original,
+                                            pastWorkExamples: examples, profileTraining: training, sessionSummaries: summaries)
                 await self?.mark(revision, \.requestStarted)
                 for try await event in try await generator.stream(request) {
                     try Task.checkCancellation()

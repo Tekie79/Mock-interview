@@ -11,9 +11,9 @@ Full scenario definitions and metric methodology: requirements §12. Final accep
 | G5 native product | AT-01–18 as applicable | Xcode build, explicit permission denial/allow, Zoom/Teams/Meet selected process, source exit, mic route, compact window, accessibility |
 | G6 performance | AT-16 plus §12 metrics | Annotated end-of-question timing, 90-minute session, held-out labels, memory/CPU, failure accounting |
 
-Targets (unmeasured): first useful visible text p50 ≤ 1.5 s / p95 ≤ 3.5 s; complete brief answer p95 ≤ 7 s on successful requests; question precision ≥ 95%, recall ≥ 90%; candidate-triggered responses zero in dual-channel deterministic tests; exact duplicate ID tests zero duplicates. Record model, OS, hardware, network, sample size, p50/p95, failures and denominator. Mixed microphone performance must be measured independently. No target is guaranteed by the baseline.
+Acceptance targets: first useful visible text p50 ≤ 1.5 s / p95 ≤ 3.5 s; complete brief answer p95 ≤ 7 s on successful requests; question precision ≥ 95%, recall ≥ 90%; candidate-triggered responses zero in dual-channel deterministic tests; exact duplicate ID tests zero duplicates. Record model, OS, hardware, network, sample size, p50/p95, failures and denominator. Mixed microphone performance must be measured independently. No target is guaranteed by the baseline.
 
-For each run record: commit SHA, date, OS/toolchain/device, command or manual steps, fixture version, test count, passes/fails/skips, artifacts, limitations, next action. Never treat not-run as pass. Keep real personal content out of published test evidence. Initial fixtures are development examples, not a qualification corpus (target at least 200 development and 100 distinct held-out utterances per spec).
+For each run record: commit SHA, date, OS/toolchain/device, command or manual steps, fixture version, test count, passes/fails/skips, artifacts, limitations, next action. Never treat not-run as pass. Keep real personal content out of published test evidence. Use at least 200 development turns and 100 distinct held-out turns. The [M11 corpus](../Tests/Fixtures/m11/README.md) supplies separately rendered and labeled splits.
 
 ## M10.1 inputs to M11
 
@@ -21,3 +21,13 @@ For each run record: commit SHA, date, OS/toolchain/device, command or manual st
 - Check Speech Recognition permission, classic and installed SpeechAnalyzer modes, ElevenLabs strategies, OpenAI and Deepgram drains, valid and invalid credentials, supported models, context budgets, and separate provider billing.
 - Measure speech-end to useful displayed text against an annotated reference. Report all failed and timed-out requests, per-stage durations and missing timing boundaries. Include multi-part prompts, candidate-dependent follow-ups and mixed-speaker recordings.
 - Qualify ChatGPT plan use only after distribution eligibility, model and authorization are verified. No real account or hardware was used in the M10.1 development suite.
+
+## M11 execution
+
+The owner narrowed production provider qualification to OpenAI. Run real `gpt-live-transcribe`, Luna `none` classification and optional background summary, Sol `low` streaming answers and post-interview evaluation, and `text-embedding-3-small` retrieval. Retain deterministic regression coverage for every adapter. Alternate-provider credentials, Scribe graceful drain and alternate-provider benchmarks are outside the current production gates. ChatGPT activation remains eligibility-gated.
+
+Exercise Focus and Chat against the same active native session. Confirm chronological cards, visible streaming, scroll-up while answers continue, Jump to Latest, narrow-window layout and both modes in Compact. In the memory check, interleave interviewer prompts, candidate speech, a correction and generated suggestions. Confirm actual dialogue drives follow-ups, unassigned speech and suggestions stay out of learned context, profile evidence remains separate and cancellation or failure of background summarization cannot block an answer.
+
+Use the [AT-01–18 evidence table](verification/m11-final-acceptance.md) for current status and report Passed, Failed, Blocked or Not tested. Keep pipeline estimates and live text classification distinct from independently timed displayed responses and real audio question accuracy. For the compact window regression, launch the native application, open Compact from the workspace, click Expand, and verify that the Window menu and accessibility tree show the same single workspace. Repeat after opening Compact with the configured shortcut.
+
+For the presentation regression, render a synthetic answer containing paragraphs, a heading, inline emphasis, ordered and unordered steps, and a fenced code example. Inspect wide and compact layouts, including accessibility labels. For the startup regression, relaunch an unsigned test build with pre-existing provider items and confirm an idle workspace and status labels without a prompt on launch. Keep explicit provider access subject to macOS authorization.

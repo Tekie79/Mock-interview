@@ -9,6 +9,8 @@ public enum CaptureFailure: Error, Equatable, Sendable {
     case sourceUnavailable
     case permissionDenied
     case bufferOverrun
+    case hardwareStartupTimedOut
+    case hardwareStartupBusy
     case hardware(Int32)
 }
 

@@ -19,6 +19,19 @@ public enum ProviderService: String, Codable, CaseIterable, Sendable {
     case transcription, classification, answer, embeddings
 }
 
+public enum ReasoningEffort: String, Codable, CaseIterable, Sendable {
+    case modelDefault, none, low, medium, high, xhigh, max
+
+    public var label: String {
+        switch self {
+        case .modelDefault: "Model default"
+        case .xhigh: "Extra high"
+        case .max: "Maximum"
+        default: rawValue.capitalized
+        }
+    }
+}
+
 public enum ProviderAuthentication: String, Sendable {
     case systemPermission, apiKey, approvedHostSignIn
 }
@@ -93,7 +106,7 @@ public struct ProviderCapabilities: Equatable, Sendable {
             let semantic = model == "scribe_v3_live"
             return .init(provider: provider, services: [.transcription], authentication: .apiKey,
                          billing: .separatelyBilledAPI, models: ["scribe_v3_live", "scribe_v2_realtime"],
-                         streams: true, designatedLanguage: true, detectsLanguage: true, wordTimestamps: true,
+                         streams: true, designatedLanguage: true, detectsLanguage: true, wordTimestamps: true, diarization: semantic,
                          commits: semantic ? [.manual, .voiceActivity, .semanticTurn] : [.manual, .voiceActivity],
                          vocabularyHints: true)
         case .deepgram:
@@ -118,6 +131,62 @@ public struct ProviderCapabilities: Equatable, Sendable {
 
     public func supports(_ service: ProviderService) -> Bool {
         unavailableReason == nil && services.contains(service)
+    }
+
+    private static let standardEfforts: [ReasoningEffort] = [.low, .medium, .high]
+    private static let openAITextModels: [(id: String, efforts: [ReasoningEffort])] = [
+        ("gpt-4.1-mini", []), ("gpt-4.1", []),
+        ("gpt-6-luna", [.none] + standardEfforts + [.xhigh, .max]),
+        ("gpt-6.2-sol", standardEfforts + [.xhigh, .max]),
+        ("gpt-5.4-mini", [.none] + standardEfforts + [.xhigh])
+    ]
+    private static let anthropicTextModels: [(id: String, efforts: [ReasoningEffort])] = [
+        ("claude-haiku-4-5", []), ("claude-sonnet-4-6", standardEfforts + [.max]),
+        ("claude-haiku-5-5", standardEfforts + [.xhigh, .max]),
+        ("claude-sonnet-5-5", standardEfforts + [.xhigh, .max])
+    ]
+
+    private static func textCatalog(_ provider: ProviderID) -> [(id: String, efforts: [ReasoningEffort])] {
+        switch provider {
+        case .openai: openAITextModels
+        case .anthropic: anthropicTextModels
+        default: []
+        }
+    }
+
+    public static func textModels(_ provider: ProviderID) -> [String] {
+        textCatalog(provider).map(\.id)
+    }
+
+    public static func reasoningEfforts(_ provider: ProviderID, model: String, service: ProviderService) -> [ReasoningEffort] {
+        let efforts = textCatalog(provider).first { entry in
+            if entry.id == model { return true }
+            return entry.id == "gpt-5.4-mini" && model == "gpt-5.4-mini-2026-03-17"
+        }?.efforts ?? []
+        switch service {
+        case .answer: return efforts
+        // Classification must fit the live question deadline.
+        case .classification: return efforts.filter { $0 == .none || $0 == .low }
+        default: return []
+        }
+    }
+
+    public static func effectiveReasoning(_ effort: ReasoningEffort, provider: ProviderID,
+                                          model: String, service: ProviderService) -> ReasoningEffort {
+        reasoningEfforts(provider, model: model, service: service).contains(effort) ? effort : .modelDefault
+    }
+
+    static func textOutputLimit(_ provider: ProviderID, model: String, service: ProviderService,
+                                effort: ReasoningEffort) -> Int {
+        if effort == .none || reasoningEfforts(provider, model: model, service: service).isEmpty {
+            return service == .classification ? 650 : 1_200
+        }
+        if service == .classification { return 2_048 }
+        switch effort {
+        case .high: return 8_192
+        case .xhigh, .max: return 16_384
+        default: return 4_096
+        }
     }
 }
 

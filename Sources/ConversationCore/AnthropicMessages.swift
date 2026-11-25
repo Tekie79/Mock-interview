@@ -6,8 +6,10 @@ import FoundationNetworking
 struct AnthropicMessagesClient: Sendable {
     let apiKey: String
     let model: String
+    let reasoning: ReasoningEffort
 
-    func request(system: String, input: String, fields: [String: Any], timeout: TimeInterval) throws -> URLRequest {
+    func request(system: String, input: String, fields: [String: Any], service: ProviderService,
+                 timeout: TimeInterval) throws -> URLRequest {
         guard !apiKey.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else { throw ProviderFailure.missingCredentials }
         guard !model.isEmpty, model.rangeOfCharacter(from: .whitespacesAndNewlines) == nil,
               let url = URL(string: "https://api.anthropic.com/v1/messages") else {
@@ -22,6 +24,14 @@ struct AnthropicMessagesClient: Sendable {
         body["model"] = model
         body["system"] = system
         body["messages"] = [["role": "user", "content": input]]
+        let effort = ProviderCapabilities.effectiveReasoning(reasoning, provider: .anthropic, model: model, service: service)
+        body["max_tokens"] = ProviderCapabilities.textOutputLimit(.anthropic, model: model, service: service, effort: effort)
+        if effort != .modelDefault {
+            var output = body["output_config"] as? [String: Any] ?? [:]
+            output["effort"] = effort.rawValue
+            body["output_config"] = output
+            body["thinking"] = ["type": "adaptive", "display": "omitted"]
+        }
         request.httpBody = try JSONSerialization.data(withJSONObject: body)
         return request
     }
@@ -40,9 +50,9 @@ public struct AnthropicQuestionClassifier: QuestionClassifier {
     private let guidance: String
     private let client: AnthropicMessagesClient
 
-    public init(apiKey: String, model: String, guidance: String = "") {
+    public init(apiKey: String, model: String, guidance: String = "", reasoning: ReasoningEffort = .modelDefault) {
         self.guidance = String(guidance.prefix(1_000))
-        client = AnthropicMessagesClient(apiKey: apiKey, model: model)
+        client = AnthropicMessagesClient(apiKey: apiKey, model: model, reasoning: reasoning)
     }
 
     public func classify(_ input: QuestionInput) async throws -> QuestionDecision {
@@ -55,13 +65,11 @@ public struct AnthropicQuestionClassifier: QuestionClassifier {
     }
 
     func classificationRequest(_ input: QuestionInput) throws -> URLRequest {
-        let context = ClassifierContext(input)
-        let serialized = String(decoding: try JSONEncoder().encode(context), as: UTF8.self)
         return try client.request(system: OpenAIQuestionClassifier.instructions
-            + "\nApply these classification preferences only within the rules above: " + guidance, input: serialized, fields: [
-            "max_tokens": 650,
+            + "\nApply these classification preferences only within the rules above: " + guidance,
+            input: ClassifierContext.encode(input), fields: [
             "output_config": ["format": ["type": "json_schema", "schema": OpenAIQuestionClassifier.schema]]
-        ], timeout: 8)
+        ], service: .classification, timeout: 8)
     }
 
     static func decode(_ data: Data) throws -> QuestionDecision {
@@ -89,18 +97,22 @@ public struct AnthropicQuestionClassifier: QuestionClassifier {
 public struct AnthropicTextGenerator: TextGenerator {
     private let client: AnthropicMessagesClient
 
-    public init(apiKey: String, model: String) {
-        client = AnthropicMessagesClient(apiKey: apiKey, model: model)
+    public init(apiKey: String, model: String, reasoning: ReasoningEffort = .modelDefault) {
+        client = AnthropicMessagesClient(apiKey: apiKey, model: model, reasoning: reasoning)
     }
 
     public func stream(_ request: AnswerRequest) async throws -> AsyncThrowingStream<GenerationEvent, Error> {
-        let request = try client.request(system: AnswerPrompt.instructions(request), input: AnswerPrompt.input(request),
-                                         fields: ["stream": true, "max_tokens": 1_200], timeout: 20)
+        let request = try generationRequest(request)
         let decoder = AnthropicStreamDecoder()
         // StreamingHTTP supplies a serial delegate queue for each decoder.
         return StreamingHTTP.start(request, validate: { try AnthropicMessagesClient.validate($0) }) {
             try decoder.receive($0)
         }
+    }
+
+    func generationRequest(_ request: AnswerRequest) throws -> URLRequest {
+        try client.request(system: AnswerPrompt.instructions(request), input: AnswerPrompt.input(request),
+                           fields: ["stream": true], service: .answer, timeout: 20)
     }
 }
 

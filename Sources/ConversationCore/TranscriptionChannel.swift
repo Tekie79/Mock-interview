@@ -8,6 +8,7 @@ public enum ChannelEvent: Sendable {
     case dropped(source: CaptureSource, chunks: Int)
     case sentAudio(source: CaptureSource, samples: Int)
     case candidateSpeech(source: CaptureSource, epoch: UUID, start: ContinuousClock.Instant, end: ContinuousClock.Instant)
+    case questionSpeech(source: CaptureSource, epoch: UUID)
 }
 
 enum TranscriptionRecoveryFailure: Error {
@@ -21,6 +22,7 @@ public struct TranscriptionChannel: Sendable {
     private let makeSTT: @Sendable () -> any StreamingSTT
     private let threshold: Float
     private let replay: Bool
+    var isReplay: Bool { replay }
     private let drainTimeout: Duration
     private let recognitionTimeout: Duration
     private let heartbeatInterval: Duration
@@ -104,6 +106,7 @@ public struct TranscriptionChannel: Sendable {
                 var latest: AudioFrame?
                 var latestVoicedAt: ContinuousClock.Instant?
                 var lastSpeechReport: ContinuousClock.Instant?
+                var lastQuestionReport: ContinuousClock.Instant?
                 var sampleUsage = 0
 
                 func send(_ frame: AudioFrame, voiced: Bool = false) async throws {
@@ -132,6 +135,11 @@ public struct TranscriptionChannel: Sendable {
                     let voiced = activity.level >= threshold
                     if voiced {
                         latestVoicedAt = frame.capturedAt.advanced(by: .seconds(Double(frame.pcm.count / 2) / 24_000))
+                    }
+                    if source.role == .interviewer, voiced,
+                       lastQuestionReport.map({ $0.duration(to: frame.capturedAt) >= .milliseconds(100) }) != false {
+                        lastQuestionReport = frame.capturedAt
+                        await events(.questionSpeech(source: source, epoch: epoch))
                     }
                     await events(.level(source: source, value: activity.level))
                     if source.role == .candidate, let end = latestVoicedAt, voiced || activity.shouldCommit {
@@ -199,6 +207,10 @@ public struct TranscriptionChannel: Sendable {
                 for try await transcript in transcripts {
                     try Task.checkCancellation()
                     guard transcript.source == source, transcript.epoch == epoch else { continue }
+                    if case .speakerMerge = transcript.state {
+                        await events(.transcript(transcript))
+                        continue
+                    }
                     guard let tagged = await progress.tag(transcript) else { continue }
                     await events(.transcript(tagged))
                     await progress.delivered(tagged)

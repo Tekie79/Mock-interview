@@ -10,6 +10,23 @@ public enum QuestionAudioKind: String, CaseIterable, Codable, Identifiable, Send
     public var id: String { rawValue }
 }
 
+public enum QuestionAudioAttribution: String, CaseIterable, Sendable {
+    case unresolved = "Mixed audio · Manual answers"
+    case speakerLabels = "Mixed audio · Assign speakers"
+    case interviewerOnly = "Interviewer-only audio"
+}
+
+public enum QuestionAudioMode: Equatable, Sendable {
+    case trustedInterviewerOnly, separateChannels, diarized, unresolved
+
+    public var questionRole: SourceRole {
+        switch self {
+        case .trustedInterviewerOnly, .separateChannels: .interviewer
+        case .diarized, .unresolved: .unknown
+        }
+    }
+}
+
 public struct AudioEndpointChoice: Identifiable, Hashable, Sendable {
     public let id: String
     public let name: String
@@ -28,6 +45,9 @@ public struct AudioRoutePreference: Codable, Equatable, Sendable {
     public var interviewerMicrophoneUID: String?
     public var candidateMicrophoneUID: String?
     public var candidateEnabled: Bool
+    public var labelOutputSpeakers: Bool?
+    private var trustedOutput: String?
+    private var previousQuestionAudio: QuestionAudioKind?
 
     public init(question: QuestionAudioKind = .application, outputUID: String? = nil,
                 applicationID: String? = nil, interviewerMicrophoneUID: String? = nil,
@@ -40,11 +60,59 @@ public struct AudioRoutePreference: Codable, Equatable, Sendable {
         self.candidateEnabled = candidateEnabled
     }
 
+    public mutating func setOtherDeviceInterview(_ enabled: Bool) {
+        if enabled, question != .sharedMicrophone {
+            previousQuestionAudio = question
+            question = .sharedMicrophone
+        } else if !enabled, question == .sharedMicrophone {
+            question = previousQuestionAudio ?? .application
+        }
+    }
+
     public func validateConcurrentMicrophones() throws {
         if candidateEnabled, question == .interviewerMicrophone || question == .sharedMicrophone,
            let interviewerMicrophoneUID, interviewerMicrophoneUID == candidateMicrophoneUID {
             throw CaptureFailure.conflictingMicrophones
         }
+    }
+
+    public var questionUsesOutput: Bool {
+        question == .application || question == .defaultOutput || question == .outputDevice
+    }
+
+    public var requiresSpeakerLabels: Bool {
+        question == .sharedMicrophone || (questionUsesOutput && labelOutputSpeakers == true)
+    }
+
+    private var outputIdentity: String? {
+        switch question {
+        case .defaultOutput: "default"
+        case .application: applicationID.map { "application:" + $0 }
+        case .outputDevice: outputUID.map { "output:" + $0 }
+        default: nil
+        }
+    }
+
+    public var outputAttribution: QuestionAudioAttribution {
+        get {
+            if labelOutputSpeakers == true { return .speakerLabels }
+            if let outputIdentity, trustedOutput == outputIdentity { return .interviewerOnly }
+            return .unresolved
+        }
+        set {
+            labelOutputSpeakers = newValue == .speakerLabels
+            trustedOutput = newValue == .interviewerOnly ? outputIdentity : nil
+        }
+    }
+
+    public func questionMode(speakerLabelsAvailable: Bool, replayAttribution: QuestionAudioAttribution = .unresolved) -> QuestionAudioMode {
+        if requiresSpeakerLabels || (question == .replay && replayAttribution == .speakerLabels) {
+            return speakerLabelsAvailable ? .diarized : .unresolved
+        }
+        let trusted = question == .interviewerMicrophone || (question == .replay && replayAttribution == .interviewerOnly)
+            || (questionUsesOutput && outputAttribution == .interviewerOnly)
+        guard trusted else { return .unresolved }
+        return candidateEnabled ? .separateChannels : .trustedInterviewerOnly
     }
 }
 

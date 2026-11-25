@@ -61,6 +61,7 @@ public struct TranscriptEvent: Equatable, Sendable {
     public enum State: Equatable, Sendable {
         case partial
         case final
+        case speakerMerge(from: Int, to: Int)
     }
 
     public let source: CaptureSource
@@ -188,18 +189,30 @@ public protocol QuestionClassifier: Sendable {
 
 public struct AnswerRequest: Equatable, Sendable {
     public let question: String
+    public let originalQuestion: String?
+    public let questionParts: [String]
     public let instructions: String
     public let evidence: [String]
+    public let pastWorkExamples: [String]
+    public let profileTraining: ProfileAnswerTraining?
     public let coaching: CoachingInput?
     public let interviewContext: [String]
+    public let sessionSummaries: [String]
 
     public init(question: String, instructions: String, evidence: [String], coaching: CoachingInput? = nil,
-                interviewContext: [String] = []) {
+                interviewContext: [String] = [], questionParts: [String] = [], originalQuestion: String? = nil,
+                pastWorkExamples: [String] = [], profileTraining: ProfileAnswerTraining? = nil,
+                sessionSummaries: [String] = []) {
         self.question = question
+        self.originalQuestion = originalQuestion
+        self.questionParts = questionParts
         self.instructions = instructions
         self.evidence = evidence
+        self.pastWorkExamples = pastWorkExamples
+        self.profileTraining = profileTraining
         self.coaching = coaching
         self.interviewContext = interviewContext
+        self.sessionSummaries = sessionSummaries
     }
 }
 

@@ -1,5 +1,9 @@
 # Implementation status
 
+The revised M11 scope targets OpenAI. Chat View shares answer history and active streaming with Focus in both windows. Adaptive session memory keeps attributed finalized speech and optional older summaries apart from generated suggestions and approved profile evidence. Alternate provider implementations and their deterministic tests remain available outside production qualification. See the [current acceptance report](verification/m11-final-acceptance.md#revised-openai-scope-after-224627c) and [draft PR #3](https://github.com/Tekie79/Mock-interview/pull/3).
+
+The M11 release candidate bounds question-round assembly, requires explicit interviewer attribution, limits native hardware startup waits and refines Scribe final coverage. Its local suite passed 153 XCTest cases. Release remains on hold for native dual-source stability, live corpus and Scribe qualification, independent display timing, remote endurance and signed-install validation. [M11 RC evidence](verification/m11-final-acceptance.md#release-candidate-after-f726664) · [Draft PR #3](https://github.com/Tekie79/Mock-interview/pull/3)
+
 The original bootstrap is documented in the baseline evidence below. Status vocabulary: NOT STARTED, IN PROGRESS, IMPLEMENTED (qualification pending), QUALIFIED, BLOCKED. Include evidence for every transition.
 
 | Milestone | Status | Notes |
@@ -16,7 +20,7 @@ The original bootstrap is documented in the baseline evidence below. Status voca
 | M09 | IMPLEMENTED (qualification pending) | Opt-in saved history with SQLite search, review and missed questions, text export, and solo practice with AI-estimate coaching. |
 | M10 | IMPLEMENTED (qualification pending) | DOCX text extraction, opt-in hybrid retrieval, and explicit epoch-scoped roles for diarized mixed microphone speech. |
 | M10.2 | IMPLEMENTED (qualification pending) | Finalization, cross-source gating, watchdog, account lifecycle, native capture and provider hardening. See the development verification record. Live ChatGPT authorization depends on official eligibility. |
-| M11 | NOT STARTED | Final qualification |
+| M11 | IN PROGRESS | Native unsigned package and live provider smoke verified. Final latency, release and hardware gates remain open. |
 
 ## Verification log
 
@@ -125,3 +129,42 @@ See `docs/verification/baseline.md` for the initial build/test run. No native Ma
 - Automatic answer provenance is retained with the answer, including in saved sessions. Late attribution corrections withdraw affected answers and remove the question from follow-up context. Explicit manual answers and original transcript text are retained.
 - Graceful drain distinguishes unresolved audio from confirmed recognition and silence. ElevenLabs tracks remaining voiced intervals and independent commit acknowledgments, including when timestamped results overlap or arrive out of order.
 - Validation uses the full Linux and macOS 15/26 matrix and unsigned macOS packaging. Exact-head test counts and warning evidence are recorded in PR #2. Live ChatGPT authorization remains gated and M11 remains pending. [Development verification](verification/m10-2.md)
+
+## M11 acceptance
+
+- Apple Silicon native startup, unsigned packaging, default and explicit built-in speaker capture, hardware enumeration, local storage and workspace accessibility checks ran on macOS 26.3.2.
+- Actual Apple speech, OpenAI, and ElevenLabs PCM smoke reached final results. OpenAI classification, answer streaming and embeddings responded successfully. Deepgram and Anthropic live checks require keys. Live ChatGPT authorization still requires official eligibility.
+- The initial held-out text run measured 85.96% precision and 98.00% recall. Subsequent checks distinguish text classification, audio replay and physical capture. The release remains subject to independently measured visible-answer latency, long-session stability and the open scenarios in the [acceptance record](verification/m11-final-acceptance.md).
+
+- The selected answer format renders short paragraphs, Talking points, STAR headings, and technical sections and code. **Requested word limit** replaces the format default in the generation request. The UI identifies that actual output can exceed the requested count. [M11 native verification](verification/m11-final-acceptance.md)
+
+- **Interview on another device** exposes the shared-microphone workflow with confirmed speaker roles. The ElevenLabs Scribe v3 Live path pairs indexed speech commits and speaker labels. The Deepgram Nova path remains available. Physical room tests and live shared-mic account qualification remain open.
+
+- **Wait for silence** collects finalized pieces into question rounds, with live adjustment from 0 to 6 seconds and a two-second default. Resumed speech extends waiting. Each classified round generates one answer containing its approved requests in order. Live end-to-end latency and complex room pauses remain to be measured.
+
+- Scenarios lead with a practical conditional response. Approved facts remain the basis for claims about past experience. Profiles provide explicit file types, batch attachment by purpose, a separate paste control, and source-linked Markdown facts.
+
+- New profile attachments and directly added experience are ready for answers without a per-fact review step. Upgrades preserve explicit exclusions and leave legacy pending facts excluded until the owner enables them. The earlier migration did not record which confirmed facts it promoted. Existing confirmed records are preserved.
+
+- Experience answers use specific, directly relevant profile facts or a labeled practice scenario. Talking points use words the candidate can say aloud. Retrieval includes the original wording and a trusted prior question when referenced. The workspace remembers the selected profile for the next session.
+
+- Question classification and Answer generation have independent model and reasoning menus for OpenAI and Anthropic. Custom model IDs and existing presets are retained. Reasoning settings are saved with provider presets, and account-specific model access is checked through the existing connection tests.
+
+- **Answer training** in Profiles stores skills and a sample of the candidate's speaking style. Recorded project stories become individual experience facts with optional source, destination, data and outcome. Broad past-work questions can retrieve approved project examples independently of their wording, and the generation policy favors an actual project in first-person past tense.
+
+- Compact and the main workspace share Start, Pause, Resume and Stop controls. Compact also shows startup errors and session issues from the selected sources and providers.
+
+### Acceptance corrections after 41c243a
+
+- Shared output can use explicit speaker assignment. The question gate rejects narration, quotations and agreement checks while retaining direct requests. The physical recording diagnostic still passed two ambiguous clips to the classifier. M11-08 remains an open quality gate.
+- Scribe pairs plain and timestamped commit results across punctuation differences and keeps later timed results pending until earlier companions can be placed. The isolated live strategy comparison remains open. The default GPT-4.1 mini stays in place pending account qualification of the newer selections.
+- Capture now preserves the tap when stream and sample-rate notifications report the same configuration. Both baseline and candidate passed 20 physical adapter starts. The intermittent native **Test Audio** failure did not reproduce in that probe.
+- Document import combines continuous wrapped text, omits incomplete fragments from the evidence index and records source locations. Native fixtures exercise simple two-column PDF extraction. Local verification passed 139 tests and unsigned packaging. Physical microphone and overlap, live model and grounding, visible-latency and real 90-minute evidence remain open. [Acceptance evidence](verification/m11-final-acceptance.md) · [Draft PR #3](https://github.com/Tekie79/Mock-interview/pull/3)
+
+### Acceptance continuation after b2946d6
+
+- Ambiguous utterances reach semantic classification. Regression cases cover first-person framing, indirect requests, quoted prompts and conversational follow-ups. Exact logistics, unresolved roles and incomplete-turn handling still run before classification.
+- The frozen holdout has an independent Apple SpeechAnalyzer transcription score. A recorded-speech replay compares zero-, half-, one- and two-second assembly windows with controlled finals. The release gate uses independently marked speech-end to useful displayed text. [Benchmark](verification/m11-performance-benchmark.md)
+- The 90-minute synthetic playback track and candidate reference build from the labeled corpus. The owner confirmed that a second endpoint remains unavailable. [Playback setup](../Tests/Fixtures/m11/README.md#90-minute-remote-playback)
+- The native mixed-feed frozen run returned 95 live OpenAI finals and zero cards at one second of added silence. The Scribe strategy comparison completed cards in every mode and surfaced an unresolved-audio drain in all three. These results are release blockers. [Provider qualification](verification/m11-provider-qualification.md)
+- The app reuses authorized provider credentials during the current launch. Keychain operations run off the UI thread. Microphone and Speech setup check the existing OS authorization first. Unsigned builds can prompt again under macOS application identity rules. [Permission verification](verification/m11-audio-compatibility.md)

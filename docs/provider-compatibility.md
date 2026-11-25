@@ -1,5 +1,23 @@
 # Provider capabilities and authority
 
+## M11 production qualification scope
+
+| Workflow | OpenAI configuration under qualification |
+|---|---|
+| Realtime recognition | `gpt-live-transcribe` with independently identified interviewer and candidate streams |
+| Question classification | `gpt-6-luna`, reasoning `none`, structured Responses output |
+| Streaming answers and post-interview evaluation | `gpt-6.2-sol`, reasoning `low`, streamed Responses output |
+| Optional older-session summarization | `gpt-6-luna`, reasoning `none`, asynchronous bounded Responses request |
+| Optional semantic retrieval | `text-embedding-3-small`, 256 dimensions, index of approved material |
+
+The OpenAI API is the primary qualification scope. **Apply OpenAI M11 Configuration** selects the target models and reasoning in Settings. Classification and answer settings can still be changed independently. Embedding indexing and background session summarization have separate controls. The configuration label identifies the scope under test. Release qualification depends on the evidence gates below. [M11 provider evidence](verification/m11-provider-qualification.md)
+
+ElevenLabs, Deepgram, Anthropic, Apple Speech and other model configurations remain available outside this production qualification. ElevenLabs live tests, graceful-drain qualification and performance benchmarking are deferred. The deterministic adapter regressions still run. ChatGPT subscription access remains unavailable until the official eligibility requirements are satisfied.
+
+OpenAI Realtime audio attribution depends on separate selected sources or a deliberately designated interviewer-only source. Shared microphones and mixed output with unresolved voices support transcription and manually requested answers. The app does not use question semantics to identify speakers.
+
+## Adapter capabilities
+
 | Provider | Transcription | Classification / text | Authentication and billing |
 |---|---|---|---|
 | Apple Speech | Common PCM from any route, local discovery, explicit strict or network-permitted mode, partials, per-segment rollover, vocabulary hints | Unavailable | macOS Speech Recognition permission |
@@ -11,13 +29,15 @@
 
 Transcription, classifier, answer and embeddings selections are independent. Connection tests are per service and can send synthetic requests. Provider model lists are documented possibilities, with account availability validated on connection. Diagnostic messages expose typed states and counters and omit response bodies, credentials and dialogue.
 
+Question classification and Answer generation provide separate model and reasoning dropdowns for OpenAI and Anthropic. The model menu also accepts custom IDs. The app only sends explicit effort on known compatible models. Classification offers low-effort options within the live deadline. OpenAI uses Responses `reasoning.effort`; Anthropic uses Messages `output_config.effort` with adaptive thinking and omitted thinking text. Model default omits explicit effort, and existing presets without the new fields use that default. [OpenAI reasoning](https://developers.openai.com/api/docs/guides/reasoning) · [Claude effort](https://platform.claude.com/docs/en/build-with-claude/effort) · [Claude thinking](https://platform.claude.com/docs/en/build-with-claude/thinking)
+
 ## Apple Speech
 
 On macOS 26 and later, strict recognition selects the on-device SpeechAnalyzer path when compatible assets are already installed and no custom vocabulary is requested. It negotiates the analyzer's PCM format, handles volatile and final ranges, and drains after input ends. Earlier systems, network-permitted mode and custom vocabulary use the classic `SFSpeechAudioBufferRecognitionRequest` path. It discovers installed recognizer capabilities for the selected locale, applies `requiresOnDeviceRecognition` on every strict request and never automatically switches to network recognition. It uses bounded overlapping tasks for completed segments and publishes finals in request order. Speech permission, actual recognizer availability, language accuracy and resource behavior need a physical Mac. [Apple Speech](https://developer.apple.com/documentation/speech)
 
 ## ElevenLabs
 
-The native WebSocket checks the `session_started` model and PCM format before capture. It sends batched 24 kHz mono PCM and tracks submitted voice, commit requests and transcript companions independently. Its voiced-audio tracking uses the same local sensitivity as the transcription channel. A timestamped final can clear only attributable earlier audio. A missing, empty, duplicate or unpositioned result cannot acknowledge newer pending speech. An unresolved drain reports incomplete transcription. Scribe v3 Live turn probability contributes completion evidence alongside the source role and question checks. Submitted PCM is a local usage estimate. Provider billing can include silence. The adapter requests `enable_logging=false`, and ElevenLabs may still log sessions when zero retention is unavailable on the account. Deepgram supplies the live speaker labels used for explicit role assignment. [Realtime wire](https://elevenlabs.io/docs/api-reference/speech-to-text/v-1-speech-to-text-realtime) · [Commit strategies](https://elevenlabs.io/docs/eleven-api/guides/how-to/speech-to-text/realtime/transcripts-and-commit-strategies)
+The native WebSocket checks the `session_started` model and PCM format before capture. It sends batched 24 kHz mono PCM and tracks submitted voice, commit requests and transcript companions independently. Its voiced-audio tracking uses the same local sensitivity as the transcription channel. A timestamped final can clear only attributable earlier audio. A missing, empty, duplicate or unpositioned result cannot acknowledge newer pending speech. An unresolved drain reports incomplete transcription. Scribe v3 Live turn probability contributes completion evidence alongside the source role and question checks. Submitted PCM is a local usage estimate. Provider billing can include silence. The adapter requests `enable_logging=false`, and ElevenLabs may still log sessions when zero retention is unavailable on the account. In shared-microphone mode, Scribe v3 Live supplies indexed diarization. The app retains the original committed text and uses the matching diarized event for the speaker label and timing. A mixed or unlabeled segment stays unknown. Merged labels must be confirmed again. Deepgram Nova also supplies live labels for user assignment. OpenAI Realtime and Scribe v2 Realtime can transcribe the room without providing labels for automatic answers. [ElevenLabs diarization](https://elevenlabs.io/docs/eleven-api/guides/how-to/speech-to-text/realtime/diarization) [Realtime wire](https://elevenlabs.io/docs/api-reference/speech-to-text/v-1-speech-to-text-realtime) · [Commit strategies](https://elevenlabs.io/docs/eleven-api/guides/how-to/speech-to-text/realtime/transcripts-and-commit-strategies)
 
 The adapter subtracts each timestamped final from the pending voiced intervals. It tolerates a remainder of at most 20 ms per edge when the final overlaps at least 20 ms or half the pending interval, whichever is smaller. Each explicit commit needs a corresponding timestamped result and resolution of the voice inside its sample window. Later results can leave earlier commits pending. Plain commit companions retain order when available. An older timestamp-only result can still resolve a pending interval. These tolerances account for word boundaries in development and need live-provider qualification.
 

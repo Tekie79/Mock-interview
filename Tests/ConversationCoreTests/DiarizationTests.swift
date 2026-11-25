@@ -9,6 +9,44 @@ private struct DiarizedClassifier: QuestionClassifier {
 }
 
 final class DiarizationTests: XCTestCase {
+    func testSharedRoomOnlyGeneratesForConfirmedInterviewerAndRevokesAfterMerge() async throws {
+        let source = CaptureSource(id: "room", role: .unknown)
+        let stt = InjectedSTT()
+        let classifier = HeldClassifier(slow: false)
+        let session = InterviewSession(channels: [.init(source: source, audio: HeldAudio(), makeSTT: { stt })],
+                                       detector: .init(classifier: classifier), generator: FixedAnswer())
+        await session.start()
+        try await eventually { await session.current().connected.contains(source.id) }
+        await stt.send("Can you hear me?", item: "unreviewed-interviewer", speaker: 1)
+        await stt.send("Yes, can you hear me?", item: "unreviewed-candidate", speaker: 2)
+        try await eventually { await session.current().speakers.count == 2 }
+        let roles = await session.current().speakers
+        try await session.assignSpeaker(XCTUnwrap(roles.first { $0.id.number == 1 }).id, role: .interviewer)
+        try await session.assignSpeaker(XCTUnwrap(roles.first { $0.id.number == 2 }).id, role: .candidate)
+        await stt.send("Could you explain retries?", item: "candidate", speaker: 2)
+        await stt.send("Explain timeouts.", item: "mixed")
+        await stt.send("Explain idempotency.", item: "interviewer", speaker: 1)
+        try await eventually { await session.current().answers.first?.state == .complete }
+        let inputs = await classifier.inputs
+        XCTAssertEqual(inputs.map(\.turn.text), ["Explain idempotency."])
+        XCTAssertEqual(inputs.first?.conversation.map(\.role), [.candidate])
+
+        await stt.send("", item: "merge", state: .speakerMerge(from: 1, to: 2))
+        try await eventually {
+            let snapshot = await session.current()
+            return snapshot.answers.first?.state == .invalidated && snapshot.speakers.map(\.role) == [.unknown]
+        }
+        let merged = await session.current()
+        XCTAssertEqual(merged.transcript.first(where: { $0.text == "Explain idempotency." })?.speaker, 2)
+        XCTAssertEqual(merged.transcript.first(where: { $0.text == "Explain idempotency." })?.role, .unknown)
+        await stt.send("What about another retry?", item: "after-merge", speaker: 2)
+        try await eventually { await session.current().transcript.last?.text == "What about another retry?" }
+        let final = await session.current()
+        XCTAssertEqual(final.answers.count, 1)
+        XCTAssertEqual(final.transcript.last?.role, .unknown)
+        await session.stop()
+    }
+
     func testMixedWordsDoNotInheritSingleSpeakerLabel() throws {
         let source = CaptureSource(id: "mixed mic", role: .unknown)
         var stt = DeepgramTranscriptAssembler(source: source, epoch: UUID())

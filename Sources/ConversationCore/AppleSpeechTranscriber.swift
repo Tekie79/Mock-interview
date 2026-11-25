@@ -50,6 +50,8 @@ public actor AppleSpeechTranscriber: StreamingSTT {
     }
 
     static func requestRecognitionPermission() async -> Bool {
+        let status = SFSpeechRecognizer.authorizationStatus()
+        guard status == .notDetermined else { return status == .authorized }
         let permissions = AsyncStream<SFSpeechRecognizerAuthorizationStatus> { output in
             SFSpeechRecognizer.requestAuthorization {
                 output.yield($0)

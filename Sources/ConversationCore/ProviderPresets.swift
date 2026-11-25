@@ -13,11 +13,14 @@ public struct ProviderPreset: Codable, Identifiable, Equatable, Sendable {
     public var appleRecognitionMode: AppleRecognitionMode
     public var commit: TranscriptionCommitStrategy
     public var embeddingsModel: String?
+    public var classificationReasoning: ReasoningEffort?
+    public var answerReasoning: ReasoningEffort?
 
     public init(id: UUID = UUID(), name: String, transcription: ProviderID, transcriptionModel: String,
                 classifier: ProviderID, classificationModel: String, answer: ProviderID, answerModel: String,
                 language: String = "", appleRecognitionMode: AppleRecognitionMode = .onDevice,
-                commit: TranscriptionCommitStrategy = .manual, embeddingsModel: String? = nil) {
+                commit: TranscriptionCommitStrategy = .manual, embeddingsModel: String? = nil,
+                classificationReasoning: ReasoningEffort? = nil, answerReasoning: ReasoningEffort? = nil) {
         self.id = id
         self.name = name
         self.transcription = transcription
@@ -30,6 +33,8 @@ public struct ProviderPreset: Codable, Identifiable, Equatable, Sendable {
         self.appleRecognitionMode = appleRecognitionMode
         self.commit = commit
         self.embeddingsModel = embeddingsModel
+        self.classificationReasoning = classificationReasoning
+        self.answerReasoning = answerReasoning
     }
 
     public var unavailableReason: String? {
@@ -69,6 +74,12 @@ public struct ProviderPreset: Codable, Identifiable, Equatable, Sendable {
         next.id = UUID()
         next.name = name
         return next
+    }
+
+    public static var openAIQualification: Self {
+        .init(name: "OpenAI M11 qualification", transcription: .openai, transcriptionModel: "gpt-live-transcribe",
+              classifier: .openai, classificationModel: "gpt-6-luna", answer: .openai, answerModel: "gpt-6.2-sol",
+              embeddingsModel: "text-embedding-3-small", classificationReasoning: .some(.none), answerReasoning: .low)
     }
 
     public static func defaults() -> [Self] {

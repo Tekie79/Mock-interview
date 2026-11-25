@@ -1,8 +1,13 @@
 import AppKit
 import ConversationCore
+import LocalAuthentication
 import Security
 import SwiftUI
 import UniformTypeIdentifiers
+
+private enum WorkspaceWindow: String, Codable, Hashable {
+    case main
+}
 
 @main
 struct MockInterviewApp: App {
@@ -13,10 +18,12 @@ struct MockInterviewApp: App {
     @AppStorage("compactShortcut") private var compactShortcut = "k"
 
     var body: some Scene {
-        WindowGroup("Mock Interview", id: "workspace") {
+        WindowGroup("Mock Interview", id: "workspace", for: WorkspaceWindow.self) { _ in
             WorkspaceView(model: model)
                 .onAppear { appDelegate.model = model }
                 .frame(minWidth: 850, minHeight: 600)
+        } defaultValue: {
+            .main
         }
         .defaultSize(width: 1080, height: 720)
         .commands {
@@ -34,6 +41,10 @@ struct MockInterviewApp: App {
 
         Window("Compact Answer", id: "compact") {
             CompactView(model: model)
+                .onAppear { appDelegate.model = model }
+                .task {
+                    if model.store == nil { await model.load() }
+                }
                 .frame(minWidth: 300, minHeight: 210)
         }
         .defaultSize(width: 430, height: 285)
@@ -66,8 +77,23 @@ private final class InterviewAppDelegate: NSObject, NSApplicationDelegate {
 
 private enum Keychain {
     static let service = "com.mockinterview.desktop"
+    static let providers = ProviderCredentialStore(
+        read: { account in load(account) },
+        persist: { value, account in try save(value, account: account) }
+    )
 
-    static func load(_ account: String) -> String? {
+    static func configuredAccounts() -> Set<String> {
+        let authentication = LAContext()
+        authentication.interactionNotAllowed = true
+        return Set(["openai", "deepgram", "anthropic", "elevenlabs"].filter { account in
+            var query = base(account)
+            query[kSecUseAuthenticationContext as String] = authentication
+            query[kSecMatchLimit as String] = kSecMatchLimitOne
+            return SecItemCopyMatching(query as CFDictionary, nil) == errSecSuccess
+        })
+    }
+
+    private static func load(_ account: String) -> String? {
         var query = base(account)
         query[kSecReturnData as String] = true
         query[kSecMatchLimit as String] = kSecMatchLimitOne
@@ -77,7 +103,7 @@ private enum Keychain {
         return String(data: data, encoding: .utf8)
     }
 
-    static func save(_ value: String, account: String) throws {
+    private static func save(_ value: String, account: String) throws {
         let query = base(account)
         if value.isEmpty {
             let status = SecItemDelete(query as CFDictionary)
@@ -151,7 +177,7 @@ private struct SessionProviders {
         let classification = try ProviderSelection.decode(defaults.string(forKey: "classificationProvider"), default: TextProvider.openai)
         let answer = try ProviderSelection.decode(defaults.string(forKey: "answerProvider"), default: TextProvider.openai)
         let activityThreshold = Self.audioActivityThreshold(defaults: defaults)
-        let transcriber = try Self.transcriptionFactory(defaults: defaults, diarize: diarize, activityThreshold: activityThreshold)
+        let transcriber = try await Self.transcriptionFactory(defaults: defaults, diarize: diarize, activityThreshold: activityThreshold)
         self.classifier = try await Self.questionClassifier(defaults: defaults, provider: classification)
         self.generator = try await Self.answerGenerator(defaults: defaults, provider: answer)
         self.transcriber = transcriber
@@ -159,8 +185,10 @@ private struct SessionProviders {
         self.activityThreshold = activityThreshold
     }
 
-    private static func key(_ account: String) throws -> String {
-        guard let value = Keychain.load(account), !value.isEmpty else { throw ProviderFailure.missingCredentials }
+    private static func key(_ account: String) async throws -> String {
+        try Task.checkCancellation()
+        guard let value = await Keychain.providers.load(account) else { throw ProviderFailure.missingCredentials }
+        try Task.checkCancellation()
         return value
     }
 
@@ -169,7 +197,7 @@ private struct SessionProviders {
         return (0.005...0.08).contains(stored) ? Float(stored) : 0.015
     }
 
-    static func transcriptionFactory(defaults: UserDefaults, diarize: Bool = false, activityThreshold: Float? = nil) throws
+    static func transcriptionFactory(defaults: UserDefaults, diarize: Bool = false, activityThreshold: Float? = nil) async throws
         -> @Sendable () -> any StreamingSTT {
         let speech = try ProviderSelection.decode(defaults.string(forKey: "speechProvider"), default: SpeechProvider.openai)
         let language = defaults.string(forKey: "sttLanguage")
@@ -181,20 +209,21 @@ private struct SessionProviders {
             let mode = AppleRecognitionMode(rawValue: defaults.string(forKey: "appleSpeechMode") ?? "") ?? .onDevice
             return { AppleSpeechRouter(locale: locale, mode: mode, vocabulary: vocabulary) }
         case .eleven:
-            let credential = try key("elevenlabs")
+            let credential = try await key("elevenlabs")
             let model = defaults.string(forKey: "elevenModel") ?? "scribe_v3_live"
             let strategy = TranscriptionCommitStrategy(rawValue: defaults.string(forKey: "elevenCommit") ?? "") ?? .manual
             let config = ElevenLabsSpeechConfiguration(
                 model: model, language: language, detectLanguage: defaults.object(forKey: "elevenDetectLanguage") as? Bool ?? true,
                 strategy: strategy, silenceSeconds: defaults.object(forKey: "sttEndpoint") as? Double ?? 0.65,
-                vocabulary: vocabulary, localActivityThreshold: activityThreshold ?? audioActivityThreshold(defaults: defaults))
+                vocabulary: vocabulary, localActivityThreshold: activityThreshold ?? audioActivityThreshold(defaults: defaults),
+                diarize: diarize && ProviderCapabilities.describe(.elevenLabs, model: model).diarization)
             return { ElevenLabsTranscriber(apiKey: credential, configuration: config) }
         case .openai:
-            let credential = try key("openai")
+            let credential = try await key("openai")
             let model = defaults.string(forKey: "sttModel") ?? "gpt-live-transcribe"
             return { OpenAIRealtimeTranscriber(apiKey: credential, model: model, language: language, vocabulary: vocabulary) }
         case .deepgram:
-            let credential = try key("deepgram")
+            let credential = try await key("deepgram")
             let model = defaults.string(forKey: "deepgramModel") ?? "nova-3"
             let seconds = defaults.object(forKey: "sttEndpoint") as? Double ?? 0.65
             let endpoint = Int(min(3, max(0.1, seconds.isFinite ? seconds : 0.65)) * 1_000)
@@ -209,39 +238,51 @@ private struct SessionProviders {
         let instructions = defaults.string(forKey: "classificationInstructions") ?? ""
         switch provider {
         case .openai:
-            return OpenAIQuestionClassifier(apiKey: try key("openai"),
-                model: defaults.string(forKey: "questionModel") ?? "gpt-4.1-mini", guidance: instructions)
+            return OpenAIQuestionClassifier(apiKey: try await key("openai"),
+                model: defaults.string(forKey: "questionModel") ?? "gpt-4.1-mini", guidance: instructions,
+                reasoning: reasoning(defaults, "openAIQuestionReasoning"))
         case .anthropic:
-            return AnthropicQuestionClassifier(apiKey: try key("anthropic"),
-                model: defaults.string(forKey: "anthropicQuestionModel") ?? "claude-haiku-4-5", guidance: instructions)
+            return AnthropicQuestionClassifier(apiKey: try await key("anthropic"),
+                model: defaults.string(forKey: "anthropicQuestionModel") ?? "claude-haiku-4-5", guidance: instructions,
+                reasoning: reasoning(defaults, "anthropicQuestionReasoning"))
         case .chatGPT:
             guard let chatGPT else { throw PlanAuthorizationFailure.unavailable }
             return try await chatGPT.classifier(model: defaults.string(forKey: "chatGPTQuestionModel") ?? "", guidance: instructions)
         }
     }
 
-    static func embeddings(defaults: UserDefaults) throws -> (any TextEmbeddingProvider)? {
+    static func embeddings(defaults: UserDefaults) async throws -> (any TextEmbeddingProvider)? {
         guard defaults.bool(forKey: "semanticRetrieval") else { return nil }
-        return OpenAIEmbeddings(apiKey: try key("openai"),
+        return OpenAIEmbeddings(apiKey: try await key("openai"),
                                model: defaults.string(forKey: "embeddingModel") ?? "text-embedding-3-small")
+    }
+
+    static func summarizer() async throws -> OpenAISessionSummarizer {
+        OpenAISessionSummarizer(apiKey: try await key("openai"))
     }
 
     static func answerGenerator(defaults: UserDefaults, provider: TextProvider? = nil) async throws -> any TextGenerator {
         let answer = try provider ?? ProviderSelection.decode(defaults.string(forKey: "answerProvider"), default: TextProvider.openai)
         switch answer {
         case .openai:
-            return OpenAITextGenerator(apiKey: try key("openai"),
-                                       model: defaults.string(forKey: "answerModel") ?? "gpt-4.1-mini")
+            return OpenAITextGenerator(apiKey: try await key("openai"),
+                model: defaults.string(forKey: "answerModel") ?? "gpt-4.1-mini",
+                reasoning: reasoning(defaults, "openAIAnswerReasoning"))
         case .anthropic:
-            return AnthropicTextGenerator(apiKey: try key("anthropic"),
-                model: defaults.string(forKey: "anthropicAnswerModel") ?? "claude-haiku-4-5")
+            return AnthropicTextGenerator(apiKey: try await key("anthropic"),
+                model: defaults.string(forKey: "anthropicAnswerModel") ?? "claude-haiku-4-5",
+                reasoning: reasoning(defaults, "anthropicAnswerReasoning"))
         case .chatGPT:
             guard let chatGPT else { throw PlanAuthorizationFailure.unavailable }
             return try await chatGPT.generator(model: defaults.string(forKey: "chatGPTAnswerModel") ?? "")
         }
     }
 
-    static func testTextProvider(_ service: ProviderService, defaults: UserDefaults, question: String) async throws {
+    private static func reasoning(_ defaults: UserDefaults, _ key: String) -> ReasoningEffort {
+        defaults.string(forKey: key).flatMap(ReasoningEffort.init(rawValue:)) ?? .modelDefault
+    }
+
+    static func testTextProvider(_ service: ProviderService, defaults: UserDefaults, question: String) async throws -> String {
         let classification = service == .classification
         let provider = try ProviderSelection.decode(defaults.string(forKey: classification ? "classificationProvider" : "answerProvider"),
                                                     default: TextProvider.openai)
@@ -249,17 +290,32 @@ private struct SessionProviders {
             guard let chatGPT else { throw PlanAuthorizationFailure.unavailable }
             try await chatGPT.checkModel(defaults.string(forKey: classification ? "chatGPTQuestionModel" : "chatGPTAnswerModel") ?? "",
                 service: service, guidance: defaults.string(forKey: "classificationInstructions") ?? "")
+            return "The selected ChatGPT plan model passed its capability check."
         } else if classification {
             let classifier = try await questionClassifier(defaults: defaults, provider: provider)
             let source = CaptureSource(id: "Connection test", role: .interviewer)
+            let start = ContinuousClock.now
             let result = try await classifier.classify(QuestionInput(
                 turn: TranscriptEvent(source: source, epoch: UUID(), itemID: "test", text: question, state: .final),
                 previousQuestions: []))
             guard result.decision == .accept, !result.parts.isEmpty else { throw ProviderFailure.unsupportedCapability }
+            return "Structured answerable-question decision in \(milliseconds(since: start)) ms."
         } else {
             let generator = try await answerGenerator(defaults: defaults, provider: provider)
-            for try await _ in try await generator.stream(.init(question: question, instructions: "One sentence.", evidence: [])) {}
+            let start = ContinuousClock.now
+            var firstText: Int?
+            for try await event in try await generator.stream(.init(question: question, instructions: "One sentence.", evidence: [])) {
+                if case .text(let text) = event, firstText == nil, text.contains(where: { !$0.isWhitespace }) {
+                    firstText = milliseconds(since: start)
+                }
+            }
+            guard let firstText else { throw ProviderFailure.malformedEvent }
+            return "Answer stream completed. First text \(firstText) ms, completion \(milliseconds(since: start)) ms."
         }
+    }
+
+    static func milliseconds(since start: ContinuousClock.Instant) -> Int {
+        Int(start.duration(to: .now) / .milliseconds(1))
     }
 }
 
@@ -274,7 +330,11 @@ final class WorkspaceModel: ObservableObject {
     @Published var processes: [AudioEndpointChoice] = []
     @Published var microphones: [AudioEndpointChoice] = []
     @Published var outputs: [AudioEndpointChoice] = []
-    @Published var replayURL: URL?
+    @Published var replayURL: URL? {
+        didSet { if oldValue != replayURL { replayAttribution = .unresolved } }
+    }
+    @Published var replayAttribution: QuestionAudioAttribution = .unresolved
+    @Published private(set) var liveQuestionMode: QuestionAudioMode = .unresolved
     @Published var snapshot: InterviewSnapshot?
     @Published var error: String?
     @Published var busy = false
@@ -282,14 +342,17 @@ final class WorkspaceModel: ObservableObject {
     @Published var retainNextSession = false
     @Published var testLevels: [String: Float] = [:]
     @Published var profiles: [InterviewProfile] = []
-    @Published var profileID: UUID?
+    @Published var profileID = UserDefaults.standard.string(forKey: "selectedProfileID").flatMap(UUID.init(uuidString:)) {
+        didSet { UserDefaults.standard.set(profileID?.uuidString, forKey: "selectedProfileID") }
+    }
     @Published var selectedAnswer: UUID?
     @Published var pinned = false
     @Published var startedAt: Date?
     @Published var endedAt: Date?
     @Published var providerTest: String?
     @Published var checkingProvider = false
-    @Published var configuredKeys = Set(["openai", "deepgram", "anthropic", "elevenlabs"].filter { Keychain.load($0) != nil })
+    @Published var configuredKeys: Set<String> = []
+    private var keySettingsRevision = 0
     @Published private(set) var chatGPTSnapshot: ChatGPTPlanAccounts.Snapshot?
     @Published private(set) var chatGPTStatus: String?
     @Published private(set) var chatGPTBusy = false
@@ -304,7 +367,31 @@ final class WorkspaceModel: ObservableObject {
     private var chatGPTTask: Task<Void, Never>?
 
     var state: InterviewSnapshot.State { snapshot?.state ?? .idle }
+    var requestsSpeakerLabels: Bool {
+        route.requiresSpeakerLabels || (route.question == .replay && replayAttribution == .speakerLabels)
+    }
+
+    private var selectedQuestionMode: QuestionAudioMode {
+        let defaults = UserDefaults.standard
+        let provider = SpeechProvider(rawValue: defaults.string(forKey: "speechProvider") ?? "") ?? .openai
+        let model = switch provider {
+        case .eleven: defaults.string(forKey: "elevenModel") ?? "scribe_v3_live"
+        case .deepgram: defaults.string(forKey: "deepgramModel") ?? "nova-3"
+        default: ""
+        }
+        return route.questionMode(speakerLabelsAvailable: ProviderCapabilities.describe(provider.provider, model: model).diarization,
+                                  replayAttribution: replayAttribution)
+    }
     var active: Bool { state.isRunning || [.pausing, .paused, .stopping, .failed].contains(state) }
+    var startActionLabel: String? {
+        switch state {
+        case .idle, .stopped: "Start"
+        case .paused: "Resume"
+        default: nil
+        }
+    }
+    var canStartOrResume: Bool { startActionLabel != nil && !busy && !testing && !chatGPTBusy }
+
     var displayedAnswer: InterviewAnswer? {
         if let selectedAnswer,
            let result = snapshot?.answers.first(where: { $0.id == selectedAnswer }) { return result }
@@ -330,6 +417,9 @@ final class WorkspaceModel: ObservableObject {
         }
         await reloadProfiles()
         reloadDevices()
+        let revision = keySettingsRevision
+        let accounts = await Task.detached { Keychain.configuredAccounts() }.value
+        if revision == keySettingsRevision { configuredKeys = accounts }
     }
 
     func reloadDevices() {
@@ -352,18 +442,24 @@ final class WorkspaceModel: ObservableObject {
     }
 
     func saveKey(_ key: String, account: String) {
-        do {
-            let normalized = key.trimmingCharacters(in: .whitespacesAndNewlines)
-            try Keychain.save(normalized, account: account)
-            if normalized.isEmpty { configuredKeys.remove(account) } else { configuredKeys.insert(account) }
-            providerTest = nil
-        } catch {
-            self.error = "The provider key could not be updated in Keychain."
+        guard !busy, !checkingProvider, !active else { return }
+        busy = true
+        let normalized = key.trimmingCharacters(in: .whitespacesAndNewlines)
+        Task {
+            defer { busy = false }
+            do {
+                try await Keychain.providers.save(normalized, account: account)
+                keySettingsRevision += 1
+                if normalized.isEmpty { configuredKeys.remove(account) } else { configuredKeys.insert(account) }
+                providerTest = nil
+            } catch {
+                self.error = "The provider key could not be updated in Keychain."
+            }
         }
     }
 
     func checkProvider(_ service: ProviderService) {
-        guard !checkingProvider, !active, !chatGPTBusy else { return }
+        guard !checkingProvider, !active, !busy, !chatGPTBusy else { return }
         checkingProvider = true
         providerTest = "Checking \(service.rawValue)…"
         Task {
@@ -373,24 +469,46 @@ final class WorkspaceModel: ObservableObject {
                 let question = "What is a FIFO queue?"
                 switch service {
                 case .transcription:
-                    let factory = try SessionProviders.transcriptionFactory(defaults: defaults,
-                                                                            diarize: route.question == .sharedMicrophone)
+                    let factory = try await SessionProviders.transcriptionFactory(defaults: defaults,
+                                                                            diarize: requestsSpeakerLabels)
                     try await factory().testConnection()
                     providerTest = "Transcription provider acknowledged the connection."
-                case .classification:
-                    try await SessionProviders.testTextProvider(service, defaults: defaults, question: question)
-                    providerTest = "The classifier returned a structured answerable-question decision."
-                case .answer:
-                    try await SessionProviders.testTextProvider(service, defaults: defaults, question: question)
-                    providerTest = "The selected answer model completed a text stream."
+                case .classification, .answer:
+                    providerTest = try await SessionProviders.testTextProvider(service, defaults: defaults, question: question)
                 case .embeddings:
-                    guard let embeddings = try SessionProviders.embeddings(defaults: defaults),
+                    guard let embeddings = try await SessionProviders.embeddings(defaults: defaults),
                           try await embeddings.embed([question]).first?.isEmpty == false else {
                         throw ProviderFailure.unsupportedCapability
                     }
                     providerTest = "The embedding model returned a vector."
                 }
             } catch { providerTest = (error as? PlanAuthorizationFailure)?.errorDescription ?? publicErrorMessage(error) }
+        }
+    }
+
+    func checkSessionContext(evaluation: Bool) {
+        guard !checkingProvider, !active, !busy, !chatGPTBusy else { return }
+        checkingProvider = true
+        providerTest = evaluation ? "Checking evaluation…" : "Checking session summary…"
+        Task {
+            defer { checkingProvider = false }
+            do {
+                if evaluation {
+                    let score = try await coaching(.init(question: "How would you preserve message order?",
+                        candidateAnswer: "I would partition by customer and verify sequence numbers on retries."))
+                    guard score.range(of: "relevance", options: .caseInsensitive) != nil else { throw ProviderFailure.malformedEvent }
+                    providerTest = "Evaluation returned rubric feedback for a synthetic candidate answer."
+                } else {
+                    let summarizer = try await SessionProviders.summarizer()
+                    let start = ContinuousClock.now
+                    let result = try await summarizer.summarize([
+                        .init(id: "one", role: .interviewer, text: "Which queue retains messages for Project Larch?"),
+                        .init(id: "two", role: .candidate, text: "Project Larch uses a FIFO queue. I corrected the retention period to 14 days.")
+                    ])
+                    guard result.range(of: "Larch", options: .caseInsensitive) != nil else { throw ProviderFailure.malformedEvent }
+                    providerTest = "Session summary returned in \(SessionProviders.milliseconds(since: start)) ms."
+                }
+            } catch { providerTest = publicErrorMessage(error) }
         }
     }
 
@@ -437,7 +555,7 @@ final class WorkspaceModel: ObservableObject {
     }
 
     func startOrResume() {
-        guard !busy, !testing, !chatGPTBusy, !state.isRunning, state != .failed else { return }
+        guard canStartOrResume else { return }
         busy = true
         error = nil
         Task {
@@ -448,9 +566,10 @@ final class WorkspaceModel: ObservableObject {
             }
             do {
                 let options = UserDefaults.standard
-                let diarize = route.question == .sharedMicrophone
+                let diarize = requestsSpeakerLabels
                 let providers = try await SessionProviders(defaults: options, diarize: diarize)
-                let embedding = try? SessionProviders.embeddings(defaults: options)
+                let embedding = try? await SessionProviders.embeddings(defaults: options)
+                let summarizer = options.bool(forKey: "summarizeSession") ? try? await SessionProviders.summarizer() : nil
                 let format = AnswerFormat(rawValue: options.string(forKey: "answerFormat") ?? "") ?? .brief
                 let threshold = options.object(forKey: "questionThreshold") as? Double ?? 0.8
                 let profile = profiles.first(where: { $0.id == profileID })
@@ -461,8 +580,7 @@ final class WorkspaceModel: ObservableObject {
                 let answerWords = options.integer(forKey: "answerWordLimit")
                 let preferences = [
                     options.string(forKey: "answerInstructions") ?? "", profile?.instructions ?? "",
-                    responseLanguage.map { $0.isEmpty ? "" : "Answer language: " + $0 } ?? "",
-                    answerWords > 0 ? "Use no more than \(answerWords) words." : ""
+                    responseLanguage.map { $0.isEmpty ? "" : "Answer language: " + $0 } ?? ""
                 ].joined(separator: "\n")
                 let classificationBudget = ContextBudget(turns: options.object(forKey: "classifierContextTurns") as? Int ?? 12,
                                                          tokenBudget: options.object(forKey: "classifierContextBudget") as? Int ?? 3_000)
@@ -484,23 +602,29 @@ final class WorkspaceModel: ObservableObject {
                     channels: channels,
                     detector: QuestionDetector(classifier: providers.classifier, threshold: threshold,
                                                completionGrace: .seconds(grace)),
-                    generator: providers.generator,
-                    format: format, preferences: preferences, interviewContext: context,
+                    generator: providers.generator, summarizer: summarizer,
+                    format: format, preferences: preferences, interviewContext: context, answerWordLimit: answerWords,
+                    profileTraining: profile?.answerTraining,
+                    questionWait: Self.questionWaitDuration(options.object(forKey: "questionWaitSeconds") as? Double ?? 2),
                     classificationBudget: classificationBudget, answerBudget: answerBudget,
                     generationTimeout: .seconds(timeout), classificationEvidence: { question in
                         guard let store, let profile else { return [] }
                         return (try? await store.retrieve(question, profile: profile.id))?.map(\.promptText) ?? []
+                    }, pastWorkEvidence: {
+                        guard let store, let profile else { return [] }
+                        return (try? await store.pastWorkExamples(profile: profile.id))?.map(\.promptText) ?? []
+                    }, evidence: { question in
+                        guard let store, let profile else { return [] }
+                        if let embedding,
+                           let facts = try? await store.hybridRetrieve(question, profile: profile.id, provider: embedding) {
+                            return facts.map(\.promptText)
+                        }
+                        return (try? await store.retrieve(question, profile: profile.id))?.map(\.promptText) ?? []
                     }
-                ) { question in
-                    guard let store, let profile else { return [] }
-                    if let embedding,
-                       let facts = try? await store.hybridRetrieve(question, profile: profile.id, provider: embedding) {
-                        return facts.map(\.promptText)
-                    }
-                    return (try? await store.retrieve(question, profile: profile.id))?.map(\.promptText) ?? []
-                }
+                )
                 observations?.cancel()
                 session = next
+                liveQuestionMode = selectedQuestionMode
                 sessionUsesChatGPT = providers.usesChatGPT
                 selectedAnswer = nil
                 pinned = false
@@ -613,6 +737,14 @@ final class WorkspaceModel: ObservableObject {
         Task { await session?.responseVisible(revision) }
     }
 
+    func updateQuestionWait(_ seconds: Double) {
+        Task { await session?.setQuestionWait(Self.questionWaitDuration(seconds)) }
+    }
+
+    private static func questionWaitDuration(_ seconds: Double) -> Duration {
+        .seconds(seconds.isFinite ? min(6, max(0, seconds)) : 2)
+    }
+
     func cancelAnswer() {
         Task { await session?.cancelAnswer() }
     }
@@ -674,7 +806,9 @@ final class WorkspaceModel: ObservableObject {
                             }
                         }
                         group.addTask {
-                            try await Task.sleep(for: .seconds(8))
+                            // Allow the OS permission and HAL startup deadlines to report their errors.
+                            try await Task.sleep(for: .seconds(22))
+                            await self.finishAudioTestIfMissingFrames(expected: sources.map { $0.0.id })
                             throw CancellationError()
                         }
                         while try await group.next() != nil {}
@@ -690,6 +824,12 @@ final class WorkspaceModel: ObservableObject {
     }
 
     private func displayTestLevel(_ level: Float, source: String) { testLevels[source] = level }
+
+    private func finishAudioTestIfMissingFrames(expected: [String]) {
+        if expected.contains(where: { testLevels[$0] == nil }) {
+            error = "The audio test did not receive frames from every selected source. Check source availability and macOS Privacy & Security."
+        }
+    }
 
     private func makeChannels(_ transcriber: @escaping @Sendable () -> any StreamingSTT, sensitivity: Float) throws -> [TranscriptionChannel] {
         try captureSources().map { source, audio in
@@ -707,9 +847,10 @@ final class WorkspaceModel: ObservableObject {
             do {
                 let options = UserDefaults.standard
                 let sensitivity = SessionProviders.audioActivityThreshold(defaults: options)
-                let speech = try SessionProviders.transcriptionFactory(defaults: options,
-                    diarize: route.question == .sharedMicrophone, activityThreshold: sensitivity)
+                let speech = try await SessionProviders.transcriptionFactory(defaults: options,
+                    diarize: requestsSpeakerLabels, activityThreshold: sensitivity)
                 let channels = try makeChannels(speech, sensitivity: sensitivity)
+                liveQuestionMode = selectedQuestionMode
                 await session.replaceChannels(channels)
             } catch {
                 self.error = publicErrorMessage(error)
@@ -724,7 +865,7 @@ final class WorkspaceModel: ObservableObject {
             return value
         }
         let question = CaptureSource(id: route.question == .replay ? "Replay" : "Question",
-                                     role: route.question == .sharedMicrophone ? .unknown : .interviewer)
+                                     role: selectedQuestionMode.questionRole)
         let audio: any AudioSource
         switch route.question {
         case .defaultOutput: audio = MacAudioSource(source: question, input: .output(uid: nil))
@@ -763,6 +904,16 @@ private struct WorkspaceView: View {
     @State private var manualText = ""
     @AppStorage("answerFontSize") private var fontSize = 16.0
     @AppStorage("speechProvider") private var speechProvider = SpeechProvider.openai
+    @AppStorage("elevenModel") private var elevenModel = "scribe_v3_live"
+    @AppStorage("deepgramModel") private var deepgramModel = "nova-3"
+
+    private var supportsSpeakerLabels: Bool {
+        switch speechProvider {
+        case .eleven: ProviderCapabilities.describe(.elevenLabs, model: elevenModel).diarization
+        case .deepgram: ProviderCapabilities.describe(.deepgram, model: deepgramModel).diarization
+        default: false
+        }
+    }
 
     var body: some View {
         VStack(alignment: .leading, spacing: 12) {
@@ -780,7 +931,7 @@ private struct WorkspaceView: View {
             }
             HSplitView {
                 transcript.frame(minWidth: 245, idealWidth: 360)
-                AnswerPanel(model: model, fontSize: fontSize).frame(minWidth: 360, maxWidth: .infinity)
+                InterviewAnswerView(model: model, fontSize: fontSize).frame(minWidth: 360, maxWidth: .infinity)
             }
             HStack {
                 TextField("Ask an interview question manually", text: $manualText)
@@ -847,13 +998,7 @@ private struct WorkspaceView: View {
                 Button("Diagnostics") { showDiagnostics = true }
                 Button("Clear Session", action: model.clearSession).disabled(model.active || model.snapshot == nil)
             }
-            if model.state.isRunning {
-                Button("Pause", action: model.pause)
-            } else if model.state != .failed {
-                Button(model.state == .paused ? "Resume" : "Start", action: model.startOrResume)
-                    .buttonStyle(.borderedProminent).disabled(model.busy || model.testing)
-            }
-            if model.active { Button("Stop", action: model.stop).disabled(model.busy) }
+            SessionControls(model: model)
         }
     }
 
@@ -864,11 +1009,18 @@ private struct WorkspaceView: View {
                     Text("General practice").tag(UUID?.none)
                     ForEach(model.profiles) { Text($0.name).tag(Optional($0.id)) }
                 }
-                Picker("Question audio", selection: $model.route.question) {
-                    ForEach(QuestionAudioKind.allCases) { Text($0.rawValue).tag($0) }
+                .disabled(model.active || model.busy)
+                if model.route.question != .sharedMicrophone {
+                    Picker("Question audio", selection: $model.route.question) {
+                        ForEach(QuestionAudioKind.allCases.filter { $0 != .sharedMicrophone }) { Text($0.rawValue).tag($0) }
+                    }
                 }
                 Button("Refresh Sources", action: model.reloadDevices)
             }
+            Toggle("Interview on another device", isOn: Binding(
+                get: { model.route.question == .sharedMicrophone },
+                set: { model.route.setOtherDeviceInterview($0) }
+            ))
             HStack {
                 switch model.route.question {
                 case .defaultOutput:
@@ -878,7 +1030,8 @@ private struct WorkspaceView: View {
                 case .application:
                     sourcePicker("Application", choices: model.processes, selection: $model.route.applicationID)
                 case .interviewerMicrophone, .sharedMicrophone:
-                    sourcePicker("Question microphone", choices: model.microphones,
+                    sourcePicker(model.route.question == .sharedMicrophone ? "Room microphone" : "Question microphone",
+                                 choices: model.microphones,
                                  selection: $model.route.interviewerMicrophoneUID)
                 case .replay:
                     Button(model.replayURL?.lastPathComponent ?? "Choose 24 kHz mono PCM16 file") {
@@ -891,6 +1044,24 @@ private struct WorkspaceView: View {
                                  selection: $model.route.candidateMicrophoneUID)
                 }
             }
+            if model.route.questionUsesOutput || model.route.question == .replay {
+                Picker("Speaker attribution", selection: Binding(
+                    get: { model.route.question == .replay ? model.replayAttribution : model.route.outputAttribution },
+                    set: {
+                        if model.route.question == .replay { model.replayAttribution = $0 }
+                        else { model.route.outputAttribution = $0 }
+                    }
+                )) {
+                    ForEach(QuestionAudioAttribution.allCases, id: \.self) { Text($0.rawValue).tag($0) }
+                }
+                .disabled((model.route.question == .application && model.route.applicationID == nil)
+                          || (model.route.question == .outputDevice && model.route.outputUID == nil)
+                          || (model.route.question == .replay && model.replayURL == nil))
+                if model.requestsSpeakerLabels && !supportsSpeakerLabels {
+                    Text("This transcription model supplies no speaker labels. Use ElevenLabs Scribe v3 Live, a supported Deepgram Nova model, or ask manually.")
+                        .font(.caption).foregroundStyle(.secondary)
+                }
+            }
             HStack {
                 if model.active {
                     Button("Apply Audio Sources", action: model.applySources).disabled(model.busy)
@@ -899,9 +1070,18 @@ private struct WorkspaceView: View {
                     Toggle("Save a local copy when this session stops", isOn: $model.retainNextSession)
                 }
             }
-            if model.route.question == .sharedMicrophone && speechProvider != .deepgram {
-                Text("Shared audio stays unknown unless the transcription provider supplies speaker labels. Select Deepgram to assign roles.")
-                    .font(.caption).foregroundStyle(.secondary)
+            if model.route.question == .sharedMicrophone {
+                if supportsSpeakerLabels {
+                    Text("Play the interview through the other device’s speakers. After Start, label each voice in Transcript.")
+                        .font(.caption).foregroundStyle(.secondary)
+                } else {
+                    Text("This transcription configuration cannot separate voices on one microphone. Use separate audio sources for automatic answers, or submit a question manually.")
+                        .font(.caption).foregroundStyle(.secondary)
+                    Button("Try ElevenLabs speaker labels (unqualified)") {
+                        elevenModel = "scribe_v3_live"
+                        speechProvider = .eleven
+                    }.disabled(model.busy)
+                }
             }
             if model.route.question == .application {
                 Text("A browser process may include audio from multiple tabs.").font(.caption).foregroundStyle(.secondary)
@@ -939,6 +1119,15 @@ private struct WorkspaceView: View {
                         Text(source + " · " + (snapshot.sources[source]?.rawValue.capitalized ?? "Idle"))
                     }
                 }
+                if model.liveQuestionMode == .diarized, model.state.isRunning {
+                    Text(snapshot.speakers.contains(where: { $0.role == .interviewer })
+                         ? "Confirmed interviewer questions can trigger answers."
+                         : "Automatic answers wait until you label an interviewer. Match voices to the transcript below.")
+                        .font(.caption).foregroundStyle(.secondary)
+                } else if model.liveQuestionMode == .unresolved, model.state.isRunning {
+                    Text("Speaker identity is unresolved. Select transcript text to ask manually.")
+                        .font(.caption).foregroundStyle(.secondary)
+                }
                 ForEach(snapshot.speakers) { speaker in
                     Picker("Speaker \(speaker.id.number)", selection: Binding(
                         get: { speaker.role },
@@ -953,7 +1142,7 @@ private struct WorkspaceView: View {
                               turn.isFinal ? nil : "Partial"].compactMap { $0 }.joined(separator: " · "))
                             .font(.caption).foregroundStyle(.secondary)
                         Text(turn.text).textSelection(.enabled)
-                        if turn.isFinal && model.state.isRunning {
+                        if model.state.isRunning {
                             Button("Use as question") { manualText = turn.text }.buttonStyle(.link)
                         }
                     }
@@ -967,6 +1156,162 @@ private struct WorkspaceView: View {
     private func submit() {
         model.manual(manualText)
         manualText = ""
+    }
+}
+
+private enum InterviewPresentation: String, CaseIterable, Identifiable {
+    case focus = "Focus"
+    case chat = "Chat"
+    var id: Self { self }
+}
+
+private struct InterviewAnswerView: View {
+    @ObservedObject var model: WorkspaceModel
+    let fontSize: Double
+    @AppStorage("interviewPresentation") private var presentation = InterviewPresentation.focus
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 8) {
+            Picker("Answer view", selection: $presentation) {
+                ForEach(InterviewPresentation.allCases) { Text($0.rawValue).tag($0) }
+            }
+            .pickerStyle(.segmented)
+            if presentation == .focus {
+                AnswerPanel(model: model, fontSize: fontSize)
+            } else {
+                InterviewChatView(answers: model.snapshot?.answers ?? [], fontSize: fontSize,
+                                  waiting: model.snapshot?.waitingForQuestionEnd == true,
+                                  responseVisible: model.responseVisible)
+                    .id(model.startedAt)
+            }
+        }
+    }
+}
+
+private struct InterviewChatView: View {
+    private enum Anchor: Hashable { case latest }
+
+    let answers: [InterviewAnswer]
+    let fontSize: Double
+    let waiting: Bool
+    let responseVisible: (UUID) -> Void
+    @State private var followsLatest = true
+
+    var body: some View {
+        ScrollViewReader { proxy in
+            VStack(alignment: .leading, spacing: 8) {
+                HStack {
+                    if waiting { Text("Waiting for a pause…").font(.caption).foregroundStyle(.secondary) }
+                    Spacer()
+                    if !followsLatest {
+                        Button("Jump to Latest", systemImage: "arrow.down") {
+                            followsLatest = true
+                            scrollToLatest(proxy)
+                        }
+                    }
+                }
+                if answers.isEmpty {
+                    Text("Accepted questions and suggested answers will appear here.")
+                        .foregroundStyle(.secondary)
+                    Spacer()
+                } else {
+                    ScrollView {
+                        LazyVStack(alignment: .leading, spacing: 12) {
+                            ForEach(answers) { answer in
+                                ChatAnswerRow(answer: answer, fontSize: fontSize).equatable()
+                            }
+                            Color.clear.frame(height: 1).id(Anchor.latest).accessibilityHidden(true)
+                        }
+                        .frame(maxWidth: 720, alignment: .leading)
+                        .padding(.horizontal, 4)
+                        .frame(maxWidth: .infinity)
+                        .background(ChatScrollInput { followsLatest = false })
+                    }
+                    .accessibilityLabel("Interview chat")
+                    .onChange(of: answers.last, initial: true) { _, _ in scrollToLatest(proxy) }
+                }
+            }
+        }
+        .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
+    }
+
+    private func scrollToLatest(_ proxy: ScrollViewProxy) {
+        guard followsLatest else { return }
+        proxy.scrollTo(Anchor.latest, anchor: .bottom)
+        if let answer = answers.last, answer.state != .invalidated,
+           answer.text.contains(where: { $0.isLetter || $0.isNumber }) {
+            responseVisible(answer.revision)
+        }
+    }
+}
+
+private struct ChatAnswerRow: View, Equatable {
+    let answer: InterviewAnswer
+    let fontSize: Double
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 9) {
+            Text(answer.question.original)
+                .font(.headline).textSelection(.enabled).accessibilityAddTraits(.isHeader)
+            if let label = answer.originLabel {
+                Text(label).font(.caption).foregroundStyle(.secondary)
+            }
+            if answer.state != .invalidated, !answer.text.isEmpty {
+                AnswerText(text: answer.text, format: answer.format, fontSize: fontSize).equatable()
+            }
+            if answer.state != .complete {
+                Text(answer.failure ?? answer.state.rawValue.capitalized)
+                    .font(.caption).foregroundStyle(.secondary)
+            }
+        }
+        .padding(12)
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .background(Color(nsColor: .controlBackgroundColor), in: RoundedRectangle(cornerRadius: 10))
+    }
+}
+
+// AppKit input identifies user scroll intent on macOS 14. Geometry changes alone
+// also happen when streamed text grows or a window is resized.
+private struct ChatScrollInput: NSViewRepresentable {
+    let suspend: () -> Void
+
+    func makeNSView(context: Context) -> Host { Host() }
+    func updateNSView(_ view: Host, context: Context) { view.suspend = suspend }
+    static func dismantleNSView(_ view: Host, coordinator: ()) { view.removeMonitor() }
+
+    final class Host: NSView {
+        var suspend: (() -> Void)?
+        private var monitor: Any?
+
+        override func viewDidMoveToWindow() {
+            super.viewDidMoveToWindow()
+            removeMonitor()
+            guard window != nil else { return }
+            monitor = NSEvent.addLocalMonitorForEvents(matching: [.scrollWheel, .leftMouseDown, .keyDown]) { [weak self] event in
+                self?.scrollInput(event)
+                return event
+            }
+        }
+
+        func removeMonitor() {
+            if let monitor { NSEvent.removeMonitor(monitor) }
+            monitor = nil
+        }
+
+        private func scrollInput(_ event: NSEvent) {
+            guard let scroll = enclosingScrollView, event.window === scroll.window else { return }
+            let point = scroll.convert(event.locationInWindow, from: nil)
+            switch event.type {
+            case .scrollWheel where event.scrollingDeltaY > 0 && scroll.bounds.contains(point): suspend?()
+            case .leftMouseDown:
+                if let bar = scroll.verticalScroller, !bar.isHidden,
+                   bar.bounds.contains(bar.convert(event.locationInWindow, from: nil)) { suspend?() }
+            case .keyDown:
+                if let focused = window?.firstResponder as? NSView, focused === scroll || focused.isDescendant(of: scroll),
+                   [115, 116, 126].contains(event.keyCode) { suspend?() }
+            default: break
+            }
+        }
     }
 }
 
@@ -992,13 +1337,31 @@ private struct AnswerPanel: View {
                     Link("Manage usage", destination: url)
                 }.font(.caption)
             }
+            if model.snapshot?.waitingForQuestionEnd == true {
+                Text("Waiting for a pause…").font(.caption).foregroundStyle(.secondary)
+            }
             if let answer = model.displayedAnswer {
-                Text(answer.question.original).font(.title3.weight(.medium))
-                if let label = answer.originLabel { Text(label).font(.caption).foregroundStyle(.secondary) }
                 ScrollView {
-                    VStack(alignment: .leading, spacing: 10) {
+                    VStack(alignment: .leading, spacing: 14) {
+                        VStack(alignment: .leading, spacing: 5) {
+                            HStack(spacing: 5) {
+                                if let label = answer.originLabel {
+                                    Text(label + " · ")
+                                }
+                                Text(answer.format.rawValue).fontWeight(.semibold)
+                            }
+                            .font(.caption)
+                            .foregroundStyle(.secondary)
+                            .accessibilityElement(children: .combine)
+                            Text(answer.question.original)
+                                .font(.title3.weight(.semibold))
+                                .textSelection(.enabled)
+                                .accessibilityAddTraits(.isHeader)
+                        }
                         if answer.state != .invalidated {
-                            Text(answer.text).font(.system(size: fontSize)).textSelection(.enabled)
+                            if !answer.text.isEmpty { Divider() }
+                            AnswerText(text: answer.text, format: answer.format, fontSize: fontSize)
+                                .equatable()
                                 .onChange(of: answer.text, initial: true) { _, value in
                                     if value.contains(where: { $0.isLetter || $0.isNumber }) {
                                         model.responseVisible(answer.revision)
@@ -1006,34 +1369,39 @@ private struct AnswerPanel: View {
                                 }
                         }
                         if answer.state != .invalidated, !answer.evidence.isEmpty {
-                            DisclosureGroup("Approved evidence") {
-                                ForEach(Array(answer.evidence.enumerated()), id: \.offset) { _, fact in
-                                    Text(fact).textSelection(.enabled)
+                            DisclosureGroup("Profile evidence") {
+                                VStack(alignment: .leading, spacing: 7) {
+                                    ForEach(Array(answer.evidence.enumerated()), id: \.offset) { _, fact in
+                                        Text(fact).textSelection(.enabled)
+                                    }
                                 }
+                                .padding(.top, 5)
                             }
+                            .font(.callout)
                         }
                     }
+                    .frame(maxWidth: 720, alignment: .leading)
+                    .padding(14)
                     .frame(maxWidth: .infinity, alignment: .leading)
                 }
-                Text(answer.state.rawValue.capitalized).font(.caption).foregroundStyle(.secondary)
-                if let failure = answer.failure { Text(failure).font(.caption).foregroundStyle(.secondary) }
-                if let usage = answer.usage {
-                    Text("\(usage.input) input / \(usage.output) output tokens")
-                        .font(.caption).foregroundStyle(.secondary)
+                .background(Color(nsColor: .controlBackgroundColor), in: RoundedRectangle(cornerRadius: 10))
+                .id(answer.revision)
+                ViewThatFits(in: .horizontal) {
+                    HStack(spacing: 8) { answerStatus(answer) }
+                    VStack(alignment: .leading, spacing: 2) { answerStatus(answer) }
                 }
+                if let failure = answer.failure { Text(failure).font(.caption).foregroundStyle(.secondary) }
                 HStack {
-                    if answer.state == .generating {
-                        Button("Cancel", action: model.cancelAnswer)
-                    }
-                    Button(answer.state == .invalidated ? "Generate manually" : answer.state == .failed ? "Retry" : "Regenerate") {
-                        model.regenerate()
-                    }
-                    Menu("Format") {
-                        ForEach(AnswerFormat.allCases) { format in
-                            Button(format.rawValue) { model.regenerate(format) }
+                    if answer.state != .invalidated && !answer.text.isEmpty {
+                        Button("Copy answer", systemImage: "doc.on.doc") {
+                            NSPasteboard.general.clearContents()
+                            NSPasteboard.general.setString(answer.text, forType: .string)
                         }
+                        .labelStyle(.iconOnly)
+                        .help("Copy answer")
                     }
-                }.disabled(!model.state.isRunning)
+                    answerActions(answer)
+                }
             } else {
                 Text("Accepted questions and suggested answers will appear here.")
                     .foregroundStyle(.secondary)
@@ -1041,6 +1409,91 @@ private struct AnswerPanel: View {
             }
         }
         .padding(.leading, 8)
+    }
+
+    @ViewBuilder
+    private func answerStatus(_ answer: InterviewAnswer) -> some View {
+        Text(answer.state.rawValue.capitalized).font(.caption.weight(.semibold)).foregroundStyle(.secondary)
+        if let usage = answer.usage {
+            Text("\(usage.input) input / \(usage.output) output tokens")
+                .font(.caption).foregroundStyle(.secondary)
+        }
+    }
+
+    private func answerActions(_ answer: InterviewAnswer) -> some View {
+        HStack {
+            if answer.state == .generating {
+                Button("Cancel", action: model.cancelAnswer)
+            }
+            Button(answer.state == .invalidated ? "Generate manually" : answer.state == .failed ? "Retry" : "Regenerate") {
+                model.regenerate()
+            }
+            Menu("Format") {
+                ForEach(AnswerFormat.allCases) { format in
+                    Button(format.rawValue) { model.regenerate(format) }
+                }
+            }
+        }.disabled(!model.state.isRunning)
+    }
+}
+
+private struct AnswerText: View, Equatable {
+    let text: String
+    let format: AnswerFormat
+    let fontSize: Double
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 9) {
+            ForEach(Array(AnswerPresentation.blocks(for: text, format: format).enumerated()), id: \.offset) { _, block in
+                switch block {
+                case .paragraph(let text):
+                    Text(Self.inline(text))
+                case .heading(let text):
+                    Text(Self.inline(text))
+                        .bold()
+                        .foregroundStyle(format == .star || format == .technical ? Color.accentColor : Color.primary)
+                        .accessibilityAddTraits(.isHeader)
+                case .item(let marker, let text):
+                    HStack(alignment: .firstTextBaseline, spacing: 8) {
+                        Text(marker).foregroundStyle(.secondary)
+                        Text(Self.inline(text))
+                    }
+                    .accessibilityElement(children: .combine)
+                case .code(let text):
+                    Text(text)
+                        .font(.system(size: fontSize * 0.9, design: .monospaced))
+                        .padding(9)
+                        .frame(maxWidth: .infinity, alignment: .leading)
+                        .background(.quaternary, in: RoundedRectangle(cornerRadius: 6))
+                }
+            }
+        }
+        .font(.system(size: fontSize))
+        .lineSpacing(4)
+        .textSelection(.enabled)
+        .frame(maxWidth: .infinity, alignment: .leading)
+    }
+
+    private static func inline(_ text: String) -> AttributedString {
+        var attributed = (try? AttributedString(markdown: text,
+            options: .init(interpretedSyntax: .inlineOnlyPreservingWhitespace))) ?? AttributedString(text)
+        attributed.link = nil
+        return attributed
+    }
+}
+
+private struct SessionControls: View {
+    @ObservedObject var model: WorkspaceModel
+
+    var body: some View {
+        if model.state.isRunning {
+            Button("Pause", action: model.pause).disabled(model.busy)
+        } else if let label = model.startActionLabel {
+            Button(label, action: model.startOrResume)
+                .buttonStyle(.borderedProminent)
+                .disabled(!model.canStartOrResume)
+        }
+        if model.active { Button("Stop", action: model.stop).disabled(model.busy) }
     }
 }
 
@@ -1052,13 +1505,19 @@ private struct CompactView: View {
 
     var body: some View {
         VStack {
-            AnswerPanel(model: model, fontSize: fontSize)
+            if let error = model.error {
+                Label(error, systemImage: "exclamationmark.triangle").font(.caption).foregroundStyle(.red)
+                    .frame(maxWidth: .infinity, alignment: .leading)
+            } else if let issue = model.snapshot?.issues.last {
+                Label(issue, systemImage: "exclamationmark.circle").font(.caption).foregroundStyle(.secondary)
+                    .frame(maxWidth: .infinity, alignment: .leading)
+            }
+            InterviewAnswerView(model: model, fontSize: fontSize)
             HStack {
                 Toggle("Always on Top", isOn: $onTop)
                 Spacer()
-                Button("Expand") { openWindow(id: "workspace") }
-                if model.state.isRunning { Button("Pause", action: model.pause) }
-                if model.active { Button("Stop", action: model.stop) }
+                Button("Expand") { openWindow(id: "workspace", value: WorkspaceWindow.main) }
+                SessionControls(model: model)
             }
             .font(.caption)
         }
@@ -1095,6 +1554,10 @@ private struct ProviderSettingsView: View {
     @AppStorage("sttModel") private var sttModel = "gpt-live-transcribe"
     @AppStorage("questionModel") private var questionModel = "gpt-4.1-mini"
     @AppStorage("answerModel") private var answerModel = "gpt-4.1-mini"
+    @AppStorage("openAIQuestionReasoning") private var openAIQuestionReasoning = ReasoningEffort.modelDefault
+    @AppStorage("openAIAnswerReasoning") private var openAIAnswerReasoning = ReasoningEffort.modelDefault
+    @AppStorage("anthropicQuestionReasoning") private var anthropicQuestionReasoning = ReasoningEffort.modelDefault
+    @AppStorage("anthropicAnswerReasoning") private var anthropicAnswerReasoning = ReasoningEffort.modelDefault
     @AppStorage("sttLanguage") private var sttLanguage = ""
     @AppStorage("answerFormat") private var format = AnswerFormat.brief
     @AppStorage("answerInstructions") private var instructions = ""
@@ -1102,6 +1565,7 @@ private struct ProviderSettingsView: View {
     @AppStorage("questionThreshold") private var confidence = 0.8
     @AppStorage("answerFontSize") private var fontSize = 16.0
     @AppStorage("semanticRetrieval") private var semanticRetrieval = false
+    @AppStorage("summarizeSession") private var summarizeSession = false
     @AppStorage("embeddingModel") private var embeddingModel = "text-embedding-3-small"
     @AppStorage("pauseShortcut") private var pauseShortcut = "p"
     @AppStorage("compactShortcut") private var compactShortcut = "k"
@@ -1112,6 +1576,7 @@ private struct ProviderSettingsView: View {
     @AppStorage("answerContextBudget") private var answerBudget = 3_000
     @AppStorage("answerContextTurns") private var answerTurns = 12
     @AppStorage("completionGrace") private var completionGrace = 3.0
+    @AppStorage("questionWaitSeconds") private var questionWaitSeconds = 2.0
     @AppStorage("generationTimeout") private var generationTimeout = 45.0
     @AppStorage("answerLanguage") private var answerLanguage = ""
     @AppStorage("answerWordLimit") private var answerWordLimit = 0
@@ -1132,6 +1597,7 @@ private struct ProviderSettingsView: View {
                 classificationSettings
                 generationSettings
                 knowledgeSettings
+                sessionContextSettings
             }
             .disabled(model.active)
             Section("Audio and shortcuts") {
@@ -1220,6 +1686,7 @@ private struct ProviderSettingsView: View {
             Picker("Provider", selection: $speech) {
                 ForEach(SpeechProvider.allCases) { Text($0.rawValue).tag($0) }
             }
+            qualificationStatus(speech == .openai && sttModel == "gpt-live-transcribe")
             if speech == .apple {
                 Picker("Language", selection: $appleLocale) {
                     ForEach(AppleSpeechTranscriber.languages(), id: \.self) { locale in
@@ -1260,7 +1727,7 @@ private struct ProviderSettingsView: View {
                 TextField("Vocabulary hints (comma separated)", text: $speechVocabulary)
             }
             if speechCapabilities.diarization {
-                Text("Select Shared microphone in Audio Sources to assign detected speakers.")
+                Text("Turn on Interview on another device to assign roles to voices heard by one microphone.")
                     .font(.caption).foregroundStyle(.secondary)
             }
             connectionButton(.transcription)
@@ -1275,12 +1742,22 @@ private struct ProviderSettingsView: View {
                     Text("ChatGPT plan (unavailable)").tag(TextProvider.chatGPT)
                 }
             }
+            qualificationStatus(classification == .openai && questionModel == "gpt-6-luna" && openAIQuestionReasoning == .none)
             if classification == .chatGPT {
                 chatGPTModelPicker($chatGPTQuestionModel)
             } else {
-                TextField("Model", text: classification == .openai ? $questionModel : $anthropicQuestionModel)
+                TextModelSettings(provider: classification.provider, service: .classification,
+                    modelID: classification == .openai ? $questionModel : $anthropicQuestionModel,
+                    reasoning: classification == .openai ? $openAIQuestionReasoning : $anthropicQuestionReasoning)
+                    .id(classification)
             }
             Slider(value: $confidence, in: 0.5...1) { Text("Question confidence") }
+            Slider(value: $questionWaitSeconds, in: 0...6, step: 0.5) {
+                Text("Wait for silence")
+            }
+            .onChange(of: questionWaitSeconds) { _, seconds in model.updateQuestionWait(seconds) }
+            Text("\(questionWaitSeconds.formatted(.number.precision(.fractionLength(0...1)))) seconds. Questions within this window are answered together. Use 0 to answer finalized questions immediately.")
+                .font(.caption).foregroundStyle(.secondary)
             Slider(value: $completionGrace, in: 0.5...6, step: 0.5) { Text("Continuation window") }
             Stepper("Context turns: \(classifierTurns)", value: $classifierTurns, in: 0...32)
             Stepper("Context budget: \(classifierBudget)", value: $classifierBudget, in: 500...8_000, step: 250)
@@ -1297,17 +1774,23 @@ private struct ProviderSettingsView: View {
                     Text("ChatGPT plan (unavailable)").tag(TextProvider.chatGPT)
                 }
             }
+            qualificationStatus(answer == .openai && answerModel == "gpt-6.2-sol" && openAIAnswerReasoning == .low)
             if answer == .chatGPT {
                 chatGPTModelPicker($chatGPTAnswerModel)
             } else {
-                TextField("Model", text: answer == .openai ? $answerModel : $anthropicAnswerModel)
+                TextModelSettings(provider: answer.provider, service: .answer,
+                    modelID: answer == .openai ? $answerModel : $anthropicAnswerModel,
+                    reasoning: answer == .openai ? $openAIAnswerReasoning : $anthropicAnswerReasoning)
+                    .id(answer)
             }
             Picker("Format", selection: $format) {
                 ForEach(AnswerFormat.allCases) { Text($0.rawValue).tag($0) }
             }
             TextField("Response language", text: $answerLanguage)
-            Stepper(answerWordLimit == 0 ? "Word limit: format default" : "Word limit: \(answerWordLimit)",
-                    value: $answerWordLimit, in: 0...400, step: 25)
+            TextField("Requested word limit", value: $answerWordLimit, format: .number)
+                .onChange(of: answerWordLimit) { _, limit in answerWordLimit = min(400, max(0, limit)) }
+            Text("The model may exceed this length. Enter 0 to use the format default.")
+                .font(.caption).foregroundStyle(.secondary)
             TextField("Answer instructions", text: $instructions, axis: .vertical)
             Stepper("Context turns: \(answerTurns)", value: $answerTurns, in: 0...32)
             Stepper("Context budget: \(answerBudget)", value: $answerBudget, in: 500...8_000, step: 250)
@@ -1333,10 +1816,30 @@ private struct ProviderSettingsView: View {
             Toggle("Use OpenAI embeddings", isOn: $semanticRetrieval)
             if semanticRetrieval {
                 TextField("Embedding model", text: $embeddingModel)
+                qualificationStatus(embeddingModel == "text-embedding-3-small")
                 Text("Build the index in Profiles. Indexing sends approved facts, and semantic search sends accepted questions.")
                     .font(.caption).foregroundStyle(.secondary)
                 connectionButton(.embeddings)
             }
+        }
+    }
+
+    private func qualificationStatus(_ inScope: Bool) -> some View {
+        Text(inScope ? "M11 qualification target" : "Outside the M11 production qualification scope")
+            .font(.caption).foregroundStyle(.secondary)
+    }
+
+    private var sessionContextSettings: some View {
+        Section("Interview context and evaluation") {
+            Toggle("Summarize older conversation with OpenAI", isOn: $summarizeSession)
+            if summarizeSession {
+                Text("Sends older attributed dialogue to GPT-6 Luna during the session. Derived context stays in memory.")
+                    .font(.caption).foregroundStyle(.secondary)
+            }
+            Button("Test Summary") { model.checkSessionContext(evaluation: false) }
+                .disabled(model.checkingProvider || model.chatGPTBusy)
+            Button("Test Evaluation") { model.checkSessionContext(evaluation: true) }
+                .disabled(model.checkingProvider || model.chatGPTBusy)
         }
     }
 
@@ -1361,6 +1864,7 @@ private struct ProviderSettingsView: View {
 
     private var presetSettings: some View {
         Section("Provider presets") {
+            Button("Apply OpenAI M11 Configuration") { apply(.openAIQualification) }
             Picker("Preset", selection: $selectedPreset) {
                 Text("Select a preset").tag(UUID?.none)
                 ForEach(presets) { preset in
@@ -1420,7 +1924,11 @@ private struct ProviderSettingsView: View {
                 : answer == .openai ? answerModel : anthropicAnswerModel,
             language: speech == .apple ? appleLocale : sttLanguage, appleRecognitionMode: appleMode,
             commit: speech == .eleven ? elevenCommit : speech == .deepgram ? .voiceActivity : .manual,
-            embeddingsModel: semanticRetrieval ? embeddingModel : nil)
+            embeddingsModel: semanticRetrieval ? embeddingModel : nil,
+            classificationReasoning: classification == .chatGPT ? nil : classification == .openai
+                ? openAIQuestionReasoning : anthropicQuestionReasoning,
+            answerReasoning: answer == .chatGPT ? nil : answer == .openai
+                ? openAIAnswerReasoning : anthropicAnswerReasoning)
     }
 
     private func apply(_ preset: ProviderPreset) {
@@ -1443,13 +1951,21 @@ private struct ProviderSettingsView: View {
         }
         if speech != .apple { sttLanguage = preset.language }
         switch classification {
-        case .openai: questionModel = preset.classificationModel
-        case .anthropic: anthropicQuestionModel = preset.classificationModel
+        case .openai:
+            questionModel = preset.classificationModel
+            openAIQuestionReasoning = preset.classificationReasoning ?? .modelDefault
+        case .anthropic:
+            anthropicQuestionModel = preset.classificationModel
+            anthropicQuestionReasoning = preset.classificationReasoning ?? .modelDefault
         case .chatGPT: chatGPTQuestionModel = preset.classificationModel
         }
         switch answer {
-        case .openai: answerModel = preset.answerModel
-        case .anthropic: anthropicAnswerModel = preset.answerModel
+        case .openai:
+            answerModel = preset.answerModel
+            openAIAnswerReasoning = preset.answerReasoning ?? .modelDefault
+        case .anthropic:
+            anthropicAnswerModel = preset.answerModel
+            anthropicAnswerReasoning = preset.answerReasoning ?? .modelDefault
         case .chatGPT: chatGPTAnswerModel = preset.answerModel
         }
         semanticRetrieval = preset.embeddingsModel != nil
@@ -1458,6 +1974,51 @@ private struct ProviderSettingsView: View {
 
     private func persistPresets() {
         if let encoded = try? JSONEncoder().encode(presets) { storedPresets = encoded }
+    }
+}
+
+private struct TextModelSettings: View {
+    let provider: ProviderID
+    let service: ProviderService
+    @Binding var modelID: String
+    @Binding var reasoning: ReasoningEffort
+    @State private var customDraft: String?
+
+    var body: some View {
+        let models = ProviderCapabilities.textModels(provider)
+        let custom = customDraft == modelID || !models.contains(modelID)
+        let efforts = ProviderCapabilities.reasoningEfforts(provider, model: modelID, service: service)
+        Picker("Model", selection: Binding(
+            get: { custom ? "" : modelID },
+            set: { selection in
+                customDraft = selection.isEmpty ? modelID : nil
+                if !selection.isEmpty { modelID = selection }
+            }
+        )) {
+            ForEach(models, id: \.self) { Text($0).tag($0) }
+            Text("Custom model ID…").tag("")
+        }
+        .pickerStyle(.menu)
+        if custom {
+            TextField("Custom model ID", text: Binding(
+                get: { modelID },
+                set: { value in
+                    modelID = value
+                    customDraft = value
+                }
+            ))
+        }
+
+        Picker("Reasoning", selection: Binding(
+            get: { efforts.contains(reasoning) ? reasoning : .modelDefault },
+            set: { reasoning = $0 }
+        )) {
+            Text(efforts.isEmpty ? "Unavailable for this model" : ReasoningEffort.modelDefault.label)
+                .tag(ReasoningEffort.modelDefault)
+            ForEach(efforts, id: \.self) { Text($0.label).tag($0) }
+        }
+        .pickerStyle(.menu)
+        .disabled(efforts.isEmpty)
     }
 }
 
@@ -1477,10 +2038,40 @@ private struct ProviderKeyField: View {
             Text(model.configuredKeys.contains(account) ? "In Keychain" : "Key required")
                 .font(.caption).foregroundStyle(.secondary)
         }
+        .disabled(model.busy || model.checkingProvider)
     }
 }
 
 private struct ProfileEditor: View {
+    private enum Attachment {
+        case file(URL)
+        case pasted(String)
+
+        var name: String {
+            switch self {
+            case .file(let url): url.lastPathComponent
+            case .pasted: "Pasted text"
+            }
+        }
+
+        func read(kind: ProfileDocument.Kind) async throws -> ProfileDocument {
+            switch self {
+            case .pasted(let text):
+                return ProfileDocument(kind: kind, title: "Pasted " + kind.rawValue, text: text)
+            case .file(let url):
+                return try await Task.detached(priority: .utility) {
+                    let scoped = url.startAccessingSecurityScopedResource()
+                    defer { if scoped { url.stopAccessingSecurityScopedResource() } }
+                    return try ProfileDocument.read(url, kind: kind)
+                }.value
+            }
+        }
+    }
+
+    private static let attachmentTypes: [UTType] = [.plainText, .pdf] + ["md", "markdown", "docx"].compactMap {
+        UTType(filenameExtension: $0)
+    }
+
     @ObservedObject var model: WorkspaceModel
     let store: KnowledgeStore
     @Environment(\.dismiss) private var dismiss
@@ -1491,18 +2082,23 @@ private struct ProfileEditor: View {
     @State private var pastedText = ""
     @State private var kind: ProfileDocument.Kind = .resume
     @State private var picker = false
+    @State private var attaching = false
+    @State private var showingPaste = false
+    @State private var showingProjectStory = false
     @State private var message: String?
     @State private var selectedFact: ExperienceFact?
     @State private var deleteConfirmation = false
     @State private var indexing = false
     @AppStorage("semanticRetrieval") private var semanticRetrieval = false
 
+    private var hasProfileName: Bool { !profile.name.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty }
+
     var body: some View {
         VStack(alignment: .leading) {
             HStack {
                 Text("Interview Profiles").font(.title2)
                 Spacer()
-                Button("Done") { dismiss() }.keyboardShortcut(.cancelAction)
+                Button("Done") { dismiss() }.keyboardShortcut(.cancelAction).disabled(attaching)
             }
             HStack {
                 Menu("Open Profile") {
@@ -1513,6 +2109,7 @@ private struct ProfileEditor: View {
                 Button("Delete Profile", role: .destructive) { deleteConfirmation = true }
                     .disabled(!model.profiles.contains(where: { $0.id == profile.id }))
             }
+            .disabled(attaching)
             Form {
                 TextField("Profile name", text: $profile.name)
                 TextField("Target role", text: $profile.role)
@@ -1520,51 +2117,50 @@ private struct ProfileEditor: View {
                 TextField("Industry", text: $profile.industry)
                 TextField("Answer language", text: $profile.answerLanguage)
                 TextField("Response instructions", text: $profile.instructions)
-            }
-            Divider()
-            HStack {
-                Picker("Document type", selection: $kind) {
-                    ForEach(ProfileDocument.Kind.allCases) { Text($0.rawValue).tag($0) }
+                DisclosureGroup("Answer training") {
+                    TextField("Skills you’ve used", text: trainingField(\.skills), axis: .vertical)
+                        .lineLimit(1...2)
+                    TextField("Sample answer in your own words", text: trainingField(\.speakingSample), axis: .vertical)
+                        .lineLimit(2...4)
+                    Text("The sample guides tone and phrasing. Add real projects below to teach the app what you did.")
+                        .font(.caption).foregroundStyle(.secondary)
+                    Button("Add Project Story…") { showingProjectStory = true }
+                        .disabled(!hasProfileName)
                 }
-                Button("Import Document") { picker = true }
-                TextField("Paste document text", text: $pastedText)
-                Button("Add Text") {
-                    let document = ProfileDocument(kind: kind, title: "Pasted " + kind.rawValue, text: pastedText)
-                    add(document)
-                    pastedText = ""
-                }.disabled(pastedText.isEmpty)
             }
+            .disabled(attaching)
+            Divider()
+            attachmentControls
             List {
-                Section("Imported documents") {
+                Section("Attachments") {
+                    if documents.isEmpty { Text("No attachments").foregroundStyle(.secondary) }
                     ForEach(documents) { document in
-                        HStack {
-                            Text(document.title)
-                            Spacer()
-                            Button("Remove", role: .destructive) {
-                                Task { await change { try await store.deleteDocument(document.id, profile: profile.id) } }
-                            }.buttonStyle(.borderless)
-                        }
+                        attachmentRow(document)
                     }
                 }
                 Section("Experience facts") {
                     ForEach(facts) { fact in
                         HStack {
                             Text(fact.claim)
+                                .lineLimit(fact.category == ExperienceFact.projectStoryCategory ? 2 : nil)
                             Spacer()
-                            Text(fact.status.rawValue.capitalized).foregroundStyle(.secondary)
-                            Button("Review") { selectedFact = fact }.buttonStyle(.borderless)
+                            if fact.status == .rejected { Text("Excluded").foregroundStyle(.secondary) }
+                            if fact.status == .pending { Text("Enable to use").foregroundStyle(.secondary) }
+                            Button("Edit") { selectedFact = fact }.buttonStyle(.borderless)
                         }
                     }
                 }
             }
+            .disabled(attaching)
             HStack {
                 TextField("Add an experience fact", text: $claim)
-                Button("Add for Review") {
-                    let fact = ExperienceFact(claim: claim)
+                Button("Add Fact") {
+                    let fact = ExperienceFact(claim: claim, status: .confirmed)
                     claim = ""
-                    Task { await change { try await store.save(fact, profile: profile.id) } }
+                    Task { await change { id in try await store.save(fact, profile: id) } }
                 }.disabled(claim.trimmingCharacters(in: .whitespaces).isEmpty)
             }
+            .disabled(attaching)
             HStack {
                 if semanticRetrieval {
                     Button(indexing ? "Indexing…" : "Build Embeddings", action: reindex)
@@ -1582,32 +2178,29 @@ private struct ProfileEditor: View {
                     }
                 }.disabled(indexing || !model.profiles.contains(where: { $0.id == profile.id }))
             }
+            .disabled(attaching)
             if let message { Text(message).foregroundStyle(.secondary) }
         }
         .padding(16)
         .task { if let item = model.profiles.first(where: { $0.id == model.profileID }) { select(item) } }
-        .fileImporter(isPresented: $picker, allowedContentTypes: [.plainText, .pdf, .data]) { result in
+        .fileImporter(isPresented: $picker, allowedContentTypes: Self.attachmentTypes, allowsMultipleSelection: true) { result in
             switch result {
-            case .success(let url):
-                do {
-                    let scoped = url.startAccessingSecurityScopedResource()
-                    defer { if scoped { url.stopAccessingSecurityScopedResource() } }
-                    add(try ProfileDocument.read(url, kind: kind))
-                } catch StorageFailure.emptyDocument {
-                    message = "This document has no extractable text. Paste its text or use a text-based PDF."
-                } catch {
-                    message = "Import failed. Choose a text, Markdown, PDF, or DOCX document."
-                }
+            case .success(let urls): attach(urls.map(Attachment.file))
             case .failure:
                 message = "The selected document could not be opened."
             }
         }
         .sheet(item: $selectedFact) { fact in
             FactEditor(fact: fact, save: { update in
-                Task { await change { try await store.save(update, profile: profile.id) } }
+                Task { await change { id in try await store.save(update, profile: id) } }
             }, remove: {
-                Task { await change { try await store.deleteFact(fact.id, profile: profile.id) } }
+                Task { await change { id in try await store.deleteFact(fact.id, profile: id) } }
             })
+        }
+        .sheet(isPresented: $showingProjectStory) {
+            ProjectStoryEditor { story in
+                Task { await change { id in try await store.save(story, profile: id) } }
+            }
         }
         .confirmationDialog("Delete this profile and its documents and facts?", isPresented: $deleteConfirmation) {
             Button("Delete Profile", role: .destructive) {
@@ -1622,13 +2215,61 @@ private struct ProfileEditor: View {
         }
     }
 
+    private func trainingField(_ key: WritableKeyPath<ProfileAnswerTraining, String>) -> Binding<String> {
+        Binding(
+            get: { profile.answerTraining?[keyPath: key] ?? "" },
+            set: { value in
+                var training = profile.answerTraining ?? .init()
+                training[keyPath: key] = value
+                profile.answerTraining = training
+            }
+        )
+    }
+
+    private var attachmentControls: some View {
+        VStack(alignment: .leading, spacing: 6) {
+            HStack {
+                Picker("Attach as", selection: $kind) {
+                    ForEach(ProfileDocument.Kind.allCases) { Text($0.rawValue).tag($0) }
+                }
+                Button(attaching ? "Attaching…" : "Attach Files…") { picker = true }
+                    .disabled(!hasProfileName)
+            }
+            Text(hasProfileName ? "Markdown (.md, .markdown), text, PDF, or DOCX." : "Enter a profile name to add attachments.")
+                .font(.caption).foregroundStyle(.secondary)
+            Text("Résumé and project notes are used in answers. Job descriptions guide the role.")
+                .font(.caption).foregroundStyle(.secondary)
+            DisclosureGroup("Paste document text", isExpanded: $showingPaste) {
+                HStack(alignment: .top) {
+                    TextField("Document text", text: $pastedText, axis: .vertical).lineLimit(2...4)
+                    Button("Attach Text") { attach([.pasted(pastedText)]) }
+                        .disabled(!hasProfileName || pastedText.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
+                }.padding(.top, 4)
+            }
+        }
+        .disabled(attaching)
+    }
+
+    private func attachmentRow(_ document: ProfileDocument) -> some View {
+        HStack(alignment: .firstTextBaseline) {
+            VStack(alignment: .leading, spacing: 2) {
+                Text(document.title).lineLimit(1).truncationMode(.middle).help(document.title)
+                Text(document.kind.rawValue).font(.caption).foregroundStyle(.secondary)
+            }
+            Spacer()
+            Button("Remove", role: .destructive) {
+                Task { await change { id in try await store.deleteDocument(document.id, profile: id) } }
+            }.buttonStyle(.borderless).accessibilityLabel("Remove " + document.title)
+        }
+    }
+
     private func reindex() {
         let id = profile.id
         indexing = true
         Task {
             defer { indexing = false }
             do {
-                guard let provider = try SessionProviders.embeddings(defaults: .standard) else { return }
+                guard let provider = try await SessionProviders.embeddings(defaults: .standard) else { return }
                 let count = try await store.indexConfirmedFacts(profile: id, provider: provider)
                 if profile.id == id { message = "Indexed \(count) approved facts." }
             } catch {
@@ -1654,24 +2295,115 @@ private struct ProfileEditor: View {
     }
 
     private func save() {
-        Task { await change {} }
+        Task { await change { _ in } }
     }
 
-    private func add(_ document: ProfileDocument) {
-        Task { await change { try await store.add(document, to: profile.id) } }
+    private func attach(_ attachments: [Attachment]) {
+        guard !attachments.isEmpty, hasProfileName, !attaching else { return }
+        let target = profile
+        let type = kind
+        attaching = true
+        message = nil
+        Task {
+            defer { attaching = false }
+            var saved = false
+            var attached = 0
+            var firstFailure: String?
+            for attachment in attachments {
+                do {
+                    let document = try await attachment.read(kind: type)
+                    if !saved {
+                        try await store.save(target)
+                        saved = true
+                    }
+                    try await store.add(document, to: target.id)
+                    attached += 1
+                    if case .pasted = attachment { pastedText = "" }
+                } catch {
+                    if firstFailure == nil { firstFailure = attachment.name + " — " + attachmentFailure(error) }
+                }
+            }
+            if saved { await model.reloadProfiles() }
+            guard profile.id == target.id else { return }
+            if saved {
+                model.profileID = target.id
+                await refresh(target.id)
+            }
+            let failures = attachments.count - attached
+            if let firstFailure {
+                message = attachments.count == 1 ? firstFailure : "Attached \(attached) of \(attachments.count) files. \(failures) failed. \(firstFailure)"
+            } else {
+                message = attached == 1 ? "Attached \(attachments[0].name)." : "Attached \(attached) files."
+            }
+        }
     }
 
-    private func change(_ operation: () async throws -> Void) async {
+    private func attachmentFailure(_ error: Error) -> String {
+        switch error {
+        case StorageFailure.emptyDocument: "No text was found. Try a text-based file or paste the text."
+        case StorageFailure.documentTooLarge: "The document is too large to attach."
+        case StorageFailure.unsupportedFormat: "Choose a Markdown, text, PDF, or DOCX file."
+        default: "Could not read or attach the document. Check that it opens locally."
+        }
+    }
+
+    private func change(_ operation: (UUID) async throws -> Void) async {
+        let target = profile
         do {
-            try await store.save(profile)
-            try await operation()
+            try await store.save(target)
+            try await operation(target.id)
             await model.reloadProfiles()
-            model.profileID = profile.id
-            await refresh(profile.id)
+            guard profile.id == target.id else { return }
+            model.profileID = target.id
+            await refresh(target.id)
             message = nil
         } catch {
-            message = "Could not save. Enter a profile name and check the document or fact."
+            if profile.id == target.id { message = "Could not save. Enter a profile name and check the document or fact." }
         }
+    }
+}
+
+private struct ProjectStoryEditor: View {
+    let save: (ExperienceFact) -> Void
+    @Environment(\.dismiss) private var dismiss
+    @State private var title = ""
+    @State private var source = ""
+    @State private var destination = ""
+    @State private var data = ""
+    @State private var contribution = ""
+    @State private var outcome = ""
+
+    var body: some View {
+        Form {
+            Text("Project Story").font(.title2)
+            TextField("Project name", text: $title)
+            TextField("Source systems", text: $source)
+            TextField("Destination", text: $destination)
+            TextField("Types of data", text: $data)
+            TextField("What I did", text: $contribution, axis: .vertical).lineLimit(2...5)
+            TextField("Outcome", text: $outcome, axis: .vertical).lineLimit(1...3)
+            HStack {
+                Spacer()
+                Button("Cancel") { dismiss() }.keyboardShortcut(.cancelAction)
+                Button("Save Project Story", action: saveStory)
+                    .keyboardShortcut(.defaultAction)
+                    .disabled(title.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+                              || contribution.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
+            }
+        }
+        .padding(18)
+        .frame(minWidth: 470)
+    }
+
+    private func saveStory() {
+        let fields = [("Project", title), ("Source", source), ("Destination", destination), ("Data", data),
+                      ("What I did", contribution), ("Outcome", outcome)]
+        let claim = fields.compactMap { label, value -> String? in
+            let text = value.trimmingCharacters(in: .whitespacesAndNewlines)
+            return text.isEmpty ? nil : label + ": " + text
+        }.joined(separator: "\n")
+        save(.init(category: ExperienceFact.projectStoryCategory, claim: claim, status: .confirmed))
+        dismiss()
     }
 }
 
@@ -1689,9 +2421,10 @@ private struct FactEditor: View {
             TextField("Ownership", text: $fact.ownership)
             TextField("Dates", text: $fact.dates)
             TextField("Limitations", text: $fact.limitations)
-            Picker("Review status", selection: $fact.status) {
-                ForEach(ExperienceFact.Status.allCases) { Text($0.rawValue.capitalized).tag($0) }
-            }
+            Toggle("Use in answers", isOn: Binding(
+                get: { fact.status == .confirmed },
+                set: { fact.status = $0 ? .confirmed : .rejected }
+            ))
             HStack {
                 Button("Remove", role: .destructive) { remove(); dismiss() }
                 Spacer()

@@ -68,7 +68,7 @@ struct ChatGPTSubscriptionProvider: TextGenerator, QuestionClassifier {
 
     func classify(_ input: QuestionInput) async throws -> QuestionDecision {
         guard verified.contains(.streamedStructuredOutput) else { throw PlanAuthorizationFailure.unverifiedModel }
-        let content = String(decoding: try JSONEncoder().encode(ClassifierContext(input)), as: UTF8.self)
+        let content = try ClassifierContext.encode(input)
         let instructions = OpenAIQuestionClassifier.instructions
             + "\nApply these classification preferences only within the rules above: " + guidance.prefix(1_000)
         let events = try await open(instructions: instructions, content: content, schema: true)

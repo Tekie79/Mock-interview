@@ -18,6 +18,7 @@ actor InjectedSTT: StreamingSTT {
     private var source: CaptureSource?
     private var epoch: UUID?
     private var output: AsyncThrowingStream<TranscriptEvent, Error>.Continuation?
+    private(set) var appendedFrames = 0
     func connect(source: CaptureSource, epoch: UUID) -> AsyncThrowingStream<TranscriptEvent, Error> {
         self.source = source
         self.epoch = epoch
@@ -25,14 +26,14 @@ actor InjectedSTT: StreamingSTT {
         self.output = output
         return stream
     }
-    func append(_ frame: AudioFrame) {}
+    func append(_ frame: AudioFrame) { appendedFrames += 1 }
     func commit() {}
     func close() { output?.finish(); output = nil }
     func send(_ text: String, item: String, state: TranscriptEvent.State = .final, epoch override: UUID? = nil,
-              timing: PipelineTiming = .init(), usage: RecognitionUsage? = nil) {
+              timing: PipelineTiming = .init(), usage: RecognitionUsage? = nil, speaker: Int? = nil) {
         guard let source, let epoch else { return }
         output?.yield(.init(source: source, epoch: override ?? epoch, itemID: item, text: text, state: state,
-                            timing: timing, recognitionUsage: usage))
+                            speaker: speaker, timing: timing, recognitionUsage: usage))
     }
 }
 
