@@ -146,3 +146,7 @@ Build 12.2 passed 165 local tests and unsigned universal packaging. Native verif
 ## M12 personal local signing
 
 Reviewed starting commit `03cd472e8ec392b2604d2fdcd566f1d2a3357209`. Build the existing native Release, sign it with the owner’s persistent login Keychain identity, pin the certificate for later builds, verify the extracted ZIP and record exact artifact evidence. The owner authorized installation at `/Applications/MockInterview.app`. Check for and back up any existing bundle before installation. Preserve the application identifier, local data locations and unsigned CI workflow. Record physical audio, OpenAI, UI lifecycle and same-certificate upgrade observations separately from signature verification.
+
+### M12 macOS app icon
+
+Use the owner-supplied transparent artwork as the bundle icon at standard and Retina sizes. Verify the icon in the unsigned and signed bundles, then update the authorized Applications installation after backing up build 12.2. Preserve the designated requirement and application data.

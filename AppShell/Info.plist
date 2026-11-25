@@ -6,6 +6,8 @@
     <string>$(MARKETING_VERSION)</string>
     <key>CFBundleVersion</key>
     <string>$(CURRENT_PROJECT_VERSION)</string>
+    <key>CFBundleIconFile</key>
+    <string>MockInterview.icns</string>
     <key>NSAudioCaptureUsageDescription</key>
     <string>Transcribe audio from the application or output device you select for a mock interview.</string>
     <key>NSMicrophoneUsageDescription</key>
