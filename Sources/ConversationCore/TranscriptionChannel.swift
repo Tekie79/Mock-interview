@@ -46,7 +46,7 @@ public struct TranscriptionChannel: Sendable {
                 captureStarted = true
                 try Task.checkCancellation()
                 await events(.connected(source: source, epoch: epoch))
-                try await forward(frames: frames, transcripts: transcripts, stt: stt, events: events)
+                try await forward(frames: frames, transcripts: transcripts, epoch: epoch, stt: stt, events: events)
                 await audio.stop()
                 await stt.close()
                 return
@@ -68,7 +68,7 @@ public struct TranscriptionChannel: Sendable {
 
     private func forward(frames: AsyncThrowingStream<AudioFrame, Error>,
                          transcripts: AsyncThrowingStream<TranscriptEvent, Error>,
-                         stt: any StreamingSTT,
+                         epoch: UUID, stt: any StreamingSTT,
                          events: @escaping @Sendable (ChannelEvent) async -> Void) async throws {
         let behavior = await stt.behavior
         guard behavior.sampleRate == 24_000 else { throw CaptureFailure.invalidFormat }
@@ -156,7 +156,7 @@ public struct TranscriptionChannel: Sendable {
             group.addTask {
                 for try await transcript in transcripts {
                     try Task.checkCancellation()
-                    guard transcript.source == source else { continue }
+                    guard transcript.source == source, transcript.epoch == epoch else { continue }
                     let tagged = await progress.tag(transcript)
                     await events(.transcript(tagged))
                     await progress.delivered(tagged)

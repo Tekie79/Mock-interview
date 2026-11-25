@@ -59,3 +59,13 @@ extension CapabilityTests {
         XCTAssertNotNil(invalid.unavailableReason)
     }
 }
+
+extension CapabilityTests {
+    func testMissingSettingsMayDefaultAndInvalidExplicitProviderFailsClosed() throws {
+        XCTAssertEqual(try ProviderSelection.decode(nil, default: ProviderID.openai), .openai)
+        XCTAssertEqual(try ProviderSelection.decode("chatGPTSubscription", default: ProviderID.openai), .chatGPTSubscription)
+        XCTAssertThrowsError(try ProviderSelection.decode("ChatGPT subscription", default: ProviderID.openai)) {
+            XCTAssertEqual($0 as? ProviderFailure, .unsupportedCapability)
+        }
+    }
+}

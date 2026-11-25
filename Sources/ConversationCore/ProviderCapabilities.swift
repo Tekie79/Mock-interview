@@ -5,6 +5,16 @@ public enum ProviderID: String, Codable, CaseIterable, Identifiable, Sendable {
     public var id: String { rawValue }
 }
 
+public enum ProviderSelection {
+    /// A missing setting may use the application default. An explicitly invalid selection fails closed.
+    public static func decode<T: RawRepresentable>(_ stored: String?, default fallback: T) throws -> T
+        where T.RawValue == String {
+        guard let stored else { return fallback }
+        guard let selection = T(rawValue: stored) else { throw ProviderFailure.unsupportedCapability }
+        return selection
+    }
+}
+
 public enum ProviderService: String, Codable, CaseIterable, Sendable {
     case transcription, classification, answer, embeddings
 }

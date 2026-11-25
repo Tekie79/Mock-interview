@@ -144,7 +144,7 @@ private struct SessionProviders {
 
     static func transcriptionFactory(defaults: UserDefaults, diarize: Bool = false) throws
         -> @Sendable () -> any StreamingSTT {
-        let speech = SpeechProvider(rawValue: defaults.string(forKey: "speechProvider") ?? "") ?? .openai
+        let speech = try ProviderSelection.decode(defaults.string(forKey: "speechProvider"), default: SpeechProvider.openai)
         let language = defaults.string(forKey: "sttLanguage")
         let vocabulary = (defaults.string(forKey: "speechVocabulary") ?? "").split(separator: ",")
             .map { $0.trimmingCharacters(in: .whitespacesAndNewlines) }
@@ -179,7 +179,7 @@ private struct SessionProviders {
     }
 
     static func questionClassifier(defaults: UserDefaults) throws -> any QuestionClassifier {
-        let provider = TextProvider(rawValue: defaults.string(forKey: "classificationProvider") ?? "") ?? .openai
+        let provider = try ProviderSelection.decode(defaults.string(forKey: "classificationProvider"), default: TextProvider.openai)
         let instructions = defaults.string(forKey: "classificationInstructions") ?? ""
         switch provider {
         case .openai:
@@ -198,7 +198,7 @@ private struct SessionProviders {
     }
 
     static func answerGenerator(defaults: UserDefaults) throws -> any TextGenerator {
-        let answer = TextProvider(rawValue: defaults.string(forKey: "answerProvider") ?? "") ?? .openai
+        let answer = try ProviderSelection.decode(defaults.string(forKey: "answerProvider"), default: TextProvider.openai)
         switch answer {
         case .openai:
             return OpenAITextGenerator(apiKey: try key("openai"),
@@ -894,7 +894,7 @@ private struct AnswerPanel: View {
                     VStack(alignment: .leading, spacing: 10) {
                         Text(answer.text).font(.system(size: fontSize)).textSelection(.enabled)
                             .onChange(of: answer.text, initial: true) { _, value in
-                                if !value.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
+                                if value.contains(where: { $0.isLetter || $0.isNumber }) {
                                     model.responseVisible(answer.revision)
                                 }
                             }

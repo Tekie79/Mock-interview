@@ -25,6 +25,7 @@ actor MacChatGPTPlanAccounts {
                   expectedSubject: String? = nil) async throws -> ChatGPTPlanIdentity {
         try requireEligibility()
         let grant = try attempt.validateCallback(callback)
+        let previousSubject = try MacPlanKeychain.load(grant.clientID)?.identity.subject
         let revision = UUID()
         changes[grant.clientID] = revision
         defer { if changes[grant.clientID] == revision { changes[grant.clientID] = nil } }
@@ -32,7 +33,7 @@ actor MacChatGPTPlanAccounts {
         guard let token = reply.id_token else { throw PlanAuthorizationFailure.invalidIdentity }
         let keys = try await MacChatGPTPlanSecurity.Keys.download()
         let identity = try ChatGPTIDToken.verify(token, clientID: grant.clientID, nonce: attempt.nonce,
-                                                expectedSubject: expectedSubject, now: .now,
+                                                expectedSubject: expectedSubject ?? previousSubject, now: .now,
                                                 verifySignature: keys.verify)
         guard changes[grant.clientID] == revision else { throw CancellationError() }
         let credentials = try validated(reply, identity: identity, idToken: token)
