@@ -41,6 +41,10 @@ struct MockInterviewApp: App {
 
         Window("Compact Answer", id: "compact") {
             CompactView(model: model)
+                .onAppear { appDelegate.model = model }
+                .task {
+                    if model.store == nil { await model.load() }
+                }
                 .frame(minWidth: 300, minHeight: 210)
         }
         .defaultSize(width: 430, height: 285)
@@ -335,6 +339,15 @@ final class WorkspaceModel: ObservableObject {
 
     var state: InterviewSnapshot.State { snapshot?.state ?? .idle }
     var active: Bool { state.isRunning || [.pausing, .paused, .stopping, .failed].contains(state) }
+    var startActionLabel: String? {
+        switch state {
+        case .idle, .stopped: "Start"
+        case .paused: "Resume"
+        default: nil
+        }
+    }
+    var canStartOrResume: Bool { startActionLabel != nil && !busy && !testing && !chatGPTBusy }
+
     var displayedAnswer: InterviewAnswer? {
         if let selectedAnswer,
            let result = snapshot?.answers.first(where: { $0.id == selectedAnswer }) { return result }
@@ -471,7 +484,7 @@ final class WorkspaceModel: ObservableObject {
     }
 
     func startOrResume() {
-        guard !busy, !testing, !chatGPTBusy, !state.isRunning, state != .failed else { return }
+        guard canStartOrResume else { return }
         busy = true
         error = nil
         Task {
@@ -903,13 +916,7 @@ private struct WorkspaceView: View {
                 Button("Diagnostics") { showDiagnostics = true }
                 Button("Clear Session", action: model.clearSession).disabled(model.active || model.snapshot == nil)
             }
-            if model.state.isRunning {
-                Button("Pause", action: model.pause)
-            } else if model.state != .failed {
-                Button(model.state == .paused ? "Resume" : "Start", action: model.startOrResume)
-                    .buttonStyle(.borderedProminent).disabled(model.busy || model.testing)
-            }
-            if model.active { Button("Stop", action: model.stop).disabled(model.busy) }
+            SessionControls(model: model)
         }
     }
 
@@ -1216,6 +1223,21 @@ private struct AnswerText: View, Equatable {
     }
 }
 
+private struct SessionControls: View {
+    @ObservedObject var model: WorkspaceModel
+
+    var body: some View {
+        if model.state.isRunning {
+            Button("Pause", action: model.pause).disabled(model.busy)
+        } else if let label = model.startActionLabel {
+            Button(label, action: model.startOrResume)
+                .buttonStyle(.borderedProminent)
+                .disabled(!model.canStartOrResume)
+        }
+        if model.active { Button("Stop", action: model.stop).disabled(model.busy) }
+    }
+}
+
 private struct CompactView: View {
     @ObservedObject var model: WorkspaceModel
     @Environment(\.openWindow) private var openWindow
@@ -1224,13 +1246,19 @@ private struct CompactView: View {
 
     var body: some View {
         VStack {
+            if let error = model.error {
+                Label(error, systemImage: "exclamationmark.triangle").font(.caption).foregroundStyle(.red)
+                    .frame(maxWidth: .infinity, alignment: .leading)
+            } else if let issue = model.snapshot?.issues.last {
+                Label(issue, systemImage: "exclamationmark.circle").font(.caption).foregroundStyle(.secondary)
+                    .frame(maxWidth: .infinity, alignment: .leading)
+            }
             AnswerPanel(model: model, fontSize: fontSize)
             HStack {
                 Toggle("Always on Top", isOn: $onTop)
                 Spacer()
                 Button("Expand") { openWindow(id: "workspace", value: WorkspaceWindow.main) }
-                if model.state.isRunning { Button("Pause", action: model.pause) }
-                if model.active { Button("Stop", action: model.stop) }
+                SessionControls(model: model)
             }
             .font(.caption)
         }

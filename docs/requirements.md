@@ -81,7 +81,7 @@ Out of scope: custom consent workflow, participant notification or agreement for
 | Profiles | Name, target role, seniority, industry, job description, résumé, verified experience facts, technical keywords, default instructions |
 | Source setup | List running audio-capable applications, microphone device, input modes, test levels, capture state, language |
 | Live workspace | Listening status, source indicators, live transcript, active question, streamed answer, recent questions, elapsed time, usage |
-| Compact window | Current question, concise response, next/previous, pin, expand, pause/stop; resizable, optional always-on-top |
+| Compact window | Current question, concise response, next/previous, pin, expand, start/pause/resume/stop; resizable, optional always-on-top |
 | Settings | STT/LLM choices, model IDs, API keys, answer format, VAD sensitivity, question threshold, keyboard shortcuts, retention |
 | Review (P1) | Transcript timeline, detected/missed questions, actual vs. suggested answers, rubric, improvement notes, export |
 

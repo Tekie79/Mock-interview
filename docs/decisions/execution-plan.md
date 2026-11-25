@@ -76,3 +76,9 @@ Add profile inputs for skills and a sample of the candidate's speaking style. Le
 - Verify profile persistence, source and status boundaries, the automatic broad-question path, prompt separation, native editing, portable builds and unsigned packaging. Live model adherence needs separate verification.
 
 Local builds passed with 123 Linux Swift 6.2.3 and 133 Apple Silicon macOS XCTest cases, all passing. The unsigned universal app built with one App Intents metadata warning. The isolated native profile accepted skills, a speaking sample, and a saved synthetic project with source, destination, data and contribution. Deterministic tests verified the broad-question payload, project evidence isolation and the ordinary technical path. The check used no personal profile or live provider.
+
+## Compact session controls
+
+Show Start in the idle Compact window and Resume when paused. Share the session buttons and availability checks with the main workspace. Surface startup failures in Compact so they can be diagnosed without expanding. Verify the controls in a native preview with synthetic state transitions, then run the build, tests and unsigned packaging.
+
+The native preview verified Start, Pause, Resume and Stop at the minimum Compact width, disabled Start during an audio test, and a visible missing-source error. Local macOS passed 133 tests and unsigned packaging. The first local Linux run timed out in the existing transcription watchdog test. The full retry passed all 123 tests. The preview used a simulated session and did not capture audio.

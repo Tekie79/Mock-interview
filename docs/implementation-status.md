@@ -147,3 +147,5 @@ See `docs/verification/baseline.md` for the initial build/test run. No native Ma
 - Question classification and Answer generation have independent model and reasoning menus for OpenAI and Anthropic. Custom model IDs and existing presets are retained. Reasoning settings are saved with provider presets, and account-specific model access is checked through the existing connection tests.
 
 - **Answer training** in Profiles stores skills and a sample of the candidate's speaking style. Recorded project stories become individual experience facts with optional source, destination, data and outcome. Broad past-work questions can retrieve approved project examples independently of their wording, and the generation policy favors an actual project in first-person past tense.
+
+- Compact and the main workspace share Start, Pause, Resume and Stop controls. Compact also shows startup errors and session issues from the selected sources and providers.
