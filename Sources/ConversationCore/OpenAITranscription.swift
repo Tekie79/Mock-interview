@@ -12,6 +12,7 @@ public enum ProviderFailure: Error, Equatable, Sendable {
     case malformedEvent
     case disconnected
     case timeout
+    case incompleteTranscription
 }
 
 public enum OpenAIRealtimeWire {

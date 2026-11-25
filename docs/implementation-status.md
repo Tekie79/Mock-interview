@@ -99,3 +99,4 @@ See `docs/verification/baseline.md` for the initial build/test run. No native Ma
 ## M10.1 development
 
 - A: Implemented — qualification pending. Transcript ingestion feeds a bounded independent classifier queue. Per-source lifecycle drives session state, with source/epoch/revision guards and an explicit overflow counter. Linux baseline and two targeted regressions passed.
+- B: Implemented — qualification pending. Provider readiness precedes capture, committed segments drive bounded replay drain, and role-labelled context and stage measurements are wired to classification, generation and the view. Linux 28 tests passed. Physical capture time and provider-specific endpoint behavior remain qualification work.

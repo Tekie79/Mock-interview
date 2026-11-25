@@ -37,6 +37,7 @@ public struct InterviewAnswer: Identifiable, Sendable, Codable, Equatable {
     public var evidence: [String] = []
     public var usage: TokenUsage?
     public var firstTextMilliseconds: Int?
+    public var pipeline: PipelineDurations?
     public var failure: String?
     public var id: UUID { question.id }
 }
@@ -86,6 +87,7 @@ public struct InterviewSnapshot: Sendable {
     public typealias State = LiveState
     public internal(set) var sources: [String: LiveState] = [:]
     public internal(set) var discardedQuestions = 0
+    public internal(set) var droppedAudioChunks = 0
 
     public internal(set) var state: State = .idle
     public internal(set) var transcript: [InterviewTranscript] = []
@@ -103,12 +105,16 @@ public actor InterviewSession {
         let event: TranscriptEvent
         let speaker: DiarizedSpeaker.ID?
         let sequence: UInt64
+        let conversation: [ConversationTurn]
     }
     private var channels: [TranscriptionChannel]
     private let detector: QuestionDetector
     private let generator: any TextGenerator
     private let preferences: String
     private let interviewContext: [String]
+    private let classificationBudget: ContextBudget
+    private let answerBudget: ContextBudget
+    private let classificationEvidence: @Sendable (String) async -> [String]
     private let evidence: @Sendable (String) async -> [String]
     private var captureID: UUID?
     private var cleanup: Task<Void, Never>?
@@ -120,6 +126,8 @@ public actor InterviewSession {
     private var ingressSequence: UInt64 = 0
     private var manualBarrier: UInt64 = 0
     private var activeAnswerSource: QuestionWork?
+    private var timeline: [UUID: PipelineTiming] = [:]
+    private var conversation: [ConversationTurn] = []
     private var roleBarriers: [DiarizedSpeaker.ID: UInt64] = [:]
     private var epochs: [String: UUID] = [:]
     private var lastMeterUpdate: [String: ContinuousClock.Instant] = [:]
@@ -131,7 +139,10 @@ public actor InterviewSession {
 
     public init(channels: [TranscriptionChannel], detector: QuestionDetector, generator: any TextGenerator,
                 format: AnswerFormat = .brief, preferences: String = "", interviewContext: [String] = [],
-                queueLimit: Int = 32, evidence: @escaping @Sendable (String) async -> [String] = { _ in [] }) {
+                queueLimit: Int = 32, classificationBudget: ContextBudget = .init(),
+                answerBudget: ContextBudget = .init(),
+                classificationEvidence: @escaping @Sendable (String) async -> [String] = { _ in [] },
+                evidence: @escaping @Sendable (String) async -> [String] = { _ in [] }) {
         self.channels = channels
         self.queueLimit = min(256, max(1, queueLimit))
         self.detector = detector
@@ -140,6 +151,9 @@ public actor InterviewSession {
         self.preferences = preferences
         self.interviewContext = interviewContext
         self.evidence = evidence
+        self.classificationBudget = classificationBudget
+        self.answerBudget = answerBudget
+        self.classificationEvidence = classificationEvidence
     }
 
     public func updates() -> AsyncStream<InterviewSnapshot> {
@@ -319,6 +333,8 @@ public actor InterviewSession {
             recordIssue("Audio gap on " + source.id + ". Reconnecting.")
             invalidateSourceWork(source)
             await detector.invalidate(source)
+        case .dropped(_, let chunks):
+            snapshot.droppedAudioChunks += chunks
         case .level(let source, let value):
             let now = ContinuousClock.now
             if let last = lastMeterUpdate[source.id], last.duration(to: now) < .milliseconds(100) { return }
@@ -349,11 +365,16 @@ public actor InterviewSession {
             }
             if event.state == .final, role == .interviewer {
                 ingressSequence += 1
-                let work = QuestionWork(event: event, speaker: speakerID, sequence: ingressSequence)
+                let work = QuestionWork(event: event, speaker: speakerID, sequence: ingressSequence,
+                                        conversation: classificationBudget.recent(conversation))
                 if case .dropped = questionQueue?.yield(work) {
                     snapshot.discardedQuestions += 1
                     recordIssue("Question queue full. Transcript retained. Use the transcript to ask manually.")
                 }
+            }
+            if event.state == .final, role != .unknown {
+                conversation.append(.init(id: id, role: role, text: String(event.text.prefix(4_000))))
+                if conversation.count > 64 { conversation.removeFirst() }
             }
         }
         if captureID == activation {
@@ -372,12 +393,26 @@ public actor InterviewSession {
 
     private func classify(_ work: QuestionWork, activation: UUID) async {
         guard eligible(work, activation: activation) else { return }
-        let job = Task { [detector] in try await detector.receive(work.event) }
+        var timing = work.event.timing
+        timing.classificationStarted = .now
+        let job = Task { [detector, classificationBudget, classificationEvidence, interviewContext] in
+            let facts = await classificationEvidence(work.event.text)
+            try Task.checkCancellation()
+            return try await detector.receive(work.event, conversation: work.conversation,
+                                              approvedEvidence: facts, interviewContext: interviewContext,
+                                              budget: classificationBudget)
+        }
         classification = (work, job)
         defer { if classification?.work.sequence == work.sequence { classification = nil } }
         do {
             if let question = try await job.value, eligible(work, activation: activation) {
-                generate(question, format: format, origin: work)
+                timing.classificationFinished = .now
+                let id = work.event.epoch.uuidString + "/" + work.event.source.id + "/" + work.event.itemID
+                if let index = conversation.firstIndex(where: { $0.id == id }) {
+                    let turn = conversation[index]
+                    conversation[index] = .init(id: turn.id, role: turn.role, text: turn.text, questionID: question.id)
+                }
+                generate(question, format: format, origin: work, timing: timing)
             }
         } catch where !(error is CancellationError) && eligible(work, activation: activation) {
             recordIssue("Question classification failed. Select transcript text to ask manually.")
@@ -392,25 +427,30 @@ public actor InterviewSession {
 
     private func channelEnded(_ source: CaptureSource, activation: UUID, failure: String?) async {
         guard captureID == activation else { return }
-        epochs.removeValue(forKey: source.id)
+        if failure != nil { epochs.removeValue(forKey: source.id) }
         snapshot.sources[source.id] = failure == nil ? .stopped : .failed
         snapshot.connected.remove(source.id)
         snapshot.levels.removeValue(forKey: source.id)
-        snapshot.speakers.removeAll { $0.id.sourceID == source.id }
-        invalidateSourceWork(source)
-        if let failure { recordIssue(source.id + ": " + failure) }
-        await detector.invalidate(source)
+        if let failure {
+            snapshot.speakers.removeAll { $0.id.sourceID == source.id }
+            roleBarriers = roleBarriers.filter { $0.key.sourceID != source.id }
+            invalidateSourceWork(source)
+            recordIssue(source.id + ": " + failure)
+            await detector.invalidate(source)
+        }
         if captureID == activation {
             updateRunningState()
             publish()
         }
     }
 
-    private func generate(_ question: AcceptedQuestion, format: AnswerFormat, origin: QuestionWork? = nil) {
+    private func generate(_ question: AcceptedQuestion, format: AnswerFormat, origin: QuestionWork? = nil,
+                          timing: PipelineTiming = .init()) {
         invalidateAnswer(.superseded)
         activeAnswerSource = origin
         let revision = UUID()
         activeRevision = revision
+        timeline[revision] = timing
         let answer = InterviewAnswer(question: question, revision: revision, format: format,
                                      text: "", state: .generating)
         if let index = snapshot.answers.firstIndex(where: { $0.id == question.id }) {
@@ -421,19 +461,27 @@ public actor InterviewSession {
         }
         publish()
         let began = ContinuousClock.now
-        var context = interviewContext
+        var context = answerBudget.recent(origin?.conversation ?? conversation).reversed().map { turn in
+            let speaker = turn.role == .candidate ? "Actual candidate speech (unverified)" : "Interviewer speech"
+            return speaker + ": " + turn.text
+        }
+        context.append(contentsOf: interviewContext)
         if let prior = snapshot.answers.first(where: { $0.id == question.previousQuestionID }) {
             context.insert("Previous interviewer question: " + prior.question.original, at: 0)
         }
-        generation = Task { [weak self, generator, evidence, preferences, context] in
+        let limitedContext = answerBudget.limit(context)
+        generation = Task { [weak self, generator, evidence, preferences, limitedContext, answerBudget] in
             do {
-                let facts = await evidence(question.normalized)
+                await self?.mark(revision, \.retrievalStarted)
+                let facts = answerBudget.limit(await evidence(question.normalized))
+                await self?.mark(revision, \.retrievalFinished)
                 try Task.checkCancellation()
                 await self?.recordEvidence(facts, revision)
                 let text = ([question.normalized] + question.parts).joined(separator: "\n")
                 let request = AnswerRequest(question: text,
                                             instructions: format.instruction + " " + preferences,
-                                            evidence: facts, interviewContext: context)
+                                            evidence: facts, interviewContext: limitedContext)
+                await self?.mark(revision, \.requestStarted)
                 for try await event in try await generator.stream(request) {
                     try Task.checkCancellation()
                     switch event {
@@ -470,6 +518,7 @@ public actor InterviewSession {
             let elapsed = began.duration(to: .now).components
             snapshot.answers[index].firstTextMilliseconds = Int(elapsed.seconds * 1_000 + elapsed.attoseconds / 1_000_000_000_000_000)
         }
+        mark(revision, \.firstToken)
         snapshot.answers[index].text.append(delta)
         publish()
     }
@@ -491,6 +540,7 @@ public actor InterviewSession {
               let index = snapshot.answers.firstIndex(where: { $0.revision == revision }) else { return }
         snapshot.answers[index].state = state == .complete && snapshot.answers[index].text.isEmpty ? .failed : state
         snapshot.answers[index].failure = failure
+        mark(revision, \.terminal)
         activeRevision = nil
         generation = nil
         publish()
@@ -500,10 +550,29 @@ public actor InterviewSession {
         activeAnswerSource = nil
         if let activeRevision, let index = snapshot.answers.firstIndex(where: { $0.revision == activeRevision }) {
             snapshot.answers[index].state = state
+            mark(activeRevision, \.terminal)
         }
         activeRevision = nil
         generation?.cancel()
         generation = nil
+    }
+
+    public func responseVisible(_ revision: UUID) {
+        guard captureID != nil, timeline[revision]?.firstToken != nil else { return }
+        mark(revision, \.firstVisible)
+    }
+
+    private func mark(_ revision: UUID, _ key: WritableKeyPath<PipelineTiming, ContinuousClock.Instant?>) {
+        guard var timing = timeline[revision], timing[keyPath: key] == nil,
+              let index = snapshot.answers.firstIndex(where: { $0.revision == revision }) else { return }
+        timing[keyPath: key] = .now
+        timeline[revision] = timing
+        snapshot.answers[index].pipeline = timing.durations
+        if timeline.count > 500 {
+            let retained = Set(snapshot.answers.map(\.revision))
+            timeline = timeline.filter { retained.contains($0.key) }
+        }
+        if key == \.firstVisible { publish() }
     }
 
     private func recordIssue(_ issue: String) {

@@ -63,7 +63,9 @@ public actor QuestionDetector {
         if !keepingContext { recent.removeAll() }
     }
 
-    public func receive(_ event: TranscriptEvent) async throws -> AcceptedQuestion? {
+    public func receive(_ event: TranscriptEvent, conversation: [ConversationTurn] = [],
+                        approvedEvidence: [String] = [], interviewContext: [String] = [],
+                        budget: ContextBudget = .init()) async throws -> AcceptedQuestion? {
         guard event.state == .final,
               var channel = channels[event.source.id], channel.source == event.source,
               channel.epoch == event.epoch, channel.finalizedIDs.count < 16_384,
@@ -98,7 +100,11 @@ public actor QuestionDetector {
                                    previousItemID: event.previousItemID, text: text, state: .final, speaker: event.speaker)
         let context = recent
         let result = try await classifier.classify(QuestionInput(
-            turn: turn, previousQuestions: context.map { String($0.normalized.prefix(1_000)) }))
+            turn: turn,
+            previousQuestions: budget.limit(context.suffix(4).reversed().map { "\($0.id.uuidString): \($0.normalized)" }),
+            conversation: budget.recent(conversation),
+            approvedEvidence: budget.limit(approvedEvidence),
+            interviewContext: budget.limit(interviewContext)))
         try Task.checkCancellation()
         guard let active = channels[event.source.id], active.epoch == event.epoch,
               AutomaticQuestionRoleGate.permitsClassification(for: Self.role(of: event, channel: active)),
@@ -114,9 +120,12 @@ public actor QuestionDetector {
               result.parts.count <= 12, result.parts.allSatisfy({
                   !$0.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty && $0.utf8.count <= 4_000
               }) else { return nil }
+        let references = Set(result.contextTurnIDs)
+        let matched = context.last(where: { references.contains($0.id.uuidString) })?.id
+            ?? conversation.last(where: { references.contains($0.id) && $0.questionID != nil })?.questionID
         let question = AcceptedQuestion(original: text, normalized: normalized, parts: result.parts,
                                         previousQuestionID: result.isFollowUp || result.isIntentionalRepeat
-                                            ? context.last?.id : nil)
+                                            ? matched ?? context.last?.id : nil)
         recent.append(question)
         if recent.count > 8 { recent.removeFirst() }
         return question

@@ -304,7 +304,7 @@ final class WorkspaceModel: ObservableObject {
                 let store = self.store
                 let channels = try captureSources().map { source, audio in
                     TranscriptionChannel(source: source, audio: audio, threshold: sensitivity,
-                                         makeSTT: providers.transcriber)
+                                         replay: source.id == "Replay", makeSTT: providers.transcriber)
                 }
                 let preferences = [
                     options.string(forKey: "answerInstructions") ?? "", profile?.instructions ?? "",
@@ -322,7 +322,11 @@ final class WorkspaceModel: ObservableObject {
                     channels: channels,
                     detector: QuestionDetector(classifier: providers.classifier, threshold: threshold),
                     generator: providers.generator,
-                    format: format, preferences: preferences, interviewContext: context
+                    format: format, preferences: preferences, interviewContext: context,
+                    classificationEvidence: { question in
+                        guard let store, let profile else { return [] }
+                        return (try? await store.retrieve(question, profile: profile.id))?.map(\.promptText) ?? []
+                    }
                 ) { question in
                     guard let store, let profile else { return [] }
                     if let embedding,
@@ -424,6 +428,10 @@ final class WorkspaceModel: ObservableObject {
 
     func assignSpeaker(_ id: DiarizedSpeaker.ID, role: SourceRole) {
         Task { await session?.assignSpeaker(id, role: role) }
+    }
+
+    func responseVisible(_ revision: UUID) {
+        Task { await session?.responseVisible(revision) }
     }
 
     func cancelAnswer() {
@@ -738,6 +746,11 @@ private struct AnswerPanel: View {
                 ScrollView {
                     VStack(alignment: .leading, spacing: 10) {
                         Text(answer.text).font(.system(size: fontSize)).textSelection(.enabled)
+                            .onChange(of: answer.text, initial: true) { _, value in
+                                if !value.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
+                                    model.responseVisible(answer.revision)
+                                }
+                            }
                         if !answer.evidence.isEmpty {
                             DisclosureGroup("Approved evidence") {
                                 ForEach(Array(answer.evidence.enumerated()), id: \.offset) { _, fact in

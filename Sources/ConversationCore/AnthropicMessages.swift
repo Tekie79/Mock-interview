@@ -34,7 +34,7 @@ public struct AnthropicQuestionClassifier: QuestionClassifier {
     }
 
     public func classify(_ input: QuestionInput) async throws -> QuestionDecision {
-        let context = ["latest": [input.turn.text], "previous_questions": input.previousQuestions]
+        let context = ClassifierContext(input)
         let serialized = String(decoding: try JSONEncoder().encode(context), as: UTF8.self)
         let request = try client.request(system: OpenAIQuestionClassifier.instructions, input: serialized, fields: [
             "max_tokens": 650,

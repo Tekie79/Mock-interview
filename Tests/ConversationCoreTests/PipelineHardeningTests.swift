@@ -111,3 +111,82 @@ final class PipelineHardeningTests: XCTestCase {
         await session.stop()
     }
 }
+
+private actor DelayedFinalSTT: StreamingSTT {
+    private var source: CaptureSource?
+    private var epoch: UUID?
+    private var output: AsyncThrowingStream<TranscriptEvent, Error>.Continuation?
+    private(set) var inputEnded = false
+    func connect(source: CaptureSource, epoch: UUID) -> AsyncThrowingStream<TranscriptEvent, Error> {
+        self.source = source
+        self.epoch = epoch
+        let (stream, output) = AsyncThrowingStream<TranscriptEvent, Error>.makeStream()
+        self.output = output
+        return stream
+    }
+    func append(_ frame: AudioFrame) {}
+    func commit() {
+        if let source, let epoch {
+            output?.yield(.init(source: source, epoch: epoch, itemID: "one", text: "Explain", state: .partial))
+        }
+    }
+    func finishInput() { inputEnded = true }
+    func close() { output?.finish(); output = nil }
+    func final() {
+        if let source, let epoch {
+            output?.yield(.init(source: source, epoch: epoch, itemID: "one", text: "Explain the tradeoffs.", state: .final))
+        }
+    }
+}
+
+extension PipelineHardeningTests {
+    func testReplayDrainsDelayedFinalAndMeasuresToViewAcknowledgment() async throws {
+        let source = CaptureSource(id: "replay", role: .interviewer)
+        let audio = PCMReplaySource(source: source, pcm: Data(repeating: 64, count: 9_600), pace: { _ in })
+        let stt = DelayedFinalSTT()
+        let session = InterviewSession(channels: [
+            .init(source: source, audio: audio, replay: true, drainTimeout: .seconds(2), makeSTT: { stt })
+        ], detector: .init(classifier: HeldClassifier(slow: false)), generator: FixedAnswer())
+        await session.start()
+        try await eventually { await stt.inputEnded }
+        let beforeFinal = await session.current()
+        XCTAssertTrue(beforeFinal.answers.isEmpty)
+        await stt.final()
+        try await eventually { await session.current().answers.last?.state == .complete }
+        let snapshot = await session.current()
+        let answer = try XCTUnwrap(snapshot.answers.last)
+        XCTAssertNil(answer.pipeline?.endpointToVisible)
+        XCTAssertNotNil(answer.pipeline?.commitToFinal)
+        XCTAssertNotNil(answer.pipeline?.classification)
+        XCTAssertNotNil(answer.pipeline?.retrieval)
+        XCTAssertNotNil(answer.pipeline?.requestToToken)
+        await session.responseVisible(answer.revision)
+        let visible = await session.current()
+        XCTAssertNotNil(visible.answers.last?.pipeline?.endpointToVisible)
+        await session.stop()
+    }
+
+    func testCandidateContextCarriesActualSpeechAndPriorQuestionIdentity() async throws {
+        let question = InjectedSTT()
+        let candidate = InjectedSTT()
+        let classifier = HeldClassifier(slow: false)
+        let session = InterviewSession(channels: [
+            .init(source: .init(id: "question", role: .interviewer), audio: HeldAudio(), makeSTT: { question }),
+            .init(source: .init(id: "candidate", role: .candidate), audio: HeldAudio(), makeSTT: { candidate })
+        ], detector: .init(classifier: classifier), generator: FixedAnswer())
+        await session.start()
+        try await eventually { await session.current().state == .listening }
+        await question.send("Describe your approach.", item: "first")
+        try await eventually { await session.current().answers.count == 1 }
+        await candidate.send("I split the queue by priority.", item: "actual")
+        try await eventually { await session.current().transcript.count == 2 }
+        await question.send("Why did you choose that approach?", item: "follow-up")
+        try await eventually { await classifier.inputs.count == 2 }
+        let inputs = await classifier.inputs
+        XCTAssertEqual(inputs.last?.conversation.map(\.role), [.interviewer, .candidate])
+        XCTAssertNotNil(inputs.last?.conversation.first?.questionID)
+        XCTAssertEqual(inputs.last?.conversation.last?.text, "I split the queue by priority.")
+        XCTAssertFalse(inputs.last?.conversation.contains { $0.text.contains("Suggested response") } ?? true)
+        await session.stop()
+    }
+}

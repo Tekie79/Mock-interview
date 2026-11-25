@@ -9,6 +9,8 @@ public func publicErrorMessage(_ error: Error) -> String {
         "The provider rejected the key. Update it in Settings."
     case ProviderFailure.rateLimited:
         "The provider rate limit was reached."
+    case ProviderFailure.incompleteTranscription:
+        "Transcription ended with unconfirmed audio. Review the retained transcript before retrying."
     case ProviderFailure.timeout:
         "The provider timed out."
     case ProviderFailure.requestRejected, ProviderFailure.malformedEvent:
@@ -40,10 +42,13 @@ public extension InterviewSnapshot {
             "Session state: \(state.rawValue)",
             "Connected source count: \(connected.count)",
             "STT reconnects: \(reconnects)",
+            "Minimum dropped audio chunks: \(droppedAudioChunks)",
+            "Question queue overflows: \(discardedQuestions)",
             "Final transcript segments: \(transcript.filter(\.isFinal).count)",
             "Accepted and manual questions: \(answers.count)",
             "Completed answers: \(answers.filter { $0.state == .complete }.count)",
-            usage
+            usage,
+            answers.last?.pipeline?.summary ?? ""
         ].joined(separator: "\n")
     }
 }

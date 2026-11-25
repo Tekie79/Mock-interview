@@ -16,12 +16,15 @@ public struct AudioFrame: Equatable, Sendable {
     public let sampleRate: Int
     public let startSample: Int64
     public let pcm: Data
+    public let capturedAt: ContinuousClock.Instant
 
-    public init(source: CaptureSource, sampleRate: Int, startSample: Int64, pcm: Data) {
+    public init(source: CaptureSource, sampleRate: Int, startSample: Int64, pcm: Data,
+                capturedAt: ContinuousClock.Instant = .now) {
         self.source = source
         self.sampleRate = sampleRate
         self.startSample = startSample
         self.pcm = pcm
+        self.capturedAt = capturedAt
     }
 }
 
@@ -43,9 +46,10 @@ public struct TranscriptEvent: Equatable, Sendable {
     public let text: String
     public let state: State
     public let speaker: Int?
+    public var timing: PipelineTiming
 
     public init(source: CaptureSource, epoch: UUID, itemID: String, previousItemID: String? = nil,
-                text: String, state: State, speaker: Int? = nil) {
+                text: String, state: State, speaker: Int? = nil, timing: PipelineTiming = .init()) {
         self.source = source
         self.epoch = epoch
         self.itemID = itemID
@@ -53,6 +57,7 @@ public struct TranscriptEvent: Equatable, Sendable {
         self.text = text
         self.state = state
         self.speaker = speaker
+        self.timing = timing
     }
 }
 
@@ -61,16 +66,29 @@ public protocol StreamingSTT: Sendable {
         -> AsyncThrowingStream<TranscriptEvent, Error>
     func append(_ frame: AudioFrame) async throws
     func commit() async throws
+    func finishInput() async throws
     func close() async
+}
+
+public extension StreamingSTT {
+    /// Most manually committed transports remain open until the final events are read.
+    func finishInput() async throws {}
 }
 
 public struct QuestionInput: Equatable, Sendable {
     public let turn: TranscriptEvent
     public let previousQuestions: [String]
+    public let conversation: [ConversationTurn]
+    public let approvedEvidence: [String]
+    public let interviewContext: [String]
 
-    public init(turn: TranscriptEvent, previousQuestions: [String]) {
+    public init(turn: TranscriptEvent, previousQuestions: [String], conversation: [ConversationTurn] = [],
+                approvedEvidence: [String] = [], interviewContext: [String] = []) {
         self.turn = turn
         self.previousQuestions = previousQuestions
+        self.conversation = conversation
+        self.approvedEvidence = approvedEvidence
+        self.interviewContext = interviewContext
     }
 }
 
