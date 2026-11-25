@@ -2,6 +2,9 @@ import Foundation
 
 public enum CaptureFailure: Error, Equatable, Sendable {
     case alreadyRunning
+    case routeChanged
+    case unsupportedRoute
+    case conflictingMicrophones
     case invalidFormat
     case sourceUnavailable
     case permissionDenied

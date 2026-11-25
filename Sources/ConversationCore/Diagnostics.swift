@@ -19,6 +19,12 @@ public func publicErrorMessage(_ error: Error) -> String {
         "The provider connection was interrupted."
     case CaptureFailure.permissionDenied:
         "Allow access in macOS System Settings → Privacy & Security, then restart capture."
+    case CaptureFailure.routeChanged:
+        "The macOS default route or application process group changed. Reconnecting with a fresh audio stream."
+    case CaptureFailure.unsupportedRoute:
+        "The selected output does not expose a supported single digital stream to Core Audio taps."
+    case CaptureFailure.conflictingMicrophones:
+        "Choose separate devices for the interviewer and candidate microphones."
     case CaptureFailure.sourceUnavailable:
         "The selected source changed or stopped. Stop the session and reselect the source."
     case CaptureFailure.bufferOverrun:

@@ -128,6 +128,7 @@ public actor InterviewSession {
     private var activeAnswerSource: QuestionWork?
     private var timeline: [UUID: PipelineTiming] = [:]
     private var conversation: [ConversationTurn] = []
+    private var recentCandidateAudio: [(String, ContinuousClock.Instant)] = []
     private var roleBarriers: [DiarizedSpeaker.ID: UInt64] = [:]
     private var epochs: [String: UUID] = [:]
     private var lastMeterUpdate: [String: ContinuousClock.Instant] = [:]
@@ -209,6 +210,14 @@ public actor InterviewSession {
         }
     }
 
+    public func replaceChannels(_ replacements: [TranscriptionChannel]) async {
+        guard snapshot.state.isRunning || snapshot.state == .failed || snapshot.state == .paused else { return }
+        if snapshot.state != .paused { await endCapture(.paused) }
+        guard snapshot.state == .paused else { return }
+        channels = replacements
+        start()
+    }
+
     public func setFormat(_ format: AnswerFormat) { self.format = format }
 
     public func manualQuestion(_ text: String) {
@@ -256,6 +265,7 @@ public actor InterviewSession {
         epochs.removeAll()
         lastMeterUpdate.removeAll()
         roleBarriers.removeAll()
+        recentCandidateAudio.removeAll()
         let tasks = captureTasks
         captureTasks.removeAll()
         for task in tasks { task.cancel() }
@@ -363,7 +373,11 @@ public actor InterviewSession {
                 snapshot.transcript.append(item)
                 if snapshot.transcript.count > 2_000 { snapshot.transcript.removeFirst() }
             }
-            if event.state == .final, role == .interviewer {
+            if event.state == .final, role == .candidate {
+                if let normalized = Self.echoFingerprint(event.text) { recentCandidateAudio.append((normalized, .now)) }
+                if recentCandidateAudio.count > 12 { recentCandidateAudio.removeFirst() }
+            }
+            if event.state == .final, role == .interviewer, !isCandidateEcho(event.text) {
                 ingressSequence += 1
                 let work = QuestionWork(event: event, speaker: speakerID, sequence: ingressSequence,
                                         conversation: classificationBudget.recent(conversation))
@@ -383,8 +397,20 @@ public actor InterviewSession {
         }
     }
 
+    private static func echoFingerprint(_ text: String) -> String? {
+        let tokens = text.lowercased().split { !$0.isLetter && !$0.isNumber }
+        return tokens.count >= 4 ? tokens.joined(separator: " ") : nil
+    }
+
+    private func isCandidateEcho(_ text: String) -> Bool {
+        guard let fingerprint = Self.echoFingerprint(text) else { return false }
+        return recentCandidateAudio.contains { observed, time in
+            observed == fingerprint && time.duration(to: .now) <= .seconds(3)
+        }
+    }
+
     private func eligible(_ work: QuestionWork, activation: UUID) -> Bool {
-        guard captureID == activation, work.sequence > manualBarrier,
+        guard captureID == activation, work.sequence > manualBarrier, !isCandidateEcho(work.event.text),
               epochs[work.event.source.id] == work.event.epoch else { return false }
         guard let speaker = work.speaker else { return work.event.source.role == .interviewer }
         return work.sequence > (roleBarriers[speaker] ?? 0)

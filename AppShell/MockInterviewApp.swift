@@ -162,21 +162,15 @@ private struct SessionProviders {
 
 @MainActor
 final class WorkspaceModel: ObservableObject {
-    enum SourceMode: String, CaseIterable, Identifiable {
-        case remote = "Application audio"
-        case both = "Application and microphone"
-        case microphone = "Microphone only"
-        case replay = "Recorded PCM replay"
-        var id: String { rawValue }
+    @Published var route: AudioRoutePreference = {
+        guard let data = UserDefaults.standard.data(forKey: "audioRoute") else { return .init() }
+        return (try? JSONDecoder().decode(AudioRoutePreference.self, from: data)) ?? .init()
+    }() {
+        didSet { UserDefaults.standard.set(try? JSONEncoder().encode(route), forKey: "audioRoute") }
     }
-
-    @Published var mode: SourceMode = .remote
-    @Published var processes: [MacAudioChoice] = []
-    @Published var microphones: [MacAudioChoice] = []
-    @Published var processID: UInt32?
-    @Published var micID: UInt32?
-    @Published var designatedInterviewer = false
-    @Published var mixedDiarization = false
+    @Published var processes: [AudioEndpointChoice] = []
+    @Published var microphones: [AudioEndpointChoice] = []
+    @Published var outputs: [AudioEndpointChoice] = []
     @Published var replayURL: URL?
     @Published var snapshot: InterviewSnapshot?
     @Published var error: String?
@@ -229,8 +223,7 @@ final class WorkspaceModel: ObservableObject {
         do {
             processes = try MacAudioDevices.processes()
             microphones = try MacAudioDevices.microphones()
-            if !processes.contains(where: { $0.id == processID }) { processID = nil }
-            if !microphones.contains(where: { $0.id == micID }) { micID = nil }
+            outputs = try MacAudioDevices.outputs()
         } catch {
             self.error = "macOS audio sources could not be listed."
         }
@@ -294,7 +287,7 @@ final class WorkspaceModel: ObservableObject {
             }
             do {
                 let options = UserDefaults.standard
-                let diarize = mode == .microphone && !designatedInterviewer && mixedDiarization
+                let diarize = route.question == .sharedMicrophone
                 let providers = try SessionProviders(defaults: options, diarize: diarize)
                 let embedding = try? SessionProviders.embeddings(defaults: options)
                 let format = AnswerFormat(rawValue: options.string(forKey: "answerFormat") ?? "") ?? .brief
@@ -302,10 +295,7 @@ final class WorkspaceModel: ObservableObject {
                 let sensitivity = Float(options.object(forKey: "vadThreshold") as? Double ?? 0.015)
                 let profile = profiles.first(where: { $0.id == profileID })
                 let store = self.store
-                let channels = try captureSources().map { source, audio in
-                    TranscriptionChannel(source: source, audio: audio, threshold: sensitivity,
-                                         replay: source.id == "Replay", makeSTT: providers.transcriber)
-                }
+                let channels = try makeChannels(providers, sensitivity: sensitivity)
                 let preferences = [
                     options.string(forKey: "answerInstructions") ?? "", profile?.instructions ?? "",
                     (profile?.answerLanguage.isEmpty == false) ? "Answer language: " + (profile?.answerLanguage ?? "") : ""
@@ -502,38 +492,75 @@ final class WorkspaceModel: ObservableObject {
                     }
                 } catch is CancellationError {
                 } catch {
-                    self.error = "Audio test failed. Check macOS permissions and the selected sources."
+                    self.error = publicErrorMessage(error)
                 }
             }
         } catch {
-            self.error = "Select each required audio source before testing."
+            self.error = publicErrorMessage(error)
         }
     }
 
     private func displayTestLevel(_ level: Float, source: String) { testLevels[source] = level }
 
+    private func makeChannels(_ providers: SessionProviders, sensitivity: Float) throws -> [TranscriptionChannel] {
+        try captureSources().map { source, audio in
+            TranscriptionChannel(source: source, audio: audio, threshold: sensitivity,
+                                 replay: source.id == "Replay", makeSTT: providers.transcriber)
+        }
+    }
+
+    func applySources() {
+        guard let session, active, !busy, !testing else { return }
+        busy = true
+        error = nil
+        Task {
+            defer { busy = false }
+            do {
+                let options = UserDefaults.standard
+                let speech = try SessionProviders(defaults: options, diarize: route.question == .sharedMicrophone)
+                let sensitivity = Float(options.object(forKey: "vadThreshold") as? Double ?? 0.015)
+                let channels = try makeChannels(speech, sensitivity: sensitivity)
+                await session.replaceChannels(channels)
+            } catch {
+                self.error = publicErrorMessage(error)
+            }
+        }
+    }
+
     private func captureSources() throws -> [(CaptureSource, any AudioSource)] {
-        var result: [(CaptureSource, any AudioSource)] = []
-        if mode == .remote || mode == .both {
-            guard let processID else { throw CaptureFailure.sourceUnavailable }
-            let source = CaptureSource(id: "Application", role: .interviewer)
-            result.append((source, MacAudioSource(source: source, input: .process(processID))))
+        try route.validateConcurrentMicrophones()
+        func required(_ value: String?) throws -> String {
+            guard let value else { throw CaptureFailure.sourceUnavailable }
+            return value
         }
-        if mode == .microphone || mode == .both {
-            guard let micID else { throw CaptureFailure.sourceUnavailable }
-            let role: SourceRole = mode == .both ? .candidate : (designatedInterviewer ? .interviewer : .unknown)
-            let source = CaptureSource(id: "Microphone", role: role)
-            result.append((source, MacAudioSource(source: source, input: .microphone(micID))))
-        }
-        if mode == .replay {
+        let question = CaptureSource(id: route.question == .replay ? "Replay" : "Question",
+                                     role: route.question == .sharedMicrophone ? .unknown : .interviewer)
+        let audio: any AudioSource
+        switch route.question {
+        case .defaultOutput: audio = MacAudioSource(source: question, input: .output(uid: nil))
+        case .outputDevice:
+            audio = MacAudioSource(source: question, input: .output(uid: try required(route.outputUID)))
+        case .application:
+            audio = MacAudioSource(source: question, input: .application(group: try required(route.applicationID)))
+        case .interviewerMicrophone, .sharedMicrophone:
+            audio = MacAudioSource(source: question, input: .microphone(uid: try required(route.interviewerMicrophoneUID)))
+        case .replay:
             guard let replayURL else { throw CaptureFailure.sourceUnavailable }
-            let fileSize = try replayURL.resourceValues(forKeys: [.fileSizeKey]).fileSize ?? 0
-            guard fileSize > 0, fileSize <= 24_000_000 else { throw CaptureFailure.invalidFormat }
-            let source = CaptureSource(id: "Replay", role: .interviewer)
-            result.append((source, PCMReplaySource(source: source, pcm: try Data(contentsOf: replayURL))))
+            let accessed = replayURL.startAccessingSecurityScopedResource()
+            defer { if accessed { replayURL.stopAccessingSecurityScopedResource() } }
+            let size = try replayURL.resourceValues(forKeys: [.fileSizeKey]).fileSize ?? 0
+            guard size > 0, size <= 24_000_000 else { throw CaptureFailure.invalidFormat }
+            audio = PCMReplaySource(source: question, pcm: try Data(contentsOf: replayURL))
+        }
+        var result = [(question, audio)]
+        if route.candidateEnabled {
+            let candidate = CaptureSource(id: "Candidate microphone", role: .candidate)
+            result.append((candidate, MacAudioSource(source: candidate,
+                          input: .microphone(uid: try required(route.candidateMicrophoneUID)))))
         }
         return result
     }
+
 }
 
 private struct WorkspaceView: View {
@@ -556,7 +583,11 @@ private struct WorkspaceView: View {
             if let issue = model.snapshot?.issues.last {
                 Label(issue, systemImage: "exclamationmark.circle").foregroundStyle(.secondary)
             }
-            if !model.active { sourceSetup }
+            if model.active {
+                DisclosureGroup("Audio Sources") { sourceSetup }
+            } else {
+                sourceSetup
+            }
             HSplitView {
                 transcript.frame(minWidth: 245, idealWidth: 360)
                 AnswerPanel(model: model, fontSize: fontSize).frame(minWidth: 360, maxWidth: .infinity)
@@ -643,44 +674,68 @@ private struct WorkspaceView: View {
                     Text("General practice").tag(UUID?.none)
                     ForEach(model.profiles) { Text($0.name).tag(Optional($0.id)) }
                 }
-                Picker("Source", selection: $model.mode) {
-                    ForEach(WorkspaceModel.SourceMode.allCases) { Text($0.rawValue).tag($0) }
+                Picker("Question audio", selection: $model.route.question) {
+                    ForEach(QuestionAudioKind.allCases) { Text($0.rawValue).tag($0) }
                 }
                 Button("Refresh Sources", action: model.reloadDevices)
             }
             HStack {
-                if model.mode == .remote || model.mode == .both {
-                    Picker("Application", selection: $model.processID) {
-                        Text("Select an application").tag(UInt32?.none)
-                        ForEach(model.processes) { Text($0.name).tag(Optional($0.id)) }
-                    }
-                }
-                if model.mode == .microphone || model.mode == .both {
-                    Picker("Microphone", selection: $model.micID) {
-                        Text("Select a microphone").tag(UInt32?.none)
-                        ForEach(model.microphones) { Text($0.name).tag(Optional($0.id)) }
-                    }
-                }
-                if model.mode == .microphone {
-                    Toggle("Interviewer-only microphone", isOn: $model.designatedInterviewer)
-                }
-                if model.mode == .replay {
+                switch model.route.question {
+                case .defaultOutput:
+                    Text("Follows the macOS default output route.").font(.caption)
+                case .outputDevice:
+                    sourcePicker("Output", choices: model.outputs, selection: $model.route.outputUID)
+                case .application:
+                    sourcePicker("Application", choices: model.processes, selection: $model.route.applicationID)
+                case .interviewerMicrophone, .sharedMicrophone:
+                    sourcePicker("Question microphone", choices: model.microphones,
+                                 selection: $model.route.interviewerMicrophoneUID)
+                case .replay:
                     Button(model.replayURL?.lastPathComponent ?? "Choose 24 kHz mono PCM16 file") {
                         replayPicker = true
                     }
                 }
-                Button(model.testing ? "End Audio Test" : "Test Audio", action: model.testSources)
+                Toggle("Candidate microphone", isOn: $model.route.candidateEnabled)
+                if model.route.candidateEnabled {
+                    sourcePicker("Candidate input", choices: model.microphones,
+                                 selection: $model.route.candidateMicrophoneUID)
+                }
             }
-            if model.mode == .microphone && !model.designatedInterviewer && speechProvider == .deepgram {
-                Toggle("Identify speakers for manual role assignment", isOn: $model.mixedDiarization)
+            HStack {
+                if model.active {
+                    Button("Apply Audio Sources", action: model.applySources).disabled(model.busy)
+                } else {
+                    Button(model.testing ? "End Audio Test" : "Test Audio", action: model.testSources)
+                    Toggle("Save a local copy when this session stops", isOn: $model.retainNextSession)
+                }
             }
-            if model.mode == .remote || model.mode == .both {
-                Text("A browser process may include audio from multiple tabs. Use headphones with two sources.")
+            if model.route.question == .sharedMicrophone && speechProvider != .deepgram {
+                Text("Shared audio stays unknown unless the transcription provider supplies speaker labels. Select Deepgram to assign roles.")
                     .font(.caption).foregroundStyle(.secondary)
             }
-            Toggle("Save a local copy when this session stops", isOn: $model.retainNextSession)
+            if model.route.question == .application {
+                Text("A browser process may include audio from multiple tabs.").font(.caption).foregroundStyle(.secondary)
+            }
+            if model.route.candidateEnabled {
+                Text("Use headphones to reduce audio leakage into the candidate microphone.")
+                    .font(.caption).foregroundStyle(.secondary)
+            }
             ForEach(model.testLevels.keys.sorted(), id: \.self) { source in
                 ProgressView(value: Double(model.testLevels[source] ?? 0)) { Text(source) }
+            }
+        }
+    }
+
+    private func sourcePicker(_ label: String, choices: [AudioEndpointChoice],
+                              selection: Binding<String?>) -> some View {
+        Picker(label, selection: selection) {
+            Text("Select a source").tag(String?.none)
+            if let saved = selection.wrappedValue, !choices.contains(where: { $0.id == saved }) {
+                Text("Previously selected source unavailable").tag(Optional(saved))
+            }
+            ForEach(choices) { item in
+                Text(item.name + (item.canTap || label != "Output" ? "" : " (multistream, unsupported)"))
+                    .tag(Optional(item.id))
             }
         }
     }
@@ -689,9 +744,9 @@ private struct WorkspaceView: View {
         VStack(alignment: .leading) {
             Text("Transcript").font(.headline)
             if let snapshot = model.snapshot {
-                ForEach(snapshot.levels.keys.sorted(), id: \.self) { source in
+                ForEach(snapshot.sources.keys.sorted(), id: \.self) { source in
                     ProgressView(value: Double(snapshot.levels[source] ?? 0)) {
-                        Text(source + (snapshot.connected.contains(source) ? " · Connected" : " · Disconnected"))
+                        Text(source + " · " + (snapshot.sources[source]?.rawValue.capitalized ?? "Idle"))
                     }
                 }
                 ForEach(snapshot.speakers) { speaker in

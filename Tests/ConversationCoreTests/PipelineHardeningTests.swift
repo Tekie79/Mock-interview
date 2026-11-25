@@ -190,3 +190,27 @@ extension PipelineHardeningTests {
         await session.stop()
     }
 }
+
+extension PipelineHardeningTests {
+    func testSwitchingSourcesRejectsOldEpochWhileKeepingExistingTranscript() async throws {
+        let original = InjectedSTT()
+        let replacement = InjectedSTT()
+        let source = CaptureSource(id: "question", role: .interviewer)
+        let classifier = HeldClassifier(slow: false)
+        let session = InterviewSession(channels: [
+            .init(source: source, audio: HeldAudio(), makeSTT: { original })
+        ], detector: .init(classifier: classifier), generator: FixedAnswer())
+        await session.start()
+        try await eventually { await session.current().state == .listening }
+        await original.send("Explain the first design.", item: "one")
+        try await eventually { await session.current().answers.count == 1 }
+        await session.replaceChannels([.init(source: source, audio: HeldAudio(), makeSTT: { replacement })])
+        try await eventually { await session.current().state == .listening }
+        await original.send("This is from the old stream.", item: "two")
+        await replacement.send("Explain the second design.", item: "two")
+        try await eventually { await session.current().answers.count == 2 }
+        let snapshot = await session.current()
+        XCTAssertEqual(snapshot.transcript.map(\.text), ["Explain the first design.", "Explain the second design."])
+        await session.stop()
+    }
+}

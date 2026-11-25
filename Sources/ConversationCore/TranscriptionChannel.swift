@@ -58,7 +58,7 @@ public struct TranscriptionChannel: Sendable {
                 let transient = (error as? ProviderFailure).map {
                     [ProviderFailure.unavailable, .disconnected, .timeout, .rateLimited].contains($0)
                 } ?? false
-                guard (transient || overrun), attempt < 2, !replay || !captureStarted else { throw error }
+                guard (transient || overrun || (error as? CaptureFailure) == .routeChanged), attempt < 2, !replay || !captureStarted else { throw error }
                 await events(.gap(source: source))
                 try await delay(.milliseconds(300 * (1 << attempt)))
             }
