@@ -70,3 +70,13 @@ Statuses are **Not started**, **In progress**, **Implemented — qualification p
 | M11 OpenAI scope | [Configuration and model matrix](provider-compatibility.md#m11-production-qualification-scope), preset and contract fixtures | Exact-build API and independently attributed native acceptance |
 | M11 Chat View | Shared session in workspace and Compact, eligible answer rendering and manual follow controls | Native narrow-width, scrolling, streaming and sustained-session checks |
 | M11 adaptive context | `SessionMemoryTests`, bounded original speech, separate unverified summaries and approved facts, stale summary cancellation | Live follow-up consistency and correction rate on independent channels |
+
+## M12 native workspace additions
+
+| Requirement | Implementation | Evidence |
+| --- | --- | --- |
+| M12 navigation and session continuity | `WorkspaceNavigation`, `WorkspaceModel`, `SessionControlBar` | Native synthetic navigation and Compact observations |
+| M12 Focus/Chat actions, reading position and visibility | `AnswerViews`, `AnswerViewport` | Native synthetic Chat and Compact observations, deterministic viewport geometry |
+| M12 Profiles, History, Practice, Review and Settings | Native feature views and version-compatible SQLite records | Native screenshots and profile duplication coverage |
+| M12 temporal context, correction, exclusion and summary validity | `InterviewSession`, `SessionMemory`, `ContextInspector` | `SessionMemoryTests` temporal, provenance and invalidation regressions |
+| M12 production OpenAI qualification and distribution | Existing primary provider composition and unsigned packaging | [M12 validation and open gates](verification/m12-ui-validation.md) |

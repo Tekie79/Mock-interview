@@ -119,3 +119,36 @@ The exact baseline failed the deterministic 100-turn reproduction with 0/40 reco
 - Run portable tests, native unsigned packaging and exact-revision hosted checks. Record applicable live evidence and leave unexecuted native and performance gates open.
 
 Local SwiftPM build and 159 XCTest cases passed with zero failures. Xcode built unsigned version 1.0.0 (11.2) for arm64 and x86_64. Hosted checks, native UI observations and provider measurements are indexed in [draft PR #3](https://github.com/Tekie79/Mock-interview/pull/3).
+
+## M12 native redesign
+
+Base `a843a565ef0c9f7ed5d4c9a3bb3bd9bb5a318d0a` on `feature/m12-modern-ui`.
+
+- Split the native shell into navigation, live, answer, inspector, settings, profiles, practice and review surfaces. Add semantic design tokens and keep one workspace model above navigation.
+- Add viewport-based answer visibility, shared actions, stable chronological cards, follow controls, bounded updates and narrow Compact layout.
+- Add session-local Recent and Adaptive policies, capture-time context selection, inspection and editing, and provenance invalidation.
+- Run deterministic regressions, unsigned Release packaging and hosted Linux, macOS 15 and macOS 26. Inspect the native UI with synthetic content. Keep OpenAI hardware, independent accuracy/display timing, endurance and distribution qualification separate.
+
+M12 verified the local Swift package and unsigned native Release and Debug builds. Native synthetic runs exercised shared windows, Chat follow controls, attributions, withdrawn answers and the seven settings categories. A two-window Chat burst exposed a layout stall. M12 replaced the eager stack layout with a native virtualized list and passed a 200-answer synthetic retest. PR #4 records exact hosted checks and archive verification. Physical dual-source, independent OpenAI accuracy and latency, remote endurance, and clean installation and upgrade remain open.
+
+### M12 system-output follow-up
+
+Reproduce the reported silent speaker route on the running unsigned archive. Compare actual submitted frames, transcript results and question dispositions. Retest physical speaker capture with local audio while Zoom is open. Keep mixed-source attribution fail closed. Make the active answer mode and transcript path visible, verify meter identities, run the regression suite and rebuild the unsigned app. macOS may request authorization when an unsigned build changes identity.
+
+The native follow-up verified physical speaker RMS, then six live Zoom transcript finals and two completed automatic answers after the owner confirmed the interviewer-only route. The 12.1 fixture displayed both Start options for an unconfirmed system output. Local portable build, 165 tests and unsigned universal Release packaging passed. Hosted evidence is linked from PR #4.
+
+### M12 Answers Only
+
+Add a shared, persistent presentation preference for Focus and Chat across the workspace and Compact. Hide the question header in answer-only mode and preserve the answer revision, actions and transcript. Verify native toggling and persistence with the synthetic fixture and rebuild the unsigned package.
+
+Build 12.2 passed 165 local tests and unsigned universal packaging. Native verification exercised Focus, Chat, Compact, restoration of question headers and persistence across relaunch.
+
+## M12 personal local signing
+
+Reviewed starting commit `03cd472e8ec392b2604d2fdcd566f1d2a3357209`. Build the existing native Release, sign it with the owner’s persistent login Keychain identity, pin the certificate for later builds, verify the extracted ZIP and record exact artifact evidence. The owner authorized installation at `/Applications/MockInterview.app`. Check for and back up any existing bundle before installation. Preserve the application identifier, local data locations and unsigned CI workflow. Record physical audio, OpenAI, UI lifecycle and same-certificate upgrade observations separately from signature verification.
+
+### M12 macOS app icon
+
+Use the owner-supplied transparent artwork as the bundle icon at standard and Retina sizes. Verify the icon in the unsigned and signed bundles, then update the authorized Applications installation after backing up build 12.2. Preserve the designated requirement and application data.
+
+The signed 12.3 build passed unsigned and signed bundle validation, archive extraction, and 165 deterministic tests. Finder Get Info showed the supplied icon on the Applications copy. The previous 12.2 app was retained before replacement, and both installed-build signatures satisfied the same designated requirement.

@@ -84,6 +84,8 @@ public struct AudioRoutePreference: Codable, Equatable, Sendable {
         question == .sharedMicrophone || (questionUsesOutput && labelOutputSpeakers == true)
     }
 
+    public var canDesignateInterviewerOutput: Bool { outputIdentity != nil }
+
     private var outputIdentity: String? {
         switch question {
         case .defaultOutput: "default"

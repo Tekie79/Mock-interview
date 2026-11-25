@@ -40,3 +40,9 @@ Transcript ingestion publishes immediately and enqueues eligible final turns to 
 The common transcription boundary accepts normalized PCM and exposes readiness and commit/drain behavior. Provider adapters normalize item identities, replacement partials and finals before publishing. Native SpeechAnalyzer is conditionally available for installed on-device models, with a classic Speech path on earlier systems. Provider and billing selection are independent from capture route selection.
 
 See [audio routing](audio-routing.md), [real-time processing and timing](realtime-pipeline.md), and [provider capabilities](provider-compatibility.md).
+
+## M12 presentation and temporal context
+
+The main sidebar and Compact observe the same app-owned workspace model. Navigation controls and each Chat viewport have local presentation state. The model hands session operations to the existing actor. Streaming publishes the first answer text immediately and batches subsequent intermediate snapshots at roughly 42 ms. Chat scroll requests are throttled separately. An AppKit probe checks clipping and window visibility for rendered useful text before acknowledging a revision.
+
+Context stores original transcript IDs, roles, source and epoch, monotonic speech times where available and a fallback receipt order. A queued question records its temporal boundary. The answer recovers eligible prior turns and summaries after classification, including prior-time finals that arrived while classification was running. Answer revisions retain the context dependencies used for that answer. Context mutation revokes dependent summaries and withdraws affected answers. Persistence remains opt-in.

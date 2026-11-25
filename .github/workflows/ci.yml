@@ -1,7 +1,7 @@
 name: Swift core CI
 on:
   push:
-    branches: [main, feature/v1-cloud-implementation, feature/m10-1-pipeline-hardening, feature/m10-2-final-development, feature/m11-final-acceptance]
+    branches: [main, feature/v1-cloud-implementation, feature/m10-1-pipeline-hardening, feature/m10-2-final-development, feature/m11-final-acceptance, feature/m12-modern-ui]
   pull_request:
 permissions:
   contents: read

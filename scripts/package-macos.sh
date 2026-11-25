@@ -15,6 +15,8 @@ test "$(plutil -extract CFBundlePackageType raw "$plist")" = APPL
 test "$(plutil -extract LSMinimumSystemVersion raw "$plist")" = 14.2
 test -n "$(plutil -extract CFBundleShortVersionString raw "$plist")"
 test -n "$(plutil -extract CFBundleVersion raw "$plist")"
+test "$(plutil -extract CFBundleIconFile raw "$plist")" = MockInterview.icns
+test -s "$app/Contents/Resources/MockInterview.icns"
 for usage in NSAudioCaptureUsageDescription NSMicrophoneUsageDescription NSSpeechRecognitionUsageDescription; do
   test -n "$(plutil -extract "$usage" raw "$plist")"
 done

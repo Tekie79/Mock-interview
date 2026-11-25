@@ -3,12 +3,14 @@ import SwiftUI
 import UniformTypeIdentifiers
 
 struct InterviewReviewView: View {
-    @ObservedObject var model: WorkspaceModel
+    @Bindable var model: WorkspaceModel
     let store: KnowledgeStore
     let current: SavedInterview?
+    var embedded = false
     @Environment(\.dismiss) private var dismiss
     @State private var results: [SavedInterview] = []
     @State private var record: SavedInterview?
+    @State private var selection: UUID?
     @State private var search = ""
     @State private var error: String?
     @State private var export = false
@@ -17,42 +19,57 @@ struct InterviewReviewView: View {
     @State private var actual = ""
     @State private var reviewing = false
     @State private var reviewTask: Task<Void, Never>?
+    private enum SectionPage: String, CaseIterable { case transcript = "Transcript", suggestions = "Suggestions", evaluation = "Evaluation" }
+    @State private var page = SectionPage.transcript
+    @State private var reviewOnly = false
 
     var body: some View {
-        VStack {
+        VStack(alignment: .leading, spacing: Studio.section) {
             HStack {
-                Text("Review and History").font(.title2)
+                StudioHeading(title: "Interview History")
                 Spacer()
-                Button("Done") { dismiss() }.keyboardShortcut(.cancelAction)
+                if !embedded { Button("Done") { dismiss() }.keyboardShortcut(.cancelAction) }
             }
             HSplitView {
                 VStack(alignment: .leading) {
                     TextField("Search saved sessions", text: $search)
+                    Toggle("With evaluation", isOn: $reviewOnly).font(.caption)
                     if let current {
                         Button("Current Session") { select(current) }
                     }
-                    List(results) { item in
-                        Button {
-                            select(item)
-                        } label: {
-                            VStack(alignment: .leading) {
-                                Text(item.title)
-                                Text(item.startedAt, format: .dateTime.month().day().hour().minute())
-                                    .font(.caption).foregroundStyle(.secondary)
-                            }
-                        }.buttonStyle(.plain)
+                    List(results.filter { !reviewOnly || !$0.coaching.isEmpty }, selection: $selection) { item in
+                        VStack(alignment: .leading, spacing: Studio.small) {
+                            Text(item.title).font(.headline)
+                            if let profile = item.profileName { Text(profile).font(.caption) }
+                            Text(item.startedAt, format: .dateTime.month().day().hour().minute())
+                                .font(.caption).foregroundStyle(Studio.secondary)
+                            Text("\(duration(of: item)) · \(item.suggestions.count) questions")
+                                .font(.caption).foregroundStyle(Studio.secondary)
+                            Text(item.coaching.isEmpty ? "Available for review" : "Evaluated")
+                                .font(.caption2).foregroundStyle(Studio.muted)
+                        }
+                        .padding(.vertical, Studio.small)
+                        .tag(item.id)
                     }
-                }.frame(minWidth: 230, idealWidth: 260)
+                    .listStyle(.sidebar).accessibilityLabel("Saved sessions")
+                    .onChange(of: selection) { _, id in
+                        guard id != record?.id, let item = results.first(where: { $0.id == id }) else { return }
+                        select(item)
+                    }
+                }.frame(minWidth: 160, idealWidth: 235, maxWidth: 300)
                 if let record {
-                    details(record).frame(minWidth: 475)
+                    details(record).frame(minWidth: 315)
                 } else {
-                    ContentUnavailableView("No session selected", systemImage: "clock")
-                        .frame(minWidth: 475)
+                    StudioEmpty(title: results.isEmpty ? "No saved sessions" : "Select a session",
+                                icon: "clock.arrow.circlepath",
+                                detail: results.isEmpty ? "Save a completed interview or practice response to review it here." : "Open a session to review speech, suggestions, and evaluation.")
+                        .studioSurface().frame(minWidth: 315)
                 }
             }
             if let error { Text(error).foregroundStyle(.red) }
         }
-        .padding(16)
+        .padding(Studio.page)
+        .background(Studio.canvas)
         .task(id: search) { await refresh() }
         .onAppear { if let current { select(current) } }
         .onDisappear { reviewTask?.cancel() }
@@ -65,6 +82,11 @@ struct InterviewReviewView: View {
         }
     }
 
+    private func duration(of item: SavedInterview) -> String {
+        Duration.seconds(max(0, Int(item.endedAt.timeIntervalSince(item.startedAt))))
+            .formatted(.units(allowed: [.hours, .minutes, .seconds], width: .abbreviated, maximumUnitCount: 2))
+    }
+
     private func details(_ entry: SavedInterview) -> some View {
         VStack(alignment: .leading) {
             HStack {
@@ -74,73 +96,73 @@ struct InterviewReviewView: View {
                 Button("Delete", role: .destructive) { confirmDelete = true }
                     .disabled(!results.contains(where: { $0.id == entry.id }))
             }
+            Picker("Review section", selection: $page) {
+                ForEach(SectionPage.allCases, id: \.self) { Text($0.rawValue).tag($0) }
+            }.pickerStyle(.segmented).labelsHidden()
             ScrollView {
-                VStack(alignment: .leading, spacing: 13) {
-                    Text("Transcript").font(.headline)
-                    ForEach(entry.transcript) { turn in
-                        VStack(alignment: .leading) {
-                            HStack {
-                                Text(turn.role.rawValue.capitalized).font(.caption)
-                                if let timestamp = turn.timestamp {
-                                    Text(timestamp, style: .time).font(.caption)
+                LazyVStack(alignment: .leading, spacing: Studio.section) {
+                    switch page {
+                    case .transcript:
+                        ForEach(entry.transcript) { turn in
+                            VStack(alignment: .leading, spacing: Studio.small) {
+                                HStack {
+                                    Text(turn.role == .candidate ? "Actual candidate speech" : turn.role.rawValue.capitalized)
+                                        .font(.caption.weight(.semibold)).foregroundStyle(Studio.secondary)
+                                    Spacer(minLength: 0)
+                                    if let timestamp = turn.timestamp { Text(timestamp, style: .time).font(.caption) }
                                 }
-                                Spacer()
-                                if turn.role == .interviewer || turn.role == .unknown {
-                                    Button("Mark Missed") {
-                                        if record?.missedQuestions.contains(turn.text) == false {
-                                            record?.missedQuestions.append(turn.text)
-                                        }
-                                    }.buttonStyle(.link)
-                                }
-                                if turn.role == .candidate {
-                                    Button("Use as Actual Answer") { actual = turn.text }.buttonStyle(.link)
+                                Text(turn.text).textSelection(.enabled)
+                                HStack {
+                                    if turn.role == .candidate {
+                                        Button("Use as Actual Answer") { actual = turn.text; page = .evaluation }.buttonStyle(.link)
+                                    } else {
+                                        Button("Use as Question") { question = turn.text; page = .evaluation }.buttonStyle(.link)
+                                        Button("Mark Missed") {
+                                            if record?.missedQuestions.contains(turn.text) == false { record?.missedQuestions.append(turn.text) }
+                                        }.buttonStyle(.link)
+                                    }
                                 }
                             }
-                            Text(turn.text).textSelection(.enabled)
+                            Divider()
                         }
-                    }
-                    Text("Suggested answers").font(.headline)
-                    ForEach(entry.suggestions) { answer in
-                        VStack(alignment: .leading) {
-                            Text(answer.question.original).fontWeight(.medium)
-                            if let label = answer.originLabel { Text(label).font(.caption).foregroundStyle(.secondary) }
-                            if answer.state == .invalidated {
-                                Text("Invalidated after attribution correction").font(.caption).foregroundStyle(.secondary)
+                    case .suggestions:
+                        ForEach(entry.suggestions) { answer in
+                            VStack(alignment: .leading, spacing: Studio.tight) {
+                                Text(answer.question.original).font(.headline)
+                                Text("AI-suggested answer").font(.caption).foregroundStyle(Studio.secondary)
+                                if answer.state == .invalidated {
+                                    Text(answer.failure ?? "Answer withdrawn").foregroundStyle(Studio.warning)
+                                } else {
+                                    Text(answer.text).textSelection(.enabled)
+                                    Button("Review This Question") { question = answer.question.original; page = .evaluation }.buttonStyle(.link)
+                                }
                             }
-                            Text(answer.text).textSelection(.enabled)
-                            if answer.state != .invalidated {
-                                Button("Review This Question") { question = answer.question.original }.buttonStyle(.link)
-                            }
+                            Divider()
                         }
-                    }
-                    if !entry.missedQuestions.isEmpty {
-                        Text("Missed questions").font(.headline)
                         ForEach(Array(entry.missedQuestions.enumerated()), id: \.offset) { _, missed in
                             HStack {
                                 Text(missed)
                                 Spacer()
-                                Button("Review") { question = missed }.buttonStyle(.link)
+                                Button("Review") { question = missed; page = .evaluation }.buttonStyle(.link)
                                 Button("Remove") { record?.missedQuestions.removeAll { $0 == missed } }.buttonStyle(.link)
                             }
                         }
-                    }
-                    TextField("Practice notes", text: $record.notes, axis: .vertical)
-                    Divider()
-                    Text("Coaching · AI estimates").font(.headline)
-                    TextField("Interview question", text: $question, axis: .vertical)
-                    TextField("Actual candidate answer", text: $actual, axis: .vertical)
-                    Button(reviewing ? "Cancel Coaching" : "Get Coaching") { coach() }
-                        .disabled(!reviewing && entry.coachingInput(question: question, actualAnswer: actual) == nil)
-                        .help("Sends the selected question and answer to the configured text provider.")
-                    if !entry.coaching.isEmpty {
-                        Text(entry.coaching).textSelection(.enabled)
+                    case .evaluation:
+                        StudioHeading(title: "Evaluation", detail: "AI-generated coaching and improvement recommendations")
+                        TextField("Interviewer question", text: $question, axis: .vertical)
+                        TextField("Actual candidate answer", text: $actual, axis: .vertical).lineLimit(3...8)
+                        Button(reviewing ? "Cancel Coaching" : "Get Coaching", action: coach)
+                            .disabled(!reviewing && entry.coachingInput(question: question, actualAnswer: actual) == nil)
+                            .help("Sends the selected question and actual answer to the configured text provider.")
+                        if !entry.coaching.isEmpty { Text(entry.coaching).textSelection(.enabled) }
+                        TextField("Practice notes", text: $record.notes, axis: .vertical)
                     }
                 }
                 .frame(maxWidth: .infinity, alignment: .leading)
-                .padding(.vertical, 8)
-            }
+                .padding(Studio.section)
+            }.studioSurface().id(page)
         }
-        .padding(.leading, 12)
+        .padding(.leading, Studio.section)
     }
 
     private func select(_ item: SavedInterview) {
@@ -148,6 +170,8 @@ struct InterviewReviewView: View {
         reviewTask = nil
         reviewing = false
         record = item
+        selection = item.id
+        page = .transcript
         question = ""
         actual = ""
         error = nil
@@ -188,7 +212,7 @@ struct InterviewReviewView: View {
         Task {
             do {
                 try await store.deleteInterview(id)
-                if record?.id == id { record = nil }
+                if record?.id == id { record = nil; selection = nil }
                 await refresh()
             } catch { self.error = "The saved session could not be deleted." }
         }
@@ -234,7 +258,7 @@ private struct ReviewExport: FileDocument {
 }
 
 struct SoloPracticeView: View {
-    @ObservedObject var model: WorkspaceModel
+    @Bindable var model: WorkspaceModel
     @State private var index = 0
     @State private var customQuestion = ""
     @State private var answer = ""
@@ -252,7 +276,7 @@ struct SoloPracticeView: View {
     var body: some View {
         VStack(alignment: .leading, spacing: 12) {
             HStack {
-                Text("Solo Practice").font(.title2)
+                StudioHeading(title: "Practice", detail: "Choose a prompt, write your response, and review feedback.")
                 Spacer()
                 Button("Next Question") {
                     index = (index + 1) % PracticePrompt.bank.count
@@ -264,9 +288,11 @@ struct SoloPracticeView: View {
                     startedAt = .now
                 }.disabled(task != nil)
             }
-            Text(question).font(.title3)
+            Text("Question").font(.caption.weight(.semibold)).foregroundStyle(Studio.secondary)
+            Text(question).font(.title3.weight(.semibold)).foregroundStyle(Studio.primary)
+                .padding(Studio.section).frame(maxWidth: .infinity, alignment: .leading).studioSurface()
             TextField("Use your own question", text: $customQuestion).disabled(task != nil)
-            Text("Your answer").font(.headline)
+            Text("Your practice response").font(.headline)
             TextEditor(text: $answer)
                 .frame(minHeight: 95)
                 .accessibilityLabel("Your actual answer")
@@ -285,7 +311,8 @@ struct SoloPracticeView: View {
             if let error { Text(error).foregroundStyle(.red) }
             Spacer(minLength: 0)
         }
-        .padding(18)
+        .padding(Studio.page)
+        .background(Studio.canvas)
         .onDisappear { task?.cancel() }
         .onChange(of: answer) { _, _ in saved = false }
         .onChange(of: customQuestion) { _, _ in saved = false }

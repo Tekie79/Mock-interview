@@ -2,6 +2,25 @@ import XCTest
 @testable import ConversationCore
 
 final class AudioRouteTests: XCTestCase {
+    func testOutputCanBeConfirmedForAutomaticAnswersOnlyAfterSelectingTheSource() throws {
+        var route = AudioRoutePreference(question: .outputDevice)
+        XCTAssertFalse(route.canDesignateInterviewerOutput)
+        route.outputUID = "speakers"
+        XCTAssertTrue(route.canDesignateInterviewerOutput)
+        XCTAssertEqual(route.questionMode(speakerLabelsAvailable: false), .unresolved)
+
+        route.outputAttribution = .interviewerOnly
+        var restored = try JSONDecoder().decode(AudioRoutePreference.self, from: JSONEncoder().encode(route))
+        XCTAssertEqual(restored.questionMode(speakerLabelsAvailable: false), .trustedInterviewerOnly)
+        restored.outputUID = "headphones"
+        XCTAssertEqual(restored.questionMode(speakerLabelsAvailable: false), .unresolved)
+        restored.question = .application
+        XCTAssertFalse(restored.canDesignateInterviewerOutput)
+        restored.question = .defaultOutput
+        XCTAssertTrue(restored.canDesignateInterviewerOutput)
+        XCTAssertEqual(restored.questionMode(speakerLabelsAvailable: false), .unresolved)
+    }
+
     func testOldMeetingPreferencesAndNewOutputSelectionsAreUnresolvedByDefault() throws {
         let legacy = try JSONDecoder().decode(AudioRoutePreference.self, from: Data(
             #"{"question":"Application or process group","applicationID":"conference","candidateEnabled":true}"#.utf8))

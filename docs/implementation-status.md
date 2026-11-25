@@ -168,3 +168,13 @@ See `docs/verification/baseline.md` for the initial build/test run. No native Ma
 - The 90-minute synthetic playback track and candidate reference build from the labeled corpus. The owner confirmed that a second endpoint remains unavailable. [Playback setup](../Tests/Fixtures/m11/README.md#90-minute-remote-playback)
 - The native mixed-feed frozen run returned 95 live OpenAI finals and zero cards at one second of added silence. The Scribe strategy comparison completed cards in every mode and surfaced an unresolved-audio drain in all three. These results are release blockers. [Provider qualification](verification/m11-provider-qualification.md)
 - The app reuses authorized provider credentials during the current launch. Keychain operations run off the UI thread. Microphone and Speech setup check the existing OS authorization first. Unsigned builds can prompt again under macOS application identity rules. [Permission verification](verification/m11-audio-compatibility.md)
+
+## M12 native workspace
+
+Development branch `feature/m12-modern-ui` is based on verified M11 `a843a565ef0c9f7ed5d4c9a3bb3bd9bb5a318d0a`. The app shell is organized by feature with shared observation and styling. Focus and Chat reuse answer actions and viewport instrumentation. Compact shares the same session and history. Profiles, History, Practice, Review and Settings have dedicated layouts. Temporary context supports temporal selection, user edits, exclusions, invalidation and asynchronous bounded summary rollover. See [M12 validation](verification/m12-ui-validation.md) for exact evidence and remaining production gates.
+
+M12 follow-up build 12.1 exposes automatic answers when starting with a confirmed interviewer feed and makes unresolved mixed capture and its transcript path visible. Real Zoom output capture, transcription and automatic generation were verified on this Mac with the owner-designated interviewer feed. [System output follow-up](verification/m12-ui-validation.md#system-output-follow-up)
+
+Personal-use 1.0.0 (12.2) has a certificate-pinned local signing workflow. The app was installed in Applications and its signed bundle and archive verified. The same-certificate 12.2.1 upgrade bundle was also verified. See the [local signing report](verification/m12-local-signing.md) for per-gate runtime and authorization evidence.
+
+Build 12.3 includes the owner-supplied app icon in the native macOS bundle. Finder displayed it after the signed Applications upgrade. [Local signing evidence](verification/m12-local-signing.md#app-icon-upgrade)
