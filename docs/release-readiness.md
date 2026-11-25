@@ -1,11 +1,11 @@
 # Mac release readiness
 
-**Hold release.** The release candidate passes local regressions and unsigned packaging. Mandatory gates remain open.
+**Hold release.** OpenAI is the primary production qualification scope. Mandatory product, hardware and performance gates remain open.
 
-- Live shared-feed question precision and recall, duplicate and premature-response limits, and mixed attribution. The one-second starvation reproduction is corrected at the deterministic layer. Graceful Scribe drain still needs an authorized matched retest. [Defect register](verification/m11-defect-register.md) · [Benchmark](verification/m11-performance-benchmark.md)
+- OpenAI question precision, recall, duplicate and premature-response rates on independently attributed channels. Shared audio without reliable separation remains manual. [Defect register](verification/m11-defect-register.md) · [Benchmark](verification/m11-performance-benchmark.md)
 - Independently measured speech-end to first useful displayed text and completion, plus the actual 90-minute remote run. No remote endpoint is currently available. [Acceptance report](verification/m11-final-acceptance.md)
 - Native **Test Audio** startup stalled inside Core Audio while the OS requested a new authorization for the unsigned identity. The bounded failure path was exercised. Twenty successful dual-source cycles, physical overlap and hardware recovery remain unqualified. [Audio compatibility](verification/m11-audio-compatibility.md)
-- Remaining live model/effort, alternate provider, grounding and interruption checks. [Provider qualification](verification/m11-provider-qualification.md)
+- Live OpenAI configuration, grounding, context continuity, interruption recovery and native Chat View performance. [Provider qualification](verification/m11-provider-qualification.md)
 - Signed installation and clean-host upgrade require separately authorized release work. The unsigned build is complete. [Draft PR #3 exact-commit evidence](https://github.com/Tekie79/Mock-interview/pull/3)
 
 ## Signing and distribution procedure
@@ -20,4 +20,4 @@ No signing credentials were used. The M11 builds are unsigned and local. Publica
 
 ## Provider release boundaries
 
-Live OpenAI and ElevenLabs smoke results apply to the listed account models and configurations. Optional embeddings remain smoke-tested. Deepgram and Anthropic need separate test credentials and explicit scope approval if excluded from the intended release. ChatGPT sign-in remains gated until the owner can document official eligibility for the exact distribution and complete required OpenAI approval. Subscription use and explicitly selected API billing stay separate. [Provider qualification](verification/m11-provider-qualification.md)
+The owner approved deferral of live ElevenLabs, Deepgram and Anthropic qualification. ElevenLabs graceful drain and performance are outside the mandatory release gate. Retain the optional adapters and deterministic tests. ChatGPT sign-in remains gated until the owner documents official eligibility for the exact distribution and completes any required OpenAI approval. [Provider qualification](verification/m11-provider-qualification.md)

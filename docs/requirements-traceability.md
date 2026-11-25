@@ -67,3 +67,6 @@ Statuses are **Not started**, **In progress**, **Implemented — qualification p
 | M11 permission reuse | Launch-local read reuse, serialized Keychain operations and microphone/Speech authorization checks. [Provider qualification](verification/m11-provider-qualification.md) | OS authorization across stable signed upgrades and recovery of native process-tap setup |
 | M10.1-8, M10.2-4 | [Provider eligibility and tested account scopes](verification/m11-provider-qualification.md) | Official ChatGPT distribution eligibility and subsequent live browser/account tests |
 | Native packaging | [Local and hosted checks](verification/m11-final-acceptance.md) | Signed install and upgrade on representative hosts |
+| M11 OpenAI scope | [Configuration and model matrix](provider-compatibility.md#m11-production-qualification-scope), preset and contract fixtures | Exact-build API and independently attributed native acceptance |
+| M11 Chat View | Shared session in workspace and Compact, eligible answer rendering and manual follow controls | Native narrow-width, scrolling, streaming and sustained-session checks |
+| M11 adaptive context | `SessionMemoryTests`, bounded original speech, separate unverified summaries and approved facts, stale summary cancellation | Live follow-up consistency and correction rate on independent channels |

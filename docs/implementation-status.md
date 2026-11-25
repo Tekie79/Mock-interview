@@ -1,5 +1,7 @@
 # Implementation status
 
+The revised M11 scope targets OpenAI. Chat View shares answer history and active streaming with Focus in both windows. Adaptive session memory keeps attributed finalized speech and optional older summaries apart from generated suggestions and approved profile evidence. Alternate provider implementations and their deterministic tests remain available outside production qualification. See the [current acceptance report](verification/m11-final-acceptance.md#revised-openai-scope-after-224627c) and [draft PR #3](https://github.com/Tekie79/Mock-interview/pull/3).
+
 The M11 release candidate bounds question-round assembly, requires explicit interviewer attribution, limits native hardware startup waits and refines Scribe final coverage. Its local suite passed 153 XCTest cases. Release remains on hold for native dual-source stability, live corpus and Scribe qualification, independent display timing, remote endurance and signed-install validation. [M11 RC evidence](verification/m11-final-acceptance.md#release-candidate-after-f726664) · [Draft PR #3](https://github.com/Tekie79/Mock-interview/pull/3)
 
 The original bootstrap is documented in the baseline evidence below. Status vocabulary: NOT STARTED, IN PROGRESS, IMPLEMENTED (qualification pending), QUALIFIED, BLOCKED. Include evidence for every transition.

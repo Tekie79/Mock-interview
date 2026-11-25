@@ -1,6 +1,13 @@
 # M11 final acceptance
 
-**Hold release.** The RC fixes a deterministic starvation reproduction and makes mixed-source attribution fail closed. Live quality and audio startup remain unqualified. [Benchmark](m11-performance-benchmark.md) · [Provider results](m11-provider-qualification.md) · [Audio compatibility](m11-audio-compatibility.md) · [Defects](m11-defect-register.md)
+**Hold release.** OpenAI is the sole production provider scope for this release decision. Alternate provider live qualification is deferred. Independently measured OpenAI quality and latency, physical dual-source capture and remote endurance remain mandatory. [Benchmark](m11-performance-benchmark.md) · [Provider results](m11-provider-qualification.md) · [Audio compatibility](m11-audio-compatibility.md) · [Defects](m11-defect-register.md)
+
+## Revised OpenAI scope after 224627c
+
+- Focus and Chat share the session and answer history in the workspace and Compact. Chat uses chronological lazy rows, the same formatted streaming text and explicit latest-follow suspension.
+- Adaptive memory uses finalized attributed turns, includes relevant older turns and gives recent corrections priority. Optional background summaries use Luna at `none`, with bounded input and output. Derived summaries are cleared on Stop and omitted from persistence. The regressions hold a summary in flight while an answer starts, separate approved evidence, and revoke summaries when attribution is withdrawn.
+- The [revised provider scope](../provider-compatibility.md#m11-production-qualification-scope) supersedes historical mandatory-provider lists. OpenAI smoke, native UI evidence, test counts and archive identity are recorded against their tested revisions on [draft PR #3](https://github.com/Tekie79/Mock-interview/pull/3).
+- The earlier mixed-feed result of 97.5% recall, 88.64% precision and estimated 7.04 s p50 / 7.92 s p95 to UI acknowledgment is a diagnostic baseline. The independent-channel question, displayed latency, grounding and 90-minute gates remain open. The complete thresholds in the acceptance plan still govern production.
 
 ## Release candidate after f726664
 

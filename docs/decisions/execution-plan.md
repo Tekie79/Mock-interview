@@ -110,3 +110,12 @@ The owner confirmed existing pending facts must stay excluded until enabled and 
 - Run the complete automated matrix and an unsigned versioned build. Update the acceptance reports and draft PR #3 with exact revision and artifact identity. Keep unpassed release requirements open.
 
 The exact baseline failed the deterministic 100-turn reproduction with 0/40 recovered requests. The correction recovered 40/40. A recorded-speech regression exposed early splitting at the initial hard deadline. With a bounded eight-second packet, a one-second wait combined the recorded 750 ms gap and separated the 1,500 ms gap. `./scripts/build.sh`, `./scripts/test.sh` with 153 passes, `./scripts/package-macos.sh`, holdout validation and `git diff --check` passed locally. The new 100-cue synthetic holdout completed 30 local SpeechAnalyzer files. The native setup stall reproduced in OS audio authorization for the unsigned code identity. All three matched live Scribe retests reproduced unresolved audio at drain. The owner confirmed no remote endpoint is available. The exact hosted results and open live qualification work are on [draft PR #3](https://github.com/Tekie79/Mock-interview/pull/3).
+
+## M11 OpenAI production scope after 224627c
+
+- Qualify OpenAI Realtime, Responses and embeddings within the existing cumulative US$10 budget. Keep alternate provider code and fixtures. Record excluded live provider configurations and preserve the ChatGPT eligibility gate.
+- Add optional Chat alongside Focus in the native workspace and compact window. Use the same capture, history and generation. Verify scrolling, streaming, invalidation and fit at compact width.
+- Extend session context with bounded, attributed original turns and optional background OpenAI summaries. Keep profile evidence and generated suggestions outside learned conversation context. Exercise correction, cancellation and reset without an additional request in the answer path.
+- Run portable tests, native unsigned packaging and exact-revision hosted checks. Record applicable live evidence and leave unexecuted native and performance gates open.
+
+Local SwiftPM build and 159 XCTest cases passed with zero failures. Xcode built unsigned version 1.0.0 (11.2) for arm64 and x86_64. Hosted checks, native UI observations and provider measurements are indexed in [draft PR #3](https://github.com/Tekie79/Mock-interview/pull/3).

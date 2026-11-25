@@ -1,5 +1,11 @@
 # M11 provider qualification
 
+## Revised OpenAI production scope
+
+The current qualification covers `gpt-live-transcribe`, GPT-6 Luna at `none` for structured classification and optional asynchronous session summarization, GPT-6.2 Sol at `low` for streaming suggestions and evaluation, and `text-embedding-3-small` for semantic lookup. Use the native application's Keychain flow and record benchmark and smoke results per revision on [draft PR #3](https://github.com/Tekie79/Mock-interview/pull/3). Provider timing summaries measure the API request through text or completion. The rendered latency gate requires a separate capture and display measurement.
+
+Live Scribe strategy, audio drain and benchmarks below are historical context for an optional adapter. Neither those results nor live Deepgram or Anthropic are blockers for OpenAI. The app identifies configurations outside the revised scope. ChatGPT sign-in remains eligibility-gated.
+
 ## Release candidate after f726664
 
 | Configuration | RC observation and qualification |

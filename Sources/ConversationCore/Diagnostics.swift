@@ -79,6 +79,7 @@ public extension InterviewSnapshot {
             "Final transcript segments: \(transcript.filter(\.isFinal).count)",
             "Accepted and manual questions: \(answers.count)",
             "Completed answers: \(answers.filter { $0.state == .complete }.count)",
+            "Session summaries completed: \(sessionSummariesCompleted), failed: \(sessionSummariesFailed)",
             usage,
             answers.last?.pipeline?.summary ?? ""
         ].joined(separator: "\n")

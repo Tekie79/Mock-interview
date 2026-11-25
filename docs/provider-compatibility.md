@@ -1,5 +1,23 @@
 # Provider capabilities and authority
 
+## M11 production qualification scope
+
+| Workflow | OpenAI configuration under qualification |
+|---|---|
+| Realtime recognition | `gpt-live-transcribe` with independently identified interviewer and candidate streams |
+| Question classification | `gpt-6-luna`, reasoning `none`, structured Responses output |
+| Streaming answers and post-interview evaluation | `gpt-6.2-sol`, reasoning `low`, streamed Responses output |
+| Optional older-session summarization | `gpt-6-luna`, reasoning `none`, asynchronous bounded Responses request |
+| Optional semantic retrieval | `text-embedding-3-small`, 256 dimensions, index of approved material |
+
+The OpenAI API is the primary qualification scope. **Apply OpenAI M11 Configuration** selects the target models and reasoning in Settings. Classification and answer settings can still be changed independently. Embedding indexing and background session summarization have separate controls. The configuration label identifies the scope under test. Release qualification depends on the evidence gates below. [M11 provider evidence](verification/m11-provider-qualification.md)
+
+ElevenLabs, Deepgram, Anthropic, Apple Speech and other model configurations remain available outside this production qualification. ElevenLabs live tests, graceful-drain qualification and performance benchmarking are deferred. The deterministic adapter regressions still run. ChatGPT subscription access remains unavailable until the official eligibility requirements are satisfied.
+
+OpenAI Realtime audio attribution depends on separate selected sources or a deliberately designated interviewer-only source. Shared microphones and mixed output with unresolved voices support transcription and manually requested answers. The app does not use question semantics to identify speakers.
+
+## Adapter capabilities
+
 | Provider | Transcription | Classification / text | Authentication and billing |
 |---|---|---|---|
 | Apple Speech | Common PCM from any route, local discovery, explicit strict or network-permitted mode, partials, per-segment rollover, vocabulary hints | Unavailable | macOS Speech Recognition permission |

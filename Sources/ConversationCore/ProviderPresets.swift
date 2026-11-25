@@ -76,6 +76,12 @@ public struct ProviderPreset: Codable, Identifiable, Equatable, Sendable {
         return next
     }
 
+    public static var openAIQualification: Self {
+        .init(name: "OpenAI M11 qualification", transcription: .openai, transcriptionModel: "gpt-live-transcribe",
+              classifier: .openai, classificationModel: "gpt-6-luna", answer: .openai, answerModel: "gpt-6.2-sol",
+              embeddingsModel: "text-embedding-3-small", classificationReasoning: .some(.none), answerReasoning: .low)
+    }
+
     public static func defaults() -> [Self] {
         [
             .init(name: "Subscription-first", transcription: .appleSpeech, transcriptionModel: "Speech framework",

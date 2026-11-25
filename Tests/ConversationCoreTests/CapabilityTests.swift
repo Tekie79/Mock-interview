@@ -95,6 +95,17 @@ extension CapabilityTests {
         let restored = try JSONDecoder().decode(ProviderPreset.self, from: JSONEncoder().encode(reasoning))
         XCTAssertEqual(restored, reasoning)
     }
+
+    func testOpenAIQualificationPresetUsesExplicitIndependentReasoning() {
+        let preset = ProviderPreset.openAIQualification
+        XCTAssertEqual(preset.transcriptionModel, "gpt-live-transcribe")
+        XCTAssertEqual(preset.classificationModel, "gpt-6-luna")
+        XCTAssertEqual(preset.classificationReasoning, ReasoningEffort.none)
+        XCTAssertEqual(preset.answerModel, "gpt-6.2-sol")
+        XCTAssertEqual(preset.answerReasoning, .low)
+        XCTAssertEqual(preset.embeddingsModel, "text-embedding-3-small")
+        XCTAssertNil(preset.unavailableReason)
+    }
 }
 
 extension CapabilityTests {

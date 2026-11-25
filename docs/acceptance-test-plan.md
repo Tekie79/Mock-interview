@@ -24,6 +24,10 @@ For each run record: commit SHA, date, OS/toolchain/device, command or manual st
 
 ## M11 execution
 
+The owner narrowed production provider qualification to OpenAI. Run real `gpt-live-transcribe`, Luna `none` classification and optional background summary, Sol `low` streaming answers and post-interview evaluation, and `text-embedding-3-small` retrieval. Retain deterministic regression coverage for every adapter. Alternate-provider credentials, Scribe graceful drain and alternate-provider benchmarks are outside the current production gates. ChatGPT activation remains eligibility-gated.
+
+Exercise Focus and Chat against the same active native session. Confirm chronological cards, visible streaming, scroll-up while answers continue, Jump to Latest, narrow-window layout and both modes in Compact. In the memory check, interleave interviewer prompts, candidate speech, a correction and generated suggestions. Confirm actual dialogue drives follow-ups, unassigned speech and suggestions stay out of learned context, profile evidence remains separate and cancellation or failure of background summarization cannot block an answer.
+
 Use the [AT-01–18 evidence table](verification/m11-final-acceptance.md) for current status and report Passed, Failed, Blocked or Not tested. Keep pipeline estimates and live text classification distinct from independently timed displayed responses and real audio question accuracy. For the compact window regression, launch the native application, open Compact from the workspace, click Expand, and verify that the Window menu and accessibility tree show the same single workspace. Repeat after opening Compact with the configured shortcut.
 
 For the presentation regression, render a synthetic answer containing paragraphs, a heading, inline emphasis, ordered and unordered steps, and a fenced code example. Inspect wide and compact layouts, including accessibility labels. For the startup regression, relaunch an unsigned test build with pre-existing provider items and confirm an idle workspace and status labels without a prompt on launch. Keep explicit provider access subject to macOS authorization.

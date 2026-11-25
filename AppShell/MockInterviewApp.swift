@@ -257,6 +257,10 @@ private struct SessionProviders {
                                model: defaults.string(forKey: "embeddingModel") ?? "text-embedding-3-small")
     }
 
+    static func summarizer() async throws -> OpenAISessionSummarizer {
+        OpenAISessionSummarizer(apiKey: try await key("openai"))
+    }
+
     static func answerGenerator(defaults: UserDefaults, provider: TextProvider? = nil) async throws -> any TextGenerator {
         let answer = try provider ?? ProviderSelection.decode(defaults.string(forKey: "answerProvider"), default: TextProvider.openai)
         switch answer {
@@ -278,7 +282,7 @@ private struct SessionProviders {
         defaults.string(forKey: key).flatMap(ReasoningEffort.init(rawValue:)) ?? .modelDefault
     }
 
-    static func testTextProvider(_ service: ProviderService, defaults: UserDefaults, question: String) async throws {
+    static func testTextProvider(_ service: ProviderService, defaults: UserDefaults, question: String) async throws -> String {
         let classification = service == .classification
         let provider = try ProviderSelection.decode(defaults.string(forKey: classification ? "classificationProvider" : "answerProvider"),
                                                     default: TextProvider.openai)
@@ -286,17 +290,32 @@ private struct SessionProviders {
             guard let chatGPT else { throw PlanAuthorizationFailure.unavailable }
             try await chatGPT.checkModel(defaults.string(forKey: classification ? "chatGPTQuestionModel" : "chatGPTAnswerModel") ?? "",
                 service: service, guidance: defaults.string(forKey: "classificationInstructions") ?? "")
+            return "The selected ChatGPT plan model passed its capability check."
         } else if classification {
             let classifier = try await questionClassifier(defaults: defaults, provider: provider)
             let source = CaptureSource(id: "Connection test", role: .interviewer)
+            let start = ContinuousClock.now
             let result = try await classifier.classify(QuestionInput(
                 turn: TranscriptEvent(source: source, epoch: UUID(), itemID: "test", text: question, state: .final),
                 previousQuestions: []))
             guard result.decision == .accept, !result.parts.isEmpty else { throw ProviderFailure.unsupportedCapability }
+            return "Structured answerable-question decision in \(milliseconds(since: start)) ms."
         } else {
             let generator = try await answerGenerator(defaults: defaults, provider: provider)
-            for try await _ in try await generator.stream(.init(question: question, instructions: "One sentence.", evidence: [])) {}
+            let start = ContinuousClock.now
+            var firstText: Int?
+            for try await event in try await generator.stream(.init(question: question, instructions: "One sentence.", evidence: [])) {
+                if case .text(let text) = event, firstText == nil, text.contains(where: { !$0.isWhitespace }) {
+                    firstText = milliseconds(since: start)
+                }
+            }
+            guard let firstText else { throw ProviderFailure.malformedEvent }
+            return "Answer stream completed. First text \(firstText) ms, completion \(milliseconds(since: start)) ms."
         }
+    }
+
+    static func milliseconds(since start: ContinuousClock.Instant) -> Int {
+        Int(start.duration(to: .now) / .milliseconds(1))
     }
 }
 
@@ -454,12 +473,8 @@ final class WorkspaceModel: ObservableObject {
                                                                             diarize: requestsSpeakerLabels)
                     try await factory().testConnection()
                     providerTest = "Transcription provider acknowledged the connection."
-                case .classification:
-                    try await SessionProviders.testTextProvider(service, defaults: defaults, question: question)
-                    providerTest = "The classifier returned a structured answerable-question decision."
-                case .answer:
-                    try await SessionProviders.testTextProvider(service, defaults: defaults, question: question)
-                    providerTest = "The selected answer model completed a text stream."
+                case .classification, .answer:
+                    providerTest = try await SessionProviders.testTextProvider(service, defaults: defaults, question: question)
                 case .embeddings:
                     guard let embeddings = try await SessionProviders.embeddings(defaults: defaults),
                           try await embeddings.embed([question]).first?.isEmpty == false else {
@@ -468,6 +483,32 @@ final class WorkspaceModel: ObservableObject {
                     providerTest = "The embedding model returned a vector."
                 }
             } catch { providerTest = (error as? PlanAuthorizationFailure)?.errorDescription ?? publicErrorMessage(error) }
+        }
+    }
+
+    func checkSessionContext(evaluation: Bool) {
+        guard !checkingProvider, !active, !busy, !chatGPTBusy else { return }
+        checkingProvider = true
+        providerTest = evaluation ? "Checking evaluation…" : "Checking session summary…"
+        Task {
+            defer { checkingProvider = false }
+            do {
+                if evaluation {
+                    let score = try await coaching(.init(question: "How would you preserve message order?",
+                        candidateAnswer: "I would partition by customer and verify sequence numbers on retries."))
+                    guard score.range(of: "relevance", options: .caseInsensitive) != nil else { throw ProviderFailure.malformedEvent }
+                    providerTest = "Evaluation returned rubric feedback for a synthetic candidate answer."
+                } else {
+                    let summarizer = try await SessionProviders.summarizer()
+                    let start = ContinuousClock.now
+                    let result = try await summarizer.summarize([
+                        .init(id: "one", role: .interviewer, text: "Which queue retains messages for Project Larch?"),
+                        .init(id: "two", role: .candidate, text: "Project Larch uses a FIFO queue. I corrected the retention period to 14 days.")
+                    ])
+                    guard result.range(of: "Larch", options: .caseInsensitive) != nil else { throw ProviderFailure.malformedEvent }
+                    providerTest = "Session summary returned in \(SessionProviders.milliseconds(since: start)) ms."
+                }
+            } catch { providerTest = publicErrorMessage(error) }
         }
     }
 
@@ -528,6 +569,7 @@ final class WorkspaceModel: ObservableObject {
                 let diarize = requestsSpeakerLabels
                 let providers = try await SessionProviders(defaults: options, diarize: diarize)
                 let embedding = try? await SessionProviders.embeddings(defaults: options)
+                let summarizer = options.bool(forKey: "summarizeSession") ? try? await SessionProviders.summarizer() : nil
                 let format = AnswerFormat(rawValue: options.string(forKey: "answerFormat") ?? "") ?? .brief
                 let threshold = options.object(forKey: "questionThreshold") as? Double ?? 0.8
                 let profile = profiles.first(where: { $0.id == profileID })
@@ -560,7 +602,7 @@ final class WorkspaceModel: ObservableObject {
                     channels: channels,
                     detector: QuestionDetector(classifier: providers.classifier, threshold: threshold,
                                                completionGrace: .seconds(grace)),
-                    generator: providers.generator,
+                    generator: providers.generator, summarizer: summarizer,
                     format: format, preferences: preferences, interviewContext: context, answerWordLimit: answerWords,
                     profileTraining: profile?.answerTraining,
                     questionWait: Self.questionWaitDuration(options.object(forKey: "questionWaitSeconds") as? Double ?? 2),
@@ -889,7 +931,7 @@ private struct WorkspaceView: View {
             }
             HSplitView {
                 transcript.frame(minWidth: 245, idealWidth: 360)
-                AnswerPanel(model: model, fontSize: fontSize).frame(minWidth: 360, maxWidth: .infinity)
+                InterviewAnswerView(model: model, fontSize: fontSize).frame(minWidth: 360, maxWidth: .infinity)
             }
             HStack {
                 TextField("Ask an interview question manually", text: $manualText)
@@ -1033,9 +1075,9 @@ private struct WorkspaceView: View {
                     Text("Play the interview through the other device’s speakers. After Start, label each voice in Transcript.")
                         .font(.caption).foregroundStyle(.secondary)
                 } else {
-                    Text("Automatic answers from one microphone require ElevenLabs Scribe v3 Live or a supported Deepgram Nova model.")
+                    Text("This transcription configuration cannot separate voices on one microphone. Use separate audio sources for automatic answers, or submit a question manually.")
                         .font(.caption).foregroundStyle(.secondary)
-                    Button("Select ElevenLabs Scribe v3 Live") {
+                    Button("Try ElevenLabs speaker labels (unqualified)") {
                         elevenModel = "scribe_v3_live"
                         speechProvider = .eleven
                     }.disabled(model.busy)
@@ -1114,6 +1156,162 @@ private struct WorkspaceView: View {
     private func submit() {
         model.manual(manualText)
         manualText = ""
+    }
+}
+
+private enum InterviewPresentation: String, CaseIterable, Identifiable {
+    case focus = "Focus"
+    case chat = "Chat"
+    var id: Self { self }
+}
+
+private struct InterviewAnswerView: View {
+    @ObservedObject var model: WorkspaceModel
+    let fontSize: Double
+    @AppStorage("interviewPresentation") private var presentation = InterviewPresentation.focus
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 8) {
+            Picker("Answer view", selection: $presentation) {
+                ForEach(InterviewPresentation.allCases) { Text($0.rawValue).tag($0) }
+            }
+            .pickerStyle(.segmented)
+            if presentation == .focus {
+                AnswerPanel(model: model, fontSize: fontSize)
+            } else {
+                InterviewChatView(answers: model.snapshot?.answers ?? [], fontSize: fontSize,
+                                  waiting: model.snapshot?.waitingForQuestionEnd == true,
+                                  responseVisible: model.responseVisible)
+                    .id(model.startedAt)
+            }
+        }
+    }
+}
+
+private struct InterviewChatView: View {
+    private enum Anchor: Hashable { case latest }
+
+    let answers: [InterviewAnswer]
+    let fontSize: Double
+    let waiting: Bool
+    let responseVisible: (UUID) -> Void
+    @State private var followsLatest = true
+
+    var body: some View {
+        ScrollViewReader { proxy in
+            VStack(alignment: .leading, spacing: 8) {
+                HStack {
+                    if waiting { Text("Waiting for a pause…").font(.caption).foregroundStyle(.secondary) }
+                    Spacer()
+                    if !followsLatest {
+                        Button("Jump to Latest", systemImage: "arrow.down") {
+                            followsLatest = true
+                            scrollToLatest(proxy)
+                        }
+                    }
+                }
+                if answers.isEmpty {
+                    Text("Accepted questions and suggested answers will appear here.")
+                        .foregroundStyle(.secondary)
+                    Spacer()
+                } else {
+                    ScrollView {
+                        LazyVStack(alignment: .leading, spacing: 12) {
+                            ForEach(answers) { answer in
+                                ChatAnswerRow(answer: answer, fontSize: fontSize).equatable()
+                            }
+                            Color.clear.frame(height: 1).id(Anchor.latest).accessibilityHidden(true)
+                        }
+                        .frame(maxWidth: 720, alignment: .leading)
+                        .padding(.horizontal, 4)
+                        .frame(maxWidth: .infinity)
+                        .background(ChatScrollInput { followsLatest = false })
+                    }
+                    .accessibilityLabel("Interview chat")
+                    .onChange(of: answers.last, initial: true) { _, _ in scrollToLatest(proxy) }
+                }
+            }
+        }
+        .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
+    }
+
+    private func scrollToLatest(_ proxy: ScrollViewProxy) {
+        guard followsLatest else { return }
+        proxy.scrollTo(Anchor.latest, anchor: .bottom)
+        if let answer = answers.last, answer.state != .invalidated,
+           answer.text.contains(where: { $0.isLetter || $0.isNumber }) {
+            responseVisible(answer.revision)
+        }
+    }
+}
+
+private struct ChatAnswerRow: View, Equatable {
+    let answer: InterviewAnswer
+    let fontSize: Double
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 9) {
+            Text(answer.question.original)
+                .font(.headline).textSelection(.enabled).accessibilityAddTraits(.isHeader)
+            if let label = answer.originLabel {
+                Text(label).font(.caption).foregroundStyle(.secondary)
+            }
+            if answer.state != .invalidated, !answer.text.isEmpty {
+                AnswerText(text: answer.text, format: answer.format, fontSize: fontSize).equatable()
+            }
+            if answer.state != .complete {
+                Text(answer.failure ?? answer.state.rawValue.capitalized)
+                    .font(.caption).foregroundStyle(.secondary)
+            }
+        }
+        .padding(12)
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .background(Color(nsColor: .controlBackgroundColor), in: RoundedRectangle(cornerRadius: 10))
+    }
+}
+
+// AppKit input identifies user scroll intent on macOS 14. Geometry changes alone
+// also happen when streamed text grows or a window is resized.
+private struct ChatScrollInput: NSViewRepresentable {
+    let suspend: () -> Void
+
+    func makeNSView(context: Context) -> Host { Host() }
+    func updateNSView(_ view: Host, context: Context) { view.suspend = suspend }
+    static func dismantleNSView(_ view: Host, coordinator: ()) { view.removeMonitor() }
+
+    final class Host: NSView {
+        var suspend: (() -> Void)?
+        private var monitor: Any?
+
+        override func viewDidMoveToWindow() {
+            super.viewDidMoveToWindow()
+            removeMonitor()
+            guard window != nil else { return }
+            monitor = NSEvent.addLocalMonitorForEvents(matching: [.scrollWheel, .leftMouseDown, .keyDown]) { [weak self] event in
+                self?.scrollInput(event)
+                return event
+            }
+        }
+
+        func removeMonitor() {
+            if let monitor { NSEvent.removeMonitor(monitor) }
+            monitor = nil
+        }
+
+        private func scrollInput(_ event: NSEvent) {
+            guard let scroll = enclosingScrollView, event.window === scroll.window else { return }
+            let point = scroll.convert(event.locationInWindow, from: nil)
+            switch event.type {
+            case .scrollWheel where event.scrollingDeltaY > 0 && scroll.bounds.contains(point): suspend?()
+            case .leftMouseDown:
+                if let bar = scroll.verticalScroller, !bar.isHidden,
+                   bar.bounds.contains(bar.convert(event.locationInWindow, from: nil)) { suspend?() }
+            case .keyDown:
+                if let focused = window?.firstResponder as? NSView, focused === scroll || focused.isDescendant(of: scroll),
+                   [115, 116, 126].contains(event.keyCode) { suspend?() }
+            default: break
+            }
+        }
     }
 }
 
@@ -1314,7 +1512,7 @@ private struct CompactView: View {
                 Label(issue, systemImage: "exclamationmark.circle").font(.caption).foregroundStyle(.secondary)
                     .frame(maxWidth: .infinity, alignment: .leading)
             }
-            AnswerPanel(model: model, fontSize: fontSize)
+            InterviewAnswerView(model: model, fontSize: fontSize)
             HStack {
                 Toggle("Always on Top", isOn: $onTop)
                 Spacer()
@@ -1367,6 +1565,7 @@ private struct ProviderSettingsView: View {
     @AppStorage("questionThreshold") private var confidence = 0.8
     @AppStorage("answerFontSize") private var fontSize = 16.0
     @AppStorage("semanticRetrieval") private var semanticRetrieval = false
+    @AppStorage("summarizeSession") private var summarizeSession = false
     @AppStorage("embeddingModel") private var embeddingModel = "text-embedding-3-small"
     @AppStorage("pauseShortcut") private var pauseShortcut = "p"
     @AppStorage("compactShortcut") private var compactShortcut = "k"
@@ -1398,6 +1597,7 @@ private struct ProviderSettingsView: View {
                 classificationSettings
                 generationSettings
                 knowledgeSettings
+                sessionContextSettings
             }
             .disabled(model.active)
             Section("Audio and shortcuts") {
@@ -1486,6 +1686,7 @@ private struct ProviderSettingsView: View {
             Picker("Provider", selection: $speech) {
                 ForEach(SpeechProvider.allCases) { Text($0.rawValue).tag($0) }
             }
+            qualificationStatus(speech == .openai && sttModel == "gpt-live-transcribe")
             if speech == .apple {
                 Picker("Language", selection: $appleLocale) {
                     ForEach(AppleSpeechTranscriber.languages(), id: \.self) { locale in
@@ -1541,6 +1742,7 @@ private struct ProviderSettingsView: View {
                     Text("ChatGPT plan (unavailable)").tag(TextProvider.chatGPT)
                 }
             }
+            qualificationStatus(classification == .openai && questionModel == "gpt-6-luna" && openAIQuestionReasoning == .none)
             if classification == .chatGPT {
                 chatGPTModelPicker($chatGPTQuestionModel)
             } else {
@@ -1572,6 +1774,7 @@ private struct ProviderSettingsView: View {
                     Text("ChatGPT plan (unavailable)").tag(TextProvider.chatGPT)
                 }
             }
+            qualificationStatus(answer == .openai && answerModel == "gpt-6.2-sol" && openAIAnswerReasoning == .low)
             if answer == .chatGPT {
                 chatGPTModelPicker($chatGPTAnswerModel)
             } else {
@@ -1613,10 +1816,30 @@ private struct ProviderSettingsView: View {
             Toggle("Use OpenAI embeddings", isOn: $semanticRetrieval)
             if semanticRetrieval {
                 TextField("Embedding model", text: $embeddingModel)
+                qualificationStatus(embeddingModel == "text-embedding-3-small")
                 Text("Build the index in Profiles. Indexing sends approved facts, and semantic search sends accepted questions.")
                     .font(.caption).foregroundStyle(.secondary)
                 connectionButton(.embeddings)
             }
+        }
+    }
+
+    private func qualificationStatus(_ inScope: Bool) -> some View {
+        Text(inScope ? "M11 qualification target" : "Outside the M11 production qualification scope")
+            .font(.caption).foregroundStyle(.secondary)
+    }
+
+    private var sessionContextSettings: some View {
+        Section("Interview context and evaluation") {
+            Toggle("Summarize older conversation with OpenAI", isOn: $summarizeSession)
+            if summarizeSession {
+                Text("Sends older attributed dialogue to GPT-6 Luna during the session. Derived context stays in memory.")
+                    .font(.caption).foregroundStyle(.secondary)
+            }
+            Button("Test Summary") { model.checkSessionContext(evaluation: false) }
+                .disabled(model.checkingProvider || model.chatGPTBusy)
+            Button("Test Evaluation") { model.checkSessionContext(evaluation: true) }
+                .disabled(model.checkingProvider || model.chatGPTBusy)
         }
     }
 
@@ -1641,6 +1864,7 @@ private struct ProviderSettingsView: View {
 
     private var presetSettings: some View {
         Section("Provider presets") {
+            Button("Apply OpenAI M11 Configuration") { apply(.openAIQualification) }
             Picker("Preset", selection: $selectedPreset) {
                 Text("Select a preset").tag(UUID?.none)
                 ForEach(presets) { preset in
