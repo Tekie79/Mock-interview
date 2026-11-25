@@ -11,16 +11,29 @@ public enum AnswerFormat: String, Codable, CaseIterable, Identifiable, Sendable 
 
     public var id: String { rawValue }
 
-    var instruction: String {
-        switch self {
-        case .ultraBrief: "Use one or two sentences."
-        case .brief: "Use three to five sentences, roughly 45 to 85 words."
-        case .standard: "Aim for 100 to 150 words."
-        case .detailed: "Use up to 250 words."
-        case .bullets: "Use concise talking points."
-        case .star: "Use situation, task, action, and result sections when appropriate."
-        case .technical: "Use a short technical example or pseudocode where useful. Do not claim it was tested."
+    func instructions(wordLimit: Int) -> String {
+        let format: (structure: String, defaultLength: String) = switch self {
+        case .ultraBrief:
+            ("Give the direct answer in one paragraph without headings or a list.", "Use one or two sentences.")
+        case .brief:
+            ("Start with the direct answer, then add the main reason or an example in a short paragraph.",
+             "Use three to five sentences, roughly 45 to 85 words.")
+        case .standard:
+            ("Use short paragraphs for the answer, reasoning, and a concrete example when helpful.",
+             "Aim for 100 to 150 words.")
+        case .detailed:
+            ("Lead with the main point. Use Markdown headings for the relevant approach, rationale, and trade-offs.",
+             "Use up to 250 words.")
+        case .bullets:
+            ("Present the response as Markdown bullets, one speakable thought per bullet.", "Use three to five bullets.")
+        case .star:
+            ("Use the Markdown headings Situation, Task, Action, and Result. If experience is missing, clearly label the example as hypothetical.",
+             "Keep each section to one or two sentences.")
+        case .technical:
+            ("Use Markdown sections for Approach and Validation, plus Trade-offs when relevant. Put code or pseudocode in a fenced block and never claim it was tested.",
+             "Keep sections concise.")
         }
+        return format.structure + " " + (wordLimit > 0 ? "Use at most \(wordLimit) words." : format.defaultLength)
     }
 }
 
@@ -144,6 +157,7 @@ public actor InterviewSession {
     private let detector: QuestionDetector
     private let generator: any TextGenerator
     private let preferences: String
+    private let answerWordLimit: Int
     private let interviewContext: [String]
     private let classificationBudget: ContextBudget
     private let answerBudget: ContextBudget
@@ -177,6 +191,7 @@ public actor InterviewSession {
 
     public init(channels: [TranscriptionChannel], detector: QuestionDetector, generator: any TextGenerator,
                 format: AnswerFormat = .brief, preferences: String = "", interviewContext: [String] = [],
+                answerWordLimit: Int = 0,
                 queueLimit: Int = 32, classificationBudget: ContextBudget = .init(),
                 answerBudget: ContextBudget = .init(), generationTimeout: Duration = .seconds(45),
                 classificationEvidence: @escaping @Sendable (String) async -> [String] = { _ in [] },
@@ -187,6 +202,7 @@ public actor InterviewSession {
         self.generator = generator
         self.format = format
         self.preferences = preferences
+        self.answerWordLimit = min(400, max(0, answerWordLimit))
         self.interviewContext = interviewContext
         self.evidence = evidence
         self.classificationBudget = classificationBudget
@@ -669,7 +685,7 @@ public actor InterviewSession {
                 await self?.timeout(revision)
             } catch {}
         }
-        generation = Task { [weak self, generator, evidence, preferences, limitedContext, answerBudget] in
+        generation = Task { [weak self, generator, evidence, preferences, limitedContext, answerBudget, answerWordLimit] in
             do {
                 await self?.mark(revision, \.retrievalStarted)
                 let facts = answerBudget.share(30).limit(await evidence(question.normalized))
@@ -678,7 +694,7 @@ public actor InterviewSession {
                 await self?.recordEvidence(facts, revision)
                 let text = ([question.normalized] + question.parts).joined(separator: "\n")
                 let request = AnswerRequest(question: text,
-                                            instructions: format.instruction + " " + preferences,
+                                            instructions: format.instructions(wordLimit: answerWordLimit) + " " + preferences,
                                             evidence: facts, interviewContext: limitedContext)
                 await self?.mark(revision, \.requestStarted)
                 for try await event in try await generator.stream(request) {

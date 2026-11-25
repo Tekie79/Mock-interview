@@ -9,8 +9,9 @@ Requires Apple Silicon, macOS 14.2 or later, and Xcode with a macOS SDK that sup
 1. Open `MockInterview.xcodeproj`, select the **MockInterview** scheme, and run. For a local unsigned release build, run `./scripts/package-macos.sh`.
 2. Open **Settings**. Choose transcription, classification, answers and optional embeddings independently, or apply a preset. API keys are stored in Keychain. Each service has its own connection test. Tests can incur provider charges. Apple Speech offers strict on-device processing where installed. ChatGPT subscription sign-in is unavailable pending eligibility.
 3. Choose question audio from the macOS default output, a supported specific digital device, an application/process group, a microphone, or replay. Optionally enable a separate candidate microphone. **Test Audio** shows levels locally. Allow the indicated macOS permissions.
-4. Optionally create a profile, import text, Markdown, PDF, or DOCX, and confirm the experience facts the assistant can use.
-5. Start the interview. Use the native workspace or compact window to review suggestions and control the session. Transcript and answers are kept in memory by default. Select local retention or save an individual session from **Review and History**.
+4. In **Profiles**, add your résumé, job description, and project notes from text, Markdown, PDF, or DOCX. Confirm the experience facts the assistant may use. Select that profile before starting the session.
+5. In **Settings → Answer generation**, choose an answer format and enter an optional word limit from 1 to 400. Use **0** for the format default. The answer card’s **Format** menu regenerates the selected answer in another style.
+6. Start the interview. Use the native workspace or compact window to review suggestions and control the session. Transcript and answers are kept in memory by default. Select local retention or save an individual session from **Review and History**.
 
 The app accepts raw mono signed PCM16 little-endian replay at 24 kHz. Live replay uses the selected transcription provider. The deterministic developer replay test uses synthetic audio and test transports.
 

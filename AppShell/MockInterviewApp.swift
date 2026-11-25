@@ -484,8 +484,7 @@ final class WorkspaceModel: ObservableObject {
                 let answerWords = options.integer(forKey: "answerWordLimit")
                 let preferences = [
                     options.string(forKey: "answerInstructions") ?? "", profile?.instructions ?? "",
-                    responseLanguage.map { $0.isEmpty ? "" : "Answer language: " + $0 } ?? "",
-                    answerWords > 0 ? "Use no more than \(answerWords) words." : ""
+                    responseLanguage.map { $0.isEmpty ? "" : "Answer language: " + $0 } ?? ""
                 ].joined(separator: "\n")
                 let classificationBudget = ContextBudget(turns: options.object(forKey: "classifierContextTurns") as? Int ?? 12,
                                                          tokenBudget: options.object(forKey: "classifierContextBudget") as? Int ?? 3_000)
@@ -508,7 +507,7 @@ final class WorkspaceModel: ObservableObject {
                     detector: QuestionDetector(classifier: providers.classifier, threshold: threshold,
                                                completionGrace: .seconds(grace)),
                     generator: providers.generator,
-                    format: format, preferences: preferences, interviewContext: context,
+                    format: format, preferences: preferences, interviewContext: context, answerWordLimit: answerWords,
                     classificationBudget: classificationBudget, answerBudget: answerBudget,
                     generationTimeout: .seconds(timeout), classificationEvidence: { question in
                         guard let store, let profile else { return [] }
@@ -1019,9 +1018,15 @@ private struct AnswerPanel: View {
                 ScrollView {
                     VStack(alignment: .leading, spacing: 14) {
                         VStack(alignment: .leading, spacing: 5) {
-                            if let label = answer.originLabel {
-                                Text(label).font(.caption).foregroundStyle(.secondary)
+                            HStack(spacing: 5) {
+                                if let label = answer.originLabel {
+                                    Text(label + " · ")
+                                }
+                                Text(answer.format.rawValue).fontWeight(.semibold)
                             }
+                            .font(.caption)
+                            .foregroundStyle(.secondary)
+                            .accessibilityElement(children: .combine)
                             Text(answer.question.original)
                                 .font(.title3.weight(.semibold))
                                 .textSelection(.enabled)
@@ -1029,7 +1034,8 @@ private struct AnswerPanel: View {
                         }
                         if answer.state != .invalidated {
                             if !answer.text.isEmpty { Divider() }
-                            AnswerText(text: answer.text, fontSize: fontSize)
+                            AnswerText(text: answer.text, format: answer.format, fontSize: fontSize)
+                                .equatable()
                                 .onChange(of: answer.text, initial: true) { _, value in
                                     if value.contains(where: { $0.isLetter || $0.isNumber }) {
                                         model.responseVisible(answer.revision)
@@ -1105,19 +1111,21 @@ private struct AnswerPanel: View {
     }
 }
 
-private struct AnswerText: View {
+private struct AnswerText: View, Equatable {
     let text: String
+    let format: AnswerFormat
     let fontSize: Double
 
     var body: some View {
         VStack(alignment: .leading, spacing: 9) {
-            ForEach(Array(blocks.enumerated()), id: \.offset) { _, block in
+            ForEach(Array(AnswerPresentation.blocks(for: text, format: format).enumerated()), id: \.offset) { _, block in
                 switch block {
                 case .paragraph(let text):
                     Text(Self.inline(text))
                 case .heading(let text):
                     Text(Self.inline(text))
                         .bold()
+                        .foregroundStyle(format == .star || format == .technical ? Color.accentColor : Color.primary)
                         .accessibilityAddTraits(.isHeader)
                 case .item(let marker, let text):
                     HStack(alignment: .firstTextBaseline, spacing: 8) {
@@ -1138,59 +1146,6 @@ private struct AnswerText: View {
         .lineSpacing(4)
         .textSelection(.enabled)
         .frame(maxWidth: .infinity, alignment: .leading)
-    }
-
-    private enum Block {
-        case paragraph(String)
-        case heading(String)
-        case item(String, String)
-        case code(String)
-    }
-
-    private var blocks: [Block] {
-        var result: [Block] = []
-        var paragraph: [String] = []
-        var code: [String]?
-        func flushParagraph() {
-            if !paragraph.isEmpty {
-                result.append(.paragraph(paragraph.joined(separator: "\n")))
-                paragraph.removeAll(keepingCapacity: true)
-            }
-        }
-        for rawLine in text.split(omittingEmptySubsequences: false, whereSeparator: \.isNewline) {
-            let line = rawLine.trimmingCharacters(in: .whitespaces)
-            if line.hasPrefix("```") {
-                flushParagraph()
-                if let codeLines = code {
-                    result.append(.code(codeLines.joined(separator: "\n")))
-                    code = nil
-                } else {
-                    code = []
-                }
-            } else if code != nil {
-                code?.append(String(rawLine))
-            } else if line.isEmpty {
-                flushParagraph()
-            } else {
-                let titleMarker = line.prefix(while: { $0 == "#" })
-                let itemNumber = line.prefix(while: \.isNumber)
-                if (1...6).contains(titleMarker.count), line.dropFirst(titleMarker.count).hasPrefix(" ") {
-                    flushParagraph()
-                    result.append(.heading(String(line.dropFirst(titleMarker.count + 1))))
-                } else if ["- ", "* ", "+ "].contains(where: line.hasPrefix) {
-                    flushParagraph()
-                    result.append(.item("•", String(line.dropFirst(2))))
-                } else if !itemNumber.isEmpty, line.dropFirst(itemNumber.count).hasPrefix(". ") {
-                    flushParagraph()
-                    result.append(.item(String(itemNumber) + ".", String(line.dropFirst(itemNumber.count + 2))))
-                } else {
-                    paragraph.append(String(rawLine))
-                }
-            }
-        }
-        flushParagraph()
-        if let code, !code.isEmpty { result.append(.code(code.joined(separator: "\n"))) }
-        return result
     }
 
     private static func inline(_ text: String) -> AttributedString {
@@ -1463,8 +1418,9 @@ private struct ProviderSettingsView: View {
                 ForEach(AnswerFormat.allCases) { Text($0.rawValue).tag($0) }
             }
             TextField("Response language", text: $answerLanguage)
-            Stepper(answerWordLimit == 0 ? "Word limit: format default" : "Word limit: \(answerWordLimit)",
-                    value: $answerWordLimit, in: 0...400, step: 25)
+            TextField("Word limit", value: $answerWordLimit, format: .number)
+                .onChange(of: answerWordLimit) { _, limit in answerWordLimit = min(400, max(0, limit)) }
+            Text("Enter 0 to use the format default.").font(.caption).foregroundStyle(.secondary)
             TextField("Answer instructions", text: $instructions, axis: .vertical)
             Stepper("Context turns: \(answerTurns)", value: $answerTurns, in: 0...32)
             Stepper("Context budget: \(answerBudget)", value: $answerBudget, in: 500...8_000, step: 250)

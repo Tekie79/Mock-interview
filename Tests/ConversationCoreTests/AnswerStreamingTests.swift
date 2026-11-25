@@ -85,6 +85,32 @@ final class AnswerStreamingTests: XCTestCase {
 }
 
 extension AnswerStreamingTests {
+    func testCustomLengthOverridesFormatDefaultsAndPreservesGroundingOnRegenerate() async throws {
+        let generator = ControlledGenerator()
+        let session = InterviewSession(channels: [], detector: QuestionDetector(classifier: NeverClassify()),
+                                       generator: generator, preferences: "Use plain language.",
+                                       interviewContext: ["Job requirements: queue reliability"], answerWordLimit: 60,
+                                       evidence: { _ in ["Reviewed ownership: wrote tests"] })
+        await session.start()
+        var requests = generator.started.makeAsyncIterator()
+        await session.manualQuestion("How did you test a queue?")
+        let first = await requests.next()
+        XCTAssertTrue(first?.instructions.contains("Use at most 60 words.") == true)
+        XCTAssertFalse(first?.instructions.contains("45 to 85 words") == true)
+        XCTAssertTrue(first?.instructions.contains("Use plain language.") == true)
+        let snapshot = await session.current()
+        let id = try XCTUnwrap(snapshot.answers.last?.id)
+        await session.regenerate(id, format: .star)
+        let second = await requests.next()
+        XCTAssertTrue(second?.instructions.contains("Situation, Task, Action, and Result") == true)
+        XCTAssertTrue(second?.instructions.contains("Use at most 60 words.") == true)
+        XCTAssertEqual(second?.evidence, ["Reviewed ownership: wrote tests"])
+        XCTAssertEqual(second?.interviewContext, ["Job requirements: queue reliability"])
+        let regenerated = await session.current()
+        XCTAssertEqual(regenerated.answers.last?.format, .star)
+        await session.stop()
+    }
+
     func testJobRequirementsAreKeptSeparateFromApprovedEvidence() throws {
         let request = AnswerRequest(question: "How have you used distributed tracing?", instructions: "",
                                     evidence: [], interviewContext: ["Job requirements: tracing experience"])
