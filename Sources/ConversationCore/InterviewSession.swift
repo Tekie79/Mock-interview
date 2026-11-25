@@ -114,6 +114,7 @@ public actor InterviewSession {
     private let interviewContext: [String]
     private let classificationBudget: ContextBudget
     private let answerBudget: ContextBudget
+    private let generationTimeout: Duration
     private let classificationEvidence: @Sendable (String) async -> [String]
     private let evidence: @Sendable (String) async -> [String]
     private var captureID: UUID?
@@ -133,6 +134,7 @@ public actor InterviewSession {
     private var epochs: [String: UUID] = [:]
     private var lastMeterUpdate: [String: ContinuousClock.Instant] = [:]
     private var generation: Task<Void, Never>?
+    private var generationDeadline: Task<Void, Never>?
     private var activeRevision: UUID?
     private var format: AnswerFormat
     private var snapshot = InterviewSnapshot()
@@ -141,7 +143,7 @@ public actor InterviewSession {
     public init(channels: [TranscriptionChannel], detector: QuestionDetector, generator: any TextGenerator,
                 format: AnswerFormat = .brief, preferences: String = "", interviewContext: [String] = [],
                 queueLimit: Int = 32, classificationBudget: ContextBudget = .init(),
-                answerBudget: ContextBudget = .init(),
+                answerBudget: ContextBudget = .init(), generationTimeout: Duration = .seconds(45),
                 classificationEvidence: @escaping @Sendable (String) async -> [String] = { _ in [] },
                 evidence: @escaping @Sendable (String) async -> [String] = { _ in [] }) {
         self.channels = channels
@@ -154,6 +156,7 @@ public actor InterviewSession {
         self.evidence = evidence
         self.classificationBudget = classificationBudget
         self.answerBudget = answerBudget
+        self.generationTimeout = generationTimeout
         self.classificationEvidence = classificationEvidence
     }
 
@@ -500,11 +503,17 @@ public actor InterviewSession {
         if let prior = snapshot.answers.first(where: { $0.id == question.previousQuestionID }) {
             context.insert("Previous interviewer question: " + prior.question.original, at: 0)
         }
-        let limitedContext = answerBudget.limit(context)
+        let limitedContext = answerBudget.share(70).limit(context)
+        generationDeadline = Task { [weak self, generationTimeout] in
+            do {
+                try await Task.sleep(for: generationTimeout)
+                await self?.timeout(revision)
+            } catch {}
+        }
         generation = Task { [weak self, generator, evidence, preferences, limitedContext, answerBudget] in
             do {
                 await self?.mark(revision, \.retrievalStarted)
-                let facts = answerBudget.limit(await evidence(question.normalized))
+                let facts = answerBudget.share(30).limit(await evidence(question.normalized))
                 await self?.mark(revision, \.retrievalFinished)
                 try Task.checkCancellation()
                 await self?.recordEvidence(facts, revision)
@@ -574,7 +583,15 @@ public actor InterviewSession {
         mark(revision, \.terminal)
         activeRevision = nil
         generation = nil
+        generationDeadline?.cancel()
+        generationDeadline = nil
         publish()
+    }
+
+    private func timeout(_ revision: UUID) {
+        guard activeRevision == revision else { return }
+        generation?.cancel()
+        complete(revision, state: .failed, failure: publicErrorMessage(ProviderFailure.timeout))
     }
 
     private func invalidateAnswer(_ state: InterviewAnswer.State) {
@@ -586,6 +603,8 @@ public actor InterviewSession {
         activeRevision = nil
         generation?.cancel()
         generation = nil
+        generationDeadline?.cancel()
+        generationDeadline = nil
     }
 
     public func responseVisible(_ revision: UUID) {

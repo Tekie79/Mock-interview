@@ -39,3 +39,23 @@ extension CapabilityTests {
     }
     #endif
 }
+
+extension CapabilityTests {
+    func testPresetsRoundTripAndUnsupportedServicesNeverSubstituteOtherProviders() throws {
+        let defaults = ProviderPreset.defaults()
+        let roundTrip = try JSONDecoder().decode([ProviderPreset].self, from: JSONEncoder().encode(defaults))
+        XCTAssertEqual(roundTrip, defaults)
+        let blocked = try XCTUnwrap(roundTrip.first)
+        XCTAssertEqual(blocked.classifier, .chatGPTSubscription)
+        XCTAssertNotNil(blocked.unavailableReason)
+        let hybrid = try XCTUnwrap(roundTrip.first { $0.name == "Hybrid" })
+        let duplicate = hybrid.copy(named: "Independent")
+        XCTAssertNotEqual(duplicate.id, hybrid.id)
+        XCTAssertEqual(duplicate.transcription, .elevenLabs)
+        XCTAssertEqual(duplicate.answer, .openai)
+        XCTAssertNil(duplicate.unavailableReason)
+        var invalid = duplicate
+        invalid.answer = .deepgram
+        XCTAssertNotNil(invalid.unavailableReason)
+    }
+}

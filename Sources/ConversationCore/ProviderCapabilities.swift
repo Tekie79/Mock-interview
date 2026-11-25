@@ -78,7 +78,7 @@ public struct ProviderCapabilities: Equatable, Sendable {
                          billing: .separatelyBilledAPI, streams: true, structuredOutput: true, usage: true)
         case .chatGPTSubscription:
             return .init(provider: provider, services: [], authentication: .approvedHostSignIn,
-                         billing: .chatGPTPlan, unavailableReason: "Approved ChatGPT plan integration and host registration are required.")
+                         billing: .chatGPTPlan, unavailableReason: ChatGPTPlanEligibility.requirement)
         }
     }
 

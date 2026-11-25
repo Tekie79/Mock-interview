@@ -28,14 +28,16 @@ public actor QuestionDetector {
 
     private let classifier: any QuestionClassifier
     private let threshold: Double
+    private let completionGrace: Duration
     private let now: @Sendable () -> ContinuousClock.Instant
     private var channels: [String: Channel] = [:]
     private var recent: [AcceptedQuestion] = []
 
     public init(classifier: any QuestionClassifier, threshold: Double = 0.8,
-                now: @escaping @Sendable () -> ContinuousClock.Instant = { .now }) {
+                completionGrace: Duration = .seconds(3), now: @escaping @Sendable () -> ContinuousClock.Instant = { .now }) {
         self.classifier = classifier
-        self.threshold = threshold
+        self.threshold = min(1, max(0, threshold))
+        self.completionGrace = completionGrace
         self.now = now
     }
 
@@ -85,13 +87,14 @@ public actor QuestionDetector {
             return nil
         }
         if let pending = channel.pending, pending.speaker == event.speaker,
-           pending.instant.duration(to: arrived) <= .seconds(3) {
+           pending.instant.duration(to: arrived) <= completionGrace {
             text = pending.text.trimmingCharacters(in: CharacterSet(charactersIn: ".… ")) + " " + text
         }
         channel.pending = nil
         channels[event.source.id] = channel
         guard text.utf8.count <= 16_000 else { return nil }
-        if text.hasSuffix("...") || text.hasSuffix("…") {
+        let lastWord = folded.split(whereSeparator: { !$0.isLetter }).last
+        if text.hasSuffix("...") || text.hasSuffix("…") || ["and", "or", "then", "because"].contains(lastWord.map(String.init) ?? "") {
             channels[event.source.id]?.pending = (text, arrived, event.speaker)
             return nil
         }
@@ -102,10 +105,10 @@ public actor QuestionDetector {
         let context = recent
         let result = try await classifier.classify(QuestionInput(
             turn: turn,
-            previousQuestions: budget.limit(context.suffix(4).reversed().map { "\($0.id.uuidString): \($0.normalized)" }),
-            conversation: budget.recent(conversation),
-            approvedEvidence: budget.limit(approvedEvidence),
-            interviewContext: budget.limit(interviewContext)))
+            previousQuestions: budget.share(15).limit(context.suffix(4).reversed().map { "\($0.id.uuidString): \($0.normalized)" }),
+            conversation: budget.share(55).recent(conversation),
+            approvedEvidence: budget.share(15).limit(approvedEvidence),
+            interviewContext: budget.share(15).limit(interviewContext)))
         try Task.checkCancellation()
         guard let active = channels[event.source.id], active.epoch == event.epoch,
               AutomaticQuestionRoleGate.permitsClassification(for: Self.role(of: event, channel: active)),

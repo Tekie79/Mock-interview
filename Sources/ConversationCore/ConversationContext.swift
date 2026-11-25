@@ -24,6 +24,10 @@ public struct ContextBudget: Equatable, Sendable {
         self.tokenBudget = max(0, min(tokenBudget, 24_000))
     }
 
+    func share(_ percent: Int) -> Self {
+        .init(turns: turns, tokenBudget: tokenBudget * percent / 100)
+    }
+
     public func limit(_ context: [String]) -> [String] {
         var remaining = tokenBudget
         var result: [String] = []
