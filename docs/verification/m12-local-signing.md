@@ -37,3 +37,22 @@ The optional number updates the staged app’s build number before signing. Comp
 ## Verification record
 
 Reviewed application source `03cd472e8ec392b2604d2fdcd566f1d2a3357209`. Record the local package fingerprint, exact requirement, checksum, installed path and runtime evidence here and in PR #4 once verified.
+
+Both packages were built from a clean `b0303b846201f9d7d16a1869fc96584369df0e1d` on an Apple Silicon Mac running macOS 26.3.2 and Xcode 26.6. Application code matches the reviewed revision. The repository’s `package-macos.sh` was the available baseline for the local signing script.
+
+- Identity `Mock Interview Local Signing`, RSA 2048, expires November 22, 2036.
+- Certificate SHA-256 `E8321C0DA7797F7FACD93A55656B92AF088B883E50DD207346B15FACBA62F3F0`.
+- Designated requirement `identifier "com.mockinterview.desktop" and certificate leaf = H"2af453bfb9f6a14ef434a38d95b8384a0ba8a33f"`.
+- Installed 1.0.0 (12.2) ZIP SHA-256 `ded6f133f2a5e90d04f9bf1e5aa0ba3cf036b40610ce9c795d19c005e83e2448`.
+- Upgrade trial 1.0.0 (12.2.1) ZIP SHA-256 `68a0b20079d636351be1e78843f6c4b746103228c06f987288285fb7be2bdd48`.
+
+| Check | Evidence |
+| --- | --- |
+| Deterministic regressions | 165 passed locally. Portable build and separate unsigned universal Release passed. |
+| Signed bundle and ZIP extraction | Both builds passed strict verification on both executable architectures, minimum macOS 14.2, Hardened Runtime, Audio Input entitlement and fixture exclusion. The extracted app preserved its privacy metadata. |
+| Installation | The verified 12.2 bundle was the first at `/Applications/MockInterview.app`. The copied executable matched the release artifact, the installed signature passed and the application launched from that path. |
+| Saved profile and settings | The installed app loaded the selected existing profile, profile library, output route, automatic answer and Adaptive preferences. |
+| Presentation | The installed app opened Compact and switched Focus, Chat and Answers Only in the idle UI. The test returned the presentation preferences to their original values. |
+| First-run OS authorization | The installed signer requested Microphone and System Audio Recording. The first dual-source test timed out awaiting macOS. The signed app detected the existing OpenAI Keychain entry and its synthetic classification check awaited Keychain access. |
+| Physical audio, live context and session lifecycle | Require the owner’s macOS authorization on the installed signer. The test does not count the earlier unsigned observations as signed-runtime evidence. |
+| Same-certificate upgrade | The signed and extracted upgrade build has the same certificate and designated requirement. Runtime authorization retention still requires successful first-build grants and an installed-upgrade retest. |
