@@ -7,6 +7,7 @@ import UniformTypeIdentifiers
 @main
 struct MockInterviewApp: App {
     @StateObject private var model = WorkspaceModel()
+    @NSApplicationDelegateAdaptor(InterviewAppDelegate.self) private var appDelegate
     @Environment(\.openWindow) private var openWindow
     @AppStorage("pauseShortcut") private var pauseShortcut = "p"
     @AppStorage("compactShortcut") private var compactShortcut = "k"
@@ -14,6 +15,7 @@ struct MockInterviewApp: App {
     var body: some Scene {
         WindowGroup("Mock Interview", id: "workspace") {
             WorkspaceView(model: model)
+                .onAppear { appDelegate.model = model }
                 .frame(minWidth: 850, minHeight: 600)
         }
         .defaultSize(width: 1080, height: 720)
@@ -43,8 +45,22 @@ struct MockInterviewApp: App {
 
         Settings {
             ProviderSettingsView(model: model)
-                .frame(width: 500)
+                .frame(width: 530, height: 665)
         }
+    }
+}
+
+@MainActor
+private final class InterviewAppDelegate: NSObject, NSApplicationDelegate {
+    weak var model: WorkspaceModel?
+
+    func applicationShouldTerminate(_ sender: NSApplication) -> NSApplication.TerminateReply {
+        guard let model else { return .terminateNow }
+        Task {
+            await model.shutdownForTermination()
+            sender.reply(toApplicationShouldTerminate: true)
+        }
+        return .terminateLater
     }
 }
 
@@ -88,15 +104,26 @@ private enum Keychain {
 }
 
 private enum SpeechProvider: String, CaseIterable, Identifiable {
+    case apple = "Apple Speech"
+    case eleven = "ElevenLabs"
     case openai = "OpenAI"
     case deepgram = "Deepgram"
     var id: String { rawValue }
+    var provider: ProviderID {
+        switch self {
+        case .apple: .appleSpeech
+        case .eleven: .elevenLabs
+        case .openai: .openai
+        case .deepgram: .deepgram
+        }
+    }
 }
 
 private enum TextProvider: String, CaseIterable, Identifiable {
     case openai = "OpenAI"
     case anthropic = "Anthropic"
     var id: String { rawValue }
+    var provider: ProviderID { self == .openai ? .openai : .anthropic }
 }
 
 private struct SessionProviders {
@@ -105,56 +132,79 @@ private struct SessionProviders {
     let generator: any TextGenerator
 
     init(defaults: UserDefaults, diarize: Bool = false) throws {
-        let speech = SpeechProvider(rawValue: defaults.string(forKey: "speechProvider") ?? "") ?? .openai
-        let classification = TextProvider(rawValue: defaults.string(forKey: "classificationProvider") ?? "") ?? .openai
-        let language = defaults.string(forKey: "sttLanguage")
-        func key(_ account: String) throws -> String {
-            guard let value = Keychain.load(account), !value.isEmpty else {
-                throw ProviderFailure.missingCredentials
-            }
-            return value
-        }
+        transcriber = try Self.transcriptionFactory(defaults: defaults, diarize: diarize)
+        classifier = try Self.questionClassifier(defaults: defaults)
+        generator = try Self.answerGenerator(defaults: defaults)
+    }
 
+    private static func key(_ account: String) throws -> String {
+        guard let value = Keychain.load(account), !value.isEmpty else { throw ProviderFailure.missingCredentials }
+        return value
+    }
+
+    static func transcriptionFactory(defaults: UserDefaults, diarize: Bool = false) throws
+        -> @Sendable () -> any StreamingSTT {
+        let speech = try ProviderSelection.decode(defaults.string(forKey: "speechProvider"), default: SpeechProvider.openai)
+        let language = defaults.string(forKey: "sttLanguage")
+        let vocabulary = (defaults.string(forKey: "speechVocabulary") ?? "").split(separator: ",")
+            .map { $0.trimmingCharacters(in: .whitespacesAndNewlines) }
         switch speech {
+        case .apple:
+            let locale = defaults.string(forKey: "appleSpeechLocale") ?? "en-US"
+            let mode = AppleRecognitionMode(rawValue: defaults.string(forKey: "appleSpeechMode") ?? "") ?? .onDevice
+            return { AppleSpeechRouter(locale: locale, mode: mode, vocabulary: vocabulary) }
+        case .eleven:
+            let credential = try key("elevenlabs")
+            let model = defaults.string(forKey: "elevenModel") ?? "scribe_v3_live"
+            let strategy = TranscriptionCommitStrategy(rawValue: defaults.string(forKey: "elevenCommit") ?? "") ?? .manual
+            let config = ElevenLabsSpeechConfiguration(
+                model: model, language: language, detectLanguage: defaults.object(forKey: "elevenDetectLanguage") as? Bool ?? true,
+                strategy: strategy, silenceSeconds: defaults.object(forKey: "sttEndpoint") as? Double ?? 0.65,
+                vocabulary: vocabulary)
+            return { ElevenLabsTranscriber(apiKey: credential, configuration: config) }
         case .openai:
             let credential = try key("openai")
             let model = defaults.string(forKey: "sttModel") ?? "gpt-live-transcribe"
-            transcriber = { OpenAIRealtimeTranscriber(apiKey: credential, model: model, language: language) }
+            return { OpenAIRealtimeTranscriber(apiKey: credential, model: model, language: language, vocabulary: vocabulary) }
         case .deepgram:
             let credential = try key("deepgram")
             let model = defaults.string(forKey: "deepgramModel") ?? "nova-3"
-            transcriber = {
-                DeepgramTranscriber(apiKey: credential, model: model, language: language, diarize: diarize)
+            let seconds = defaults.object(forKey: "sttEndpoint") as? Double ?? 0.65
+            let endpoint = Int(min(3, max(0.1, seconds.isFinite ? seconds : 0.65)) * 1_000)
+            return {
+                DeepgramTranscriber(apiKey: credential, model: model, language: language, diarize: diarize,
+                                    endpointMilliseconds: endpoint, vocabulary: vocabulary)
             }
         }
-        switch classification {
+    }
+
+    static func questionClassifier(defaults: UserDefaults) throws -> any QuestionClassifier {
+        let provider = try ProviderSelection.decode(defaults.string(forKey: "classificationProvider"), default: TextProvider.openai)
+        let instructions = defaults.string(forKey: "classificationInstructions") ?? ""
+        switch provider {
         case .openai:
-            classifier = OpenAIQuestionClassifier(apiKey: try key("openai"),
-                                                  model: defaults.string(forKey: "questionModel") ?? "gpt-4.1-mini")
+            return OpenAIQuestionClassifier(apiKey: try key("openai"),
+                model: defaults.string(forKey: "questionModel") ?? "gpt-4.1-mini", guidance: instructions)
         case .anthropic:
-            classifier = AnthropicQuestionClassifier(apiKey: try key("anthropic"),
-                model: defaults.string(forKey: "anthropicQuestionModel") ?? "claude-haiku-4-5")
+            return AnthropicQuestionClassifier(apiKey: try key("anthropic"),
+                model: defaults.string(forKey: "anthropicQuestionModel") ?? "claude-haiku-4-5", guidance: instructions)
         }
-        generator = try Self.answerGenerator(defaults: defaults)
     }
 
     static func embeddings(defaults: UserDefaults) throws -> (any TextEmbeddingProvider)? {
         guard defaults.bool(forKey: "semanticRetrieval") else { return nil }
-        guard let key = Keychain.load("openai") else { throw ProviderFailure.missingCredentials }
-        return OpenAIEmbeddings(apiKey: key,
+        return OpenAIEmbeddings(apiKey: try key("openai"),
                                model: defaults.string(forKey: "embeddingModel") ?? "text-embedding-3-small")
     }
 
     static func answerGenerator(defaults: UserDefaults) throws -> any TextGenerator {
-        let answer = TextProvider(rawValue: defaults.string(forKey: "answerProvider") ?? "") ?? .openai
+        let answer = try ProviderSelection.decode(defaults.string(forKey: "answerProvider"), default: TextProvider.openai)
         switch answer {
         case .openai:
-            guard let credential = Keychain.load("openai") else { throw ProviderFailure.missingCredentials }
-            return OpenAITextGenerator(apiKey: credential,
+            return OpenAITextGenerator(apiKey: try key("openai"),
                                        model: defaults.string(forKey: "answerModel") ?? "gpt-4.1-mini")
         case .anthropic:
-            guard let credential = Keychain.load("anthropic") else { throw ProviderFailure.missingCredentials }
-            return AnthropicTextGenerator(apiKey: credential,
+            return AnthropicTextGenerator(apiKey: try key("anthropic"),
                 model: defaults.string(forKey: "anthropicAnswerModel") ?? "claude-haiku-4-5")
         }
     }
@@ -162,21 +212,15 @@ private struct SessionProviders {
 
 @MainActor
 final class WorkspaceModel: ObservableObject {
-    enum SourceMode: String, CaseIterable, Identifiable {
-        case remote = "Application audio"
-        case both = "Application and microphone"
-        case microphone = "Microphone only"
-        case replay = "Recorded PCM replay"
-        var id: String { rawValue }
+    @Published var route: AudioRoutePreference = {
+        guard let data = UserDefaults.standard.data(forKey: "audioRoute") else { return .init() }
+        return (try? JSONDecoder().decode(AudioRoutePreference.self, from: data)) ?? .init()
+    }() {
+        didSet { UserDefaults.standard.set(try? JSONEncoder().encode(route), forKey: "audioRoute") }
     }
-
-    @Published var mode: SourceMode = .remote
-    @Published var processes: [MacAudioChoice] = []
-    @Published var microphones: [MacAudioChoice] = []
-    @Published var processID: UInt32?
-    @Published var micID: UInt32?
-    @Published var designatedInterviewer = false
-    @Published var mixedDiarization = false
+    @Published var processes: [AudioEndpointChoice] = []
+    @Published var microphones: [AudioEndpointChoice] = []
+    @Published var outputs: [AudioEndpointChoice] = []
     @Published var replayURL: URL?
     @Published var snapshot: InterviewSnapshot?
     @Published var error: String?
@@ -192,7 +236,7 @@ final class WorkspaceModel: ObservableObject {
     @Published var endedAt: Date?
     @Published var providerTest: String?
     @Published var checkingProvider = false
-    @Published var configuredKeys = Set(["openai", "deepgram", "anthropic"].filter { Keychain.load($0) != nil })
+    @Published var configuredKeys = Set(["openai", "deepgram", "anthropic", "elevenlabs"].filter { Keychain.load($0) != nil })
 
     private(set) var store: KnowledgeStore?
     private var session: InterviewSession?
@@ -201,7 +245,7 @@ final class WorkspaceModel: ObservableObject {
     private var captureTest: Task<Void, Never>?
 
     var state: InterviewSnapshot.State { snapshot?.state ?? .idle }
-    var active: Bool { state == .listening || state == .paused }
+    var active: Bool { state.isRunning || [.pausing, .paused, .stopping, .failed].contains(state) }
     var displayedAnswer: InterviewAnswer? {
         if let selectedAnswer,
            let result = snapshot?.answers.first(where: { $0.id == selectedAnswer }) { return result }
@@ -216,7 +260,11 @@ final class WorkspaceModel: ObservableObject {
                     .appendingPathComponent("MockInterview", isDirectory: true)
                 try FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true,
                                                         attributes: [.posixPermissions: 0o700])
-                store = try KnowledgeStore(url: dir.appendingPathComponent("interviews.sqlite"))
+                let database = dir.appendingPathComponent("interviews.sqlite")
+                try FileManager.default.setAttributes([.posixPermissions: 0o700], ofItemAtPath: dir.path)
+                let opened = try KnowledgeStore(url: database)
+                try FileManager.default.setAttributes([.posixPermissions: 0o600], ofItemAtPath: database.path)
+                store = opened
             } catch {
                 self.error = "Local profile storage could not open."
             }
@@ -229,8 +277,7 @@ final class WorkspaceModel: ObservableObject {
         do {
             processes = try MacAudioDevices.processes()
             microphones = try MacAudioDevices.microphones()
-            if !processes.contains(where: { $0.id == processID }) { processID = nil }
-            if !microphones.contains(where: { $0.id == micID }) { micID = nil }
+            outputs = try MacAudioDevices.outputs()
         } catch {
             self.error = "macOS audio sources could not be listed."
         }
@@ -256,34 +303,46 @@ final class WorkspaceModel: ObservableObject {
         }
     }
 
-    func checkProvider() {
-        guard !checkingProvider else { return }
+    func checkProvider(_ service: ProviderService) {
+        guard !checkingProvider, !active else { return }
         checkingProvider = true
-        providerTest = "Checking provider configuration…"
+        providerTest = "Checking \(service.rawValue)…"
         Task {
             defer { checkingProvider = false }
             do {
-                let providers = try SessionProviders(defaults: .standard)
-                let transcriber = providers.transcriber()
-                let source = CaptureSource(id: "Connection test", role: .interviewer)
-                let epoch = UUID()
-                _ = try await transcriber.connect(source: source, epoch: epoch)
-                await transcriber.close()
-                let testQuestion = "What is a FIFO queue?"
-                _ = try await providers.classifier.classify(QuestionInput(
-                    turn: TranscriptEvent(source: source, epoch: epoch, itemID: "synthetic-connection-test",
-                                          text: testQuestion, state: .final), previousQuestions: []))
-                for try await _ in try await providers.generator.stream(AnswerRequest(
-                    question: testQuestion, instructions: "Use one sentence.", evidence: [])) {}
-                providerTest = "The transcription connection opened and both text models responded."
-            } catch {
-                providerTest = publicErrorMessage(error)
-            }
+                let defaults = UserDefaults.standard
+                let question = "What is a FIFO queue?"
+                switch service {
+                case .transcription:
+                    let factory = try SessionProviders.transcriptionFactory(defaults: defaults,
+                                                                            diarize: route.question == .sharedMicrophone)
+                    try await factory().testConnection()
+                    providerTest = "Transcription provider acknowledged the connection."
+                case .classification:
+                    let classifier = try SessionProviders.questionClassifier(defaults: defaults)
+                    let source = CaptureSource(id: "Connection test", role: .interviewer)
+                    let result = try await classifier.classify(QuestionInput(
+                        turn: TranscriptEvent(source: source, epoch: UUID(), itemID: "test",
+                                              text: question, state: .final), previousQuestions: []))
+                    guard result.decision == .accept, !result.parts.isEmpty else { throw ProviderFailure.unsupportedCapability }
+                    providerTest = "The classifier returned a structured answerable-question decision."
+                case .answer:
+                    let generator = try SessionProviders.answerGenerator(defaults: defaults)
+                    for try await _ in try await generator.stream(.init(question: question, instructions: "One sentence.", evidence: [])) {}
+                    providerTest = "The selected answer model completed a text stream."
+                case .embeddings:
+                    guard let embeddings = try SessionProviders.embeddings(defaults: defaults),
+                          try await embeddings.embed([question]).first?.isEmpty == false else {
+                        throw ProviderFailure.unsupportedCapability
+                    }
+                    providerTest = "The embedding model returned a vector."
+                }
+            } catch { providerTest = publicErrorMessage(error) }
         }
     }
 
     func startOrResume() {
-        guard !busy, !testing, state != .listening else { return }
+        guard !busy, !testing, !state.isRunning, state != .failed else { return }
         busy = true
         error = nil
         Task {
@@ -294,7 +353,7 @@ final class WorkspaceModel: ObservableObject {
             }
             do {
                 let options = UserDefaults.standard
-                let diarize = mode == .microphone && !designatedInterviewer && mixedDiarization
+                let diarize = route.question == .sharedMicrophone
                 let providers = try SessionProviders(defaults: options, diarize: diarize)
                 let embedding = try? SessionProviders.embeddings(defaults: options)
                 let format = AnswerFormat(rawValue: options.string(forKey: "answerFormat") ?? "") ?? .brief
@@ -302,14 +361,23 @@ final class WorkspaceModel: ObservableObject {
                 let sensitivity = Float(options.object(forKey: "vadThreshold") as? Double ?? 0.015)
                 let profile = profiles.first(where: { $0.id == profileID })
                 let store = self.store
-                let channels = try captureSources().map { source, audio in
-                    TranscriptionChannel(source: source, audio: audio, threshold: sensitivity,
-                                         makeSTT: providers.transcriber)
-                }
+                let channels = try makeChannels(providers.transcriber, sensitivity: sensitivity)
+                let responseLanguage = (profile?.answerLanguage.isEmpty == false)
+                    ? profile?.answerLanguage : options.string(forKey: "answerLanguage")
+                let answerWords = options.integer(forKey: "answerWordLimit")
                 let preferences = [
                     options.string(forKey: "answerInstructions") ?? "", profile?.instructions ?? "",
-                    (profile?.answerLanguage.isEmpty == false) ? "Answer language: " + (profile?.answerLanguage ?? "") : ""
+                    responseLanguage.map { $0.isEmpty ? "" : "Answer language: " + $0 } ?? "",
+                    answerWords > 0 ? "Use no more than \(answerWords) words." : ""
                 ].joined(separator: "\n")
+                let classificationBudget = ContextBudget(turns: options.object(forKey: "classifierContextTurns") as? Int ?? 12,
+                                                         tokenBudget: options.object(forKey: "classifierContextBudget") as? Int ?? 3_000)
+                let answerBudget = ContextBudget(turns: options.object(forKey: "answerContextTurns") as? Int ?? 12,
+                                                 tokenBudget: options.object(forKey: "answerContextBudget") as? Int ?? 3_000)
+                let seconds = options.object(forKey: "generationTimeout") as? Double ?? 45
+                let timeout = seconds.isFinite ? min(45, max(5, seconds)) : 45
+                let continuation = options.object(forKey: "completionGrace") as? Double ?? 3
+                let grace = continuation.isFinite ? min(6, max(0.5, continuation)) : 3
                 var context: [String] = []
                 if let profile {
                     let role = [profile.role, profile.seniority, profile.industry].filter { !$0.isEmpty }
@@ -320,9 +388,15 @@ final class WorkspaceModel: ObservableObject {
                 }
                 let next = InterviewSession(
                     channels: channels,
-                    detector: QuestionDetector(classifier: providers.classifier, threshold: threshold),
+                    detector: QuestionDetector(classifier: providers.classifier, threshold: threshold,
+                                               completionGrace: .seconds(grace)),
                     generator: providers.generator,
-                    format: format, preferences: preferences, interviewContext: context
+                    format: format, preferences: preferences, interviewContext: context,
+                    classificationBudget: classificationBudget, answerBudget: answerBudget,
+                    generationTimeout: .seconds(timeout), classificationEvidence: { question in
+                        guard let store, let profile else { return [] }
+                        return (try? await store.retrieve(question, profile: profile.id))?.map(\.promptText) ?? []
+                    }
                 ) { question in
                     guard let store, let profile else { return [] }
                     if let embedding,
@@ -351,18 +425,18 @@ final class WorkspaceModel: ObservableObject {
             } catch CaptureFailure.sourceUnavailable {
                 error = "Select each required audio source before starting."
             } catch {
-                self.error = "The interview could not start. Check the selected source and provider settings."
+                self.error = publicErrorMessage(error)
             }
         }
     }
 
     func prepareForSleep() {
         captureTest?.cancel()
-        if state == .listening { pause() }
+        if state.isRunning { pause() }
     }
 
     func pause() {
-        guard let session, state == .listening, !busy else { return }
+        guard let session, state.isRunning, !busy else { return }
         busy = true
         Task {
             await session.pause()
@@ -371,23 +445,35 @@ final class WorkspaceModel: ObservableObject {
     }
 
     func stop() {
-        guard let session, active, !busy else { return }
+        guard active, !busy else { return }
         busy = true
         Task {
-            await session.stop()
-            snapshot = await session.current()
-            endedAt = .now
-            if retainNextSession, let record = finishedRecord() {
-                do {
-                    guard let store else { throw StorageFailure.invalidRecord }
-                    try await store.saveInterview(record)
-                } catch {
-                    self.error = "The session could not be saved. Review it before clearing the workspace."
-                }
-            }
-            retainNextSession = false
+            await stopSession()
             busy = false
         }
+    }
+
+    func shutdownForTermination() async {
+        captureTest?.cancel()
+        await captureTest?.value
+        await stopSession()
+    }
+
+    private func stopSession() async {
+        guard let session, endedAt == nil else { return }
+        await session.stop()
+        guard endedAt == nil else { return }
+        snapshot = await session.current()
+        endedAt = .now
+        if retainNextSession, let record = finishedRecord() {
+            do {
+                guard let store else { throw StorageFailure.invalidRecord }
+                try await store.saveInterview(record)
+            } catch {
+                self.error = "The session could not be saved. Review it before clearing the workspace."
+            }
+        }
+        retainNextSession = false
     }
 
     func finishedRecord() -> SavedInterview? {
@@ -424,6 +510,10 @@ final class WorkspaceModel: ObservableObject {
 
     func assignSpeaker(_ id: DiarizedSpeaker.ID, role: SourceRole) {
         Task { await session?.assignSpeaker(id, role: role) }
+    }
+
+    func responseVisible(_ revision: UUID) {
+        Task { await session?.responseVisible(revision) }
     }
 
     func cancelAnswer() {
@@ -494,38 +584,75 @@ final class WorkspaceModel: ObservableObject {
                     }
                 } catch is CancellationError {
                 } catch {
-                    self.error = "Audio test failed. Check macOS permissions and the selected sources."
+                    self.error = publicErrorMessage(error)
                 }
             }
         } catch {
-            self.error = "Select each required audio source before testing."
+            self.error = publicErrorMessage(error)
         }
     }
 
     private func displayTestLevel(_ level: Float, source: String) { testLevels[source] = level }
 
+    private func makeChannels(_ transcriber: @escaping @Sendable () -> any StreamingSTT, sensitivity: Float) throws -> [TranscriptionChannel] {
+        try captureSources().map { source, audio in
+            TranscriptionChannel(source: source, audio: audio, threshold: sensitivity,
+                                 replay: source.id == "Replay", makeSTT: transcriber)
+        }
+    }
+
+    func applySources() {
+        guard let session, active, !busy, !testing else { return }
+        busy = true
+        error = nil
+        Task {
+            defer { busy = false }
+            do {
+                let options = UserDefaults.standard
+                let speech = try SessionProviders.transcriptionFactory(defaults: options, diarize: route.question == .sharedMicrophone)
+                let sensitivity = Float(options.object(forKey: "vadThreshold") as? Double ?? 0.015)
+                let channels = try makeChannels(speech, sensitivity: sensitivity)
+                await session.replaceChannels(channels)
+            } catch {
+                self.error = publicErrorMessage(error)
+            }
+        }
+    }
+
     private func captureSources() throws -> [(CaptureSource, any AudioSource)] {
-        var result: [(CaptureSource, any AudioSource)] = []
-        if mode == .remote || mode == .both {
-            guard let processID else { throw CaptureFailure.sourceUnavailable }
-            let source = CaptureSource(id: "Application", role: .interviewer)
-            result.append((source, MacAudioSource(source: source, input: .process(processID))))
+        try route.validateConcurrentMicrophones()
+        func required(_ value: String?) throws -> String {
+            guard let value else { throw CaptureFailure.sourceUnavailable }
+            return value
         }
-        if mode == .microphone || mode == .both {
-            guard let micID else { throw CaptureFailure.sourceUnavailable }
-            let role: SourceRole = mode == .both ? .candidate : (designatedInterviewer ? .interviewer : .unknown)
-            let source = CaptureSource(id: "Microphone", role: role)
-            result.append((source, MacAudioSource(source: source, input: .microphone(micID))))
-        }
-        if mode == .replay {
+        let question = CaptureSource(id: route.question == .replay ? "Replay" : "Question",
+                                     role: route.question == .sharedMicrophone ? .unknown : .interviewer)
+        let audio: any AudioSource
+        switch route.question {
+        case .defaultOutput: audio = MacAudioSource(source: question, input: .output(uid: nil))
+        case .outputDevice:
+            audio = MacAudioSource(source: question, input: .output(uid: try required(route.outputUID)))
+        case .application:
+            audio = MacAudioSource(source: question, input: .application(group: try required(route.applicationID)))
+        case .interviewerMicrophone, .sharedMicrophone:
+            audio = MacAudioSource(source: question, input: .microphone(uid: try required(route.interviewerMicrophoneUID)))
+        case .replay:
             guard let replayURL else { throw CaptureFailure.sourceUnavailable }
-            let fileSize = try replayURL.resourceValues(forKeys: [.fileSizeKey]).fileSize ?? 0
-            guard fileSize > 0, fileSize <= 24_000_000 else { throw CaptureFailure.invalidFormat }
-            let source = CaptureSource(id: "Replay", role: .interviewer)
-            result.append((source, PCMReplaySource(source: source, pcm: try Data(contentsOf: replayURL))))
+            let accessed = replayURL.startAccessingSecurityScopedResource()
+            defer { if accessed { replayURL.stopAccessingSecurityScopedResource() } }
+            let size = try replayURL.resourceValues(forKeys: [.fileSizeKey]).fileSize ?? 0
+            guard size > 0, size <= 24_000_000 else { throw CaptureFailure.invalidFormat }
+            audio = PCMReplaySource(source: question, pcm: try Data(contentsOf: replayURL))
+        }
+        var result = [(question, audio)]
+        if route.candidateEnabled {
+            let candidate = CaptureSource(id: "Candidate microphone", role: .candidate)
+            result.append((candidate, MacAudioSource(source: candidate,
+                          input: .microphone(uid: try required(route.candidateMicrophoneUID)))))
         }
         return result
     }
+
 }
 
 private struct WorkspaceView: View {
@@ -548,7 +675,11 @@ private struct WorkspaceView: View {
             if let issue = model.snapshot?.issues.last {
                 Label(issue, systemImage: "exclamationmark.circle").foregroundStyle(.secondary)
             }
-            if !model.active { sourceSetup }
+            if model.active {
+                DisclosureGroup("Audio Sources") { sourceSetup }
+            } else {
+                sourceSetup
+            }
             HSplitView {
                 transcript.frame(minWidth: 245, idealWidth: 360)
                 AnswerPanel(model: model, fontSize: fontSize).frame(minWidth: 360, maxWidth: .infinity)
@@ -558,7 +689,7 @@ private struct WorkspaceView: View {
                     .onSubmit(submit)
                 Button("Generate", action: submit).disabled(manualText.trimmingCharacters(in: .whitespaces).isEmpty)
             }
-            .disabled(model.state != .listening)
+            .disabled(!model.state.isRunning)
         }
         .padding(18)
         .task { await model.load() }
@@ -618,9 +749,9 @@ private struct WorkspaceView: View {
                 Button("Diagnostics") { showDiagnostics = true }
                 Button("Clear Session", action: model.clearSession).disabled(model.active || model.snapshot == nil)
             }
-            if model.state == .listening {
+            if model.state.isRunning {
                 Button("Pause", action: model.pause)
-            } else {
+            } else if model.state != .failed {
                 Button(model.state == .paused ? "Resume" : "Start", action: model.startOrResume)
                     .buttonStyle(.borderedProminent).disabled(model.busy || model.testing)
             }
@@ -635,44 +766,68 @@ private struct WorkspaceView: View {
                     Text("General practice").tag(UUID?.none)
                     ForEach(model.profiles) { Text($0.name).tag(Optional($0.id)) }
                 }
-                Picker("Source", selection: $model.mode) {
-                    ForEach(WorkspaceModel.SourceMode.allCases) { Text($0.rawValue).tag($0) }
+                Picker("Question audio", selection: $model.route.question) {
+                    ForEach(QuestionAudioKind.allCases) { Text($0.rawValue).tag($0) }
                 }
                 Button("Refresh Sources", action: model.reloadDevices)
             }
             HStack {
-                if model.mode == .remote || model.mode == .both {
-                    Picker("Application", selection: $model.processID) {
-                        Text("Select an application").tag(UInt32?.none)
-                        ForEach(model.processes) { Text($0.name).tag(Optional($0.id)) }
-                    }
-                }
-                if model.mode == .microphone || model.mode == .both {
-                    Picker("Microphone", selection: $model.micID) {
-                        Text("Select a microphone").tag(UInt32?.none)
-                        ForEach(model.microphones) { Text($0.name).tag(Optional($0.id)) }
-                    }
-                }
-                if model.mode == .microphone {
-                    Toggle("Interviewer-only microphone", isOn: $model.designatedInterviewer)
-                }
-                if model.mode == .replay {
+                switch model.route.question {
+                case .defaultOutput:
+                    Text("Follows the macOS default output route.").font(.caption)
+                case .outputDevice:
+                    sourcePicker("Output", choices: model.outputs, selection: $model.route.outputUID)
+                case .application:
+                    sourcePicker("Application", choices: model.processes, selection: $model.route.applicationID)
+                case .interviewerMicrophone, .sharedMicrophone:
+                    sourcePicker("Question microphone", choices: model.microphones,
+                                 selection: $model.route.interviewerMicrophoneUID)
+                case .replay:
                     Button(model.replayURL?.lastPathComponent ?? "Choose 24 kHz mono PCM16 file") {
                         replayPicker = true
                     }
                 }
-                Button(model.testing ? "End Audio Test" : "Test Audio", action: model.testSources)
+                Toggle("Candidate microphone", isOn: $model.route.candidateEnabled)
+                if model.route.candidateEnabled {
+                    sourcePicker("Candidate input", choices: model.microphones,
+                                 selection: $model.route.candidateMicrophoneUID)
+                }
             }
-            if model.mode == .microphone && !model.designatedInterviewer && speechProvider == .deepgram {
-                Toggle("Identify speakers for manual role assignment", isOn: $model.mixedDiarization)
+            HStack {
+                if model.active {
+                    Button("Apply Audio Sources", action: model.applySources).disabled(model.busy)
+                } else {
+                    Button(model.testing ? "End Audio Test" : "Test Audio", action: model.testSources)
+                    Toggle("Save a local copy when this session stops", isOn: $model.retainNextSession)
+                }
             }
-            if model.mode == .remote || model.mode == .both {
-                Text("A browser process may include audio from multiple tabs. Use headphones with two sources.")
+            if model.route.question == .sharedMicrophone && speechProvider != .deepgram {
+                Text("Shared audio stays unknown unless the transcription provider supplies speaker labels. Select Deepgram to assign roles.")
                     .font(.caption).foregroundStyle(.secondary)
             }
-            Toggle("Save a local copy when this session stops", isOn: $model.retainNextSession)
+            if model.route.question == .application {
+                Text("A browser process may include audio from multiple tabs.").font(.caption).foregroundStyle(.secondary)
+            }
+            if model.route.candidateEnabled {
+                Text("Use headphones to reduce audio leakage into the candidate microphone.")
+                    .font(.caption).foregroundStyle(.secondary)
+            }
             ForEach(model.testLevels.keys.sorted(), id: \.self) { source in
                 ProgressView(value: Double(model.testLevels[source] ?? 0)) { Text(source) }
+            }
+        }
+    }
+
+    private func sourcePicker(_ label: String, choices: [AudioEndpointChoice],
+                              selection: Binding<String?>) -> some View {
+        Picker(label, selection: selection) {
+            Text("Select a source").tag(String?.none)
+            if let saved = selection.wrappedValue, !choices.contains(where: { $0.id == saved }) {
+                Text("Previously selected source unavailable").tag(Optional(saved))
+            }
+            ForEach(choices) { item in
+                Text(item.name + (item.canTap || label != "Output" ? "" : " (multistream, unsupported)"))
+                    .tag(Optional(item.id))
             }
         }
     }
@@ -681,9 +836,9 @@ private struct WorkspaceView: View {
         VStack(alignment: .leading) {
             Text("Transcript").font(.headline)
             if let snapshot = model.snapshot {
-                ForEach(snapshot.levels.keys.sorted(), id: \.self) { source in
+                ForEach(snapshot.sources.keys.sorted(), id: \.self) { source in
                     ProgressView(value: Double(snapshot.levels[source] ?? 0)) {
-                        Text(source + (snapshot.connected.contains(source) ? " · Connected" : " · Disconnected"))
+                        Text(source + " · " + (snapshot.sources[source]?.rawValue.capitalized ?? "Idle"))
                     }
                 }
                 ForEach(snapshot.speakers) { speaker in
@@ -700,7 +855,7 @@ private struct WorkspaceView: View {
                               turn.isFinal ? nil : "Partial"].compactMap { $0 }.joined(separator: " · "))
                             .font(.caption).foregroundStyle(.secondary)
                         Text(turn.text).textSelection(.enabled)
-                        if turn.isFinal && model.state == .listening {
+                        if turn.isFinal && model.state.isRunning {
                             Button("Use as question") { manualText = turn.text }.buttonStyle(.link)
                         }
                     }
@@ -738,6 +893,11 @@ private struct AnswerPanel: View {
                 ScrollView {
                     VStack(alignment: .leading, spacing: 10) {
                         Text(answer.text).font(.system(size: fontSize)).textSelection(.enabled)
+                            .onChange(of: answer.text, initial: true) { _, value in
+                                if value.contains(where: { $0.isLetter || $0.isNumber }) {
+                                    model.responseVisible(answer.revision)
+                                }
+                            }
                         if !answer.evidence.isEmpty {
                             DisclosureGroup("Approved evidence") {
                                 ForEach(Array(answer.evidence.enumerated()), id: \.offset) { _, fact in
@@ -764,7 +924,7 @@ private struct AnswerPanel: View {
                             Button(format.rawValue) { model.regenerate(format) }
                         }
                     }
-                }.disabled(model.state != .listening)
+                }.disabled(!model.state.isRunning)
             } else {
                 Text("Accepted questions and suggested answers will appear here.")
                     .foregroundStyle(.secondary)
@@ -788,7 +948,7 @@ private struct CompactView: View {
                 Toggle("Always on Top", isOn: $onTop)
                 Spacer()
                 Button("Expand") { openWindow(id: "workspace") }
-                if model.state == .listening { Button("Pause", action: model.pause) }
+                if model.state.isRunning { Button("Pause", action: model.pause) }
                 if model.active { Button("Stop", action: model.stop) }
             }
             .font(.caption)
@@ -809,6 +969,13 @@ private struct WindowLevel: NSViewRepresentable {
 private struct ProviderSettingsView: View {
     @ObservedObject var model: WorkspaceModel
     @AppStorage("speechProvider") private var speech = SpeechProvider.openai
+    @AppStorage("appleSpeechLocale") private var appleLocale = "en-US"
+    @AppStorage("appleSpeechMode") private var appleMode = AppleRecognitionMode.onDevice
+    @AppStorage("speechVocabulary") private var speechVocabulary = ""
+    @AppStorage("elevenModel") private var elevenModel = "scribe_v3_live"
+    @AppStorage("elevenCommit") private var elevenCommit = TranscriptionCommitStrategy.manual
+    @AppStorage("elevenDetectLanguage") private var elevenDetectLanguage = true
+    @AppStorage("sttEndpoint") private var sttEndpoint = 0.65
     @AppStorage("classificationProvider") private var classification = TextProvider.openai
     @AppStorage("answerProvider") private var answer = TextProvider.openai
     @AppStorage("deepgramModel") private var deepgramModel = "nova-3"
@@ -828,63 +995,278 @@ private struct ProviderSettingsView: View {
     @AppStorage("pauseShortcut") private var pauseShortcut = "p"
     @AppStorage("compactShortcut") private var compactShortcut = "k"
 
+    @AppStorage("classificationInstructions") private var questionInstructions = ""
+    @AppStorage("classifierContextBudget") private var classifierBudget = 3_000
+    @AppStorage("classifierContextTurns") private var classifierTurns = 12
+    @AppStorage("answerContextBudget") private var answerBudget = 3_000
+    @AppStorage("answerContextTurns") private var answerTurns = 12
+    @AppStorage("completionGrace") private var completionGrace = 3.0
+    @AppStorage("generationTimeout") private var generationTimeout = 45.0
+    @AppStorage("answerLanguage") private var answerLanguage = ""
+    @AppStorage("answerWordLimit") private var answerWordLimit = 0
+    @AppStorage("providerPresets") private var storedPresets = Data()
+    @State private var presets: [ProviderPreset] = []
+    @State private var selectedPreset: UUID?
+    @State private var presetName = ""
+
     var body: some View {
         Form {
-            Section("Providers") {
-                ProviderKeyField(model: model, provider: "OpenAI", account: "openai")
-                if speech == .deepgram {
-                    ProviderKeyField(model: model, provider: "Deepgram", account: "deepgram")
-                }
-                if classification == .anthropic || answer == .anthropic {
-                    ProviderKeyField(model: model, provider: "Anthropic", account: "anthropic")
-                }
-                Picker("Transcription provider", selection: $speech) {
-                    ForEach(SpeechProvider.allCases) { Text($0.rawValue).tag($0) }
-                }
-                TextField("Transcription model", text: speech == .openai ? $sttModel : $deepgramModel)
-                Picker("Classification provider", selection: $classification) {
-                    ForEach(TextProvider.allCases) { Text($0.rawValue).tag($0) }
-                }
-                TextField("Classification model", text: classification == .openai ? $questionModel : $anthropicQuestionModel)
-                Picker("Answer provider", selection: $answer) {
-                    ForEach(TextProvider.allCases) { Text($0.rawValue).tag($0) }
-                }
-                TextField("Answer model", text: answer == .openai ? $answerModel : $anthropicAnswerModel)
-                TextField("Transcription language code", text: $sttLanguage)
-                Button("Test Connection", action: model.checkProvider).disabled(model.checkingProvider)
-                    .help("Sends a synthetic question to the selected models and may incur provider charges.")
-                if let result = model.providerTest { Text(result).foregroundStyle(.secondary) }
+            if model.active {
+                Text("Provider changes are available after stopping the session.")
             }
-            Section("Live answers") {
-                Picker("Format", selection: $format) {
-                    ForEach(AnswerFormat.allCases) { Text($0.rawValue).tag($0) }
-                }
-                TextField("Answer instructions", text: $instructions, axis: .vertical)
-                Slider(value: $vad, in: 0.005...0.08) { Text("Voice threshold") }
-                Slider(value: $confidence, in: 0.5...1) { Text("Question confidence") }
-                Slider(value: $fontSize, in: 12...30, step: 1) { Text("Answer text size") }
+            Group {
+                presetSettings
+                accounts
+                speechSettings
+                classificationSettings
+                generationSettings
+                knowledgeSettings
             }
-            Section("Local shortcuts") {
+            .disabled(model.active)
+            Section("Audio and shortcuts") {
+                Slider(value: $vad, in: 0.005...0.08) { Text("Audio sensitivity") }
+                    .disabled(model.active)
                 TextField("Pause (Command-Shift plus key)", text: $pauseShortcut)
                     .onChange(of: pauseShortcut) { _, value in pauseShortcut = String(value.suffix(1).lowercased()) }
                 TextField("Compact window (Command-Shift plus key)", text: $compactShortcut)
                     .onChange(of: compactShortcut) { _, value in compactShortcut = String(value.suffix(1).lowercased()) }
             }
-            Section("Evidence search") {
-                Toggle("Use OpenAI embeddings", isOn: $semanticRetrieval)
-                if semanticRetrieval {
-                    TextField("Embedding model", text: $embeddingModel)
-                    Text("Build an index in Profiles after enabling this option or changing the model. Indexing sends approved facts. Search sends accepted questions.")
-                        .font(.caption).foregroundStyle(.secondary)
-                }
-            }
             Section("Retention") {
-                Text("Session text stays in memory by default. You can save individual sessions locally. Audio is never saved.")
+                Text("Session text stays in memory by default. Save individual sessions locally from Review and History.")
             }
+            if let result = model.providerTest { Text(result).foregroundStyle(.secondary) }
             if let error = model.error { Text(error).foregroundStyle(.red) }
         }
         .formStyle(.grouped)
         .padding(10)
+        .onAppear {
+            presets = (try? JSONDecoder().decode([ProviderPreset].self, from: storedPresets)) ?? ProviderPreset.defaults()
+            persistPresets()
+        }
+    }
+
+    private var accounts: some View {
+        Section("Accounts and billing") {
+            Text("Apple Speech uses macOS recognition permissions. API credentials below are separately billed by each provider.")
+            ProviderKeyField(model: model, provider: "OpenAI", account: "openai")
+            ProviderKeyField(model: model, provider: "ElevenLabs", account: "elevenlabs")
+            ProviderKeyField(model: model, provider: "Deepgram", account: "deepgram")
+            ProviderKeyField(model: model, provider: "Anthropic", account: "anthropic")
+            LabeledContent("ChatGPT subscription") { Text("Authorization unavailable") }
+            Text(ChatGPTPlanEligibility.requirement + " " + ChatGPTPlanEligibility.audioAvailability)
+                .font(.caption).foregroundStyle(.secondary)
+        }
+    }
+
+    private var speechSettings: some View {
+        Section("Transcription") {
+            Picker("Provider", selection: $speech) {
+                ForEach(SpeechProvider.allCases) { Text($0.rawValue).tag($0) }
+            }
+            if speech == .apple {
+                Picker("Language", selection: $appleLocale) {
+                    ForEach(AppleSpeechTranscriber.languages(), id: \.self) { locale in
+                        Text(Locale.current.localizedString(forIdentifier: locale) ?? locale).tag(locale)
+                    }
+                }
+                Picker("Processing", selection: $appleMode) {
+                    ForEach(AppleRecognitionMode.allCases) { Text($0.rawValue).tag($0) }
+                }
+                if appleMode == .onDevice, !AppleSpeechTranscriber.hasOnDeviceRecognition(locale: appleLocale) {
+                    Text("This locale has no installed or supported on-device recognizer.")
+                }
+            } else if speech == .eleven {
+                Picker("Scribe model", selection: $elevenModel) {
+                    ForEach(ProviderCapabilities.describe(.elevenLabs).models, id: \.self) { Text($0).tag($0) }
+                }
+                Picker("Commit strategy", selection: $elevenCommit) {
+                    ForEach(TranscriptionCommitStrategy.allCases.filter { speechCapabilities.commits.contains($0) }) {
+                        Text($0.rawValue).tag($0)
+                    }
+                }
+                if !speechCapabilities.commits.contains(elevenCommit) {
+                    Text("Choose a commit strategy supported by this Scribe model.")
+                }
+                Toggle("Report detected language", isOn: $elevenDetectLanguage)
+            } else {
+                TextField("Model", text: speech == .openai ? $sttModel : $deepgramModel)
+            }
+            if speech != .apple {
+                TextField("Language code (blank uses provider default)", text: $sttLanguage)
+            }
+            if speech == .eleven || speech == .deepgram {
+                Slider(value: $sttEndpoint, in: 0.3...3, step: 0.05) { Text("Endpoint silence") }
+                Text("Provider billing can include streamed silence. Account model availability is tested on connection.")
+                    .font(.caption).foregroundStyle(.secondary)
+            }
+            if speechCapabilities.vocabularyHints {
+                TextField("Vocabulary hints (comma separated)", text: $speechVocabulary)
+            }
+            if speechCapabilities.diarization {
+                Text("Select Shared microphone in Audio Sources to assign detected speakers.")
+                    .font(.caption).foregroundStyle(.secondary)
+            }
+            connectionButton(.transcription)
+        }
+    }
+
+    private var classificationSettings: some View {
+        Section("Question classification") {
+            Picker("Provider", selection: $classification) {
+                ForEach(TextProvider.allCases) { Text($0.rawValue).tag($0) }
+            }
+            TextField("Model", text: classification == .openai ? $questionModel : $anthropicQuestionModel)
+            Slider(value: $confidence, in: 0.5...1) { Text("Question confidence") }
+            Slider(value: $completionGrace, in: 0.5...6, step: 0.5) { Text("Continuation window") }
+            Stepper("Context turns: \(classifierTurns)", value: $classifierTurns, in: 0...32)
+            Stepper("Context budget: \(classifierBudget)", value: $classifierBudget, in: 500...8_000, step: 250)
+            TextField("Classification instructions", text: $questionInstructions, axis: .vertical)
+            connectionButton(.classification)
+        }
+    }
+
+    private var generationSettings: some View {
+        Section("Answer generation") {
+            Picker("Provider", selection: $answer) {
+                ForEach(TextProvider.allCases) { Text($0.rawValue).tag($0) }
+            }
+            TextField("Model", text: answer == .openai ? $answerModel : $anthropicAnswerModel)
+            Picker("Format", selection: $format) {
+                ForEach(AnswerFormat.allCases) { Text($0.rawValue).tag($0) }
+            }
+            TextField("Response language", text: $answerLanguage)
+            Stepper(answerWordLimit == 0 ? "Word limit: format default" : "Word limit: \(answerWordLimit)",
+                    value: $answerWordLimit, in: 0...400, step: 25)
+            TextField("Answer instructions", text: $instructions, axis: .vertical)
+            Stepper("Context turns: \(answerTurns)", value: $answerTurns, in: 0...32)
+            Stepper("Context budget: \(answerBudget)", value: $answerBudget, in: 500...8_000, step: 250)
+            Slider(value: $generationTimeout, in: 5...45, step: 5) { Text("Timeout (seconds)") }
+            Slider(value: $fontSize, in: 12...30, step: 1) { Text("Answer text size") }
+            connectionButton(.answer)
+        }
+    }
+
+    private var knowledgeSettings: some View {
+        Section("Keyword and semantic retrieval") {
+            Toggle("Use OpenAI embeddings", isOn: $semanticRetrieval)
+            if semanticRetrieval {
+                TextField("Embedding model", text: $embeddingModel)
+                Text("Build the index in Profiles. Indexing sends approved facts, and semantic search sends accepted questions.")
+                    .font(.caption).foregroundStyle(.secondary)
+                connectionButton(.embeddings)
+            }
+        }
+    }
+
+    private var speechCapabilities: ProviderCapabilities {
+        let selected: String
+        switch speech {
+        case .apple: selected = appleLocale
+        case .eleven: selected = elevenModel
+        case .openai: selected = sttModel
+        case .deepgram: selected = deepgramModel
+        }
+        return ProviderCapabilities.describe(speech.provider, model: selected)
+    }
+
+    private func connectionButton(_ service: ProviderService) -> some View {
+        Button("Test " + service.rawValue.capitalized) { model.checkProvider(service) }
+            .disabled(model.checkingProvider)
+            .help("May send a synthetic request using the selected provider.")
+    }
+
+    private var currentPreset: ProviderPreset? { presets.first { $0.id == selectedPreset } }
+
+    private var presetSettings: some View {
+        Section("Provider presets") {
+            Picker("Preset", selection: $selectedPreset) {
+                Text("Select a preset").tag(UUID?.none)
+                ForEach(presets) { preset in
+                    Text(preset.name + (preset.unavailableReason == nil ? "" : " (unavailable)")).tag(Optional(preset.id))
+                }
+            }
+            if let reason = currentPreset?.unavailableReason {
+                Text(reason).font(.caption).foregroundStyle(.secondary)
+            }
+            TextField("Preset name", text: $presetName)
+            HStack {
+                Button("Apply") { if let preset = currentPreset { apply(preset) } }
+                    .disabled(currentPreset == nil || currentPreset?.unavailableReason != nil)
+                Button("Create") {
+                    let preset = capturePreset(name: presetName)
+                    presets.append(preset)
+                    selectedPreset = preset.id
+                    persistPresets()
+                }.disabled(presetName.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty || presets.count >= 50)
+                Button("Save Current Settings") {
+                    guard let id = selectedPreset, let index = presets.firstIndex(where: { $0.id == id }) else { return }
+                    presets[index] = capturePreset(name: presetName, id: id)
+                    persistPresets()
+                }.disabled(currentPreset == nil || presetName.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
+            }
+            HStack {
+                Button("Duplicate") {
+                    guard let preset = currentPreset else { return }
+                    let copy = preset.copy(named: preset.name + " copy")
+                    presets.append(copy)
+                    selectedPreset = copy.id
+                    persistPresets()
+                }.disabled(currentPreset == nil || presets.count >= 50)
+                Button("Delete", role: .destructive) {
+                    presets.removeAll { $0.id == selectedPreset }
+                    selectedPreset = nil
+                    persistPresets()
+                }.disabled(currentPreset == nil)
+            }
+        }
+        .onChange(of: selectedPreset) { _, _ in presetName = currentPreset?.name ?? "" }
+    }
+
+    private func capturePreset(name: String, id: UUID = UUID()) -> ProviderPreset {
+        let selected: String
+        switch speech {
+        case .apple: selected = "Speech framework"
+        case .eleven: selected = elevenModel
+        case .openai: selected = sttModel
+        case .deepgram: selected = deepgramModel
+        }
+        return ProviderPreset(id: id, name: String(name.trimmingCharacters(in: .whitespacesAndNewlines).prefix(80)),
+            transcription: speech.provider, transcriptionModel: selected, classifier: classification.provider,
+            classificationModel: classification == .openai ? questionModel : anthropicQuestionModel,
+            answer: answer.provider, answerModel: answer == .openai ? answerModel : anthropicAnswerModel,
+            language: speech == .apple ? appleLocale : sttLanguage, appleRecognitionMode: appleMode,
+            commit: elevenCommit, embeddingsModel: semanticRetrieval ? embeddingModel : nil)
+    }
+
+    private func apply(_ preset: ProviderPreset) {
+        guard preset.unavailableReason == nil,
+              let newSpeech = SpeechProvider.allCases.first(where: { $0.provider == preset.transcription }),
+              let newClassifier = TextProvider.allCases.first(where: { $0.provider == preset.classifier }),
+              let newAnswer = TextProvider.allCases.first(where: { $0.provider == preset.answer }) else { return }
+        speech = newSpeech
+        classification = newClassifier
+        answer = newAnswer
+        switch speech {
+        case .apple:
+            appleLocale = preset.language
+            appleMode = preset.appleRecognitionMode
+        case .eleven:
+            elevenModel = preset.transcriptionModel
+            elevenCommit = preset.commit
+        case .openai: sttModel = preset.transcriptionModel
+        case .deepgram: deepgramModel = preset.transcriptionModel
+        }
+        if speech != .apple { sttLanguage = preset.language }
+        if classification == .openai { questionModel = preset.classificationModel }
+        else { anthropicQuestionModel = preset.classificationModel }
+        if answer == .openai { answerModel = preset.answerModel }
+        else { anthropicAnswerModel = preset.answerModel }
+        semanticRetrieval = preset.embeddingsModel != nil
+        if let value = preset.embeddingsModel { embeddingModel = value }
+    }
+
+    private func persistPresets() {
+        if let encoded = try? JSONEncoder().encode(presets) { storedPresets = encoded }
     }
 }
 

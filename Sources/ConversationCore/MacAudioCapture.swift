@@ -6,39 +6,81 @@ import AVFoundation
 import CoreAudio
 import Foundation
 
-public struct MacAudioChoice: Identifiable, Hashable, Sendable {
-    public let id: AudioObjectID
-    public let name: String
-}
-
 public enum MacAudioDevices {
-    public static func processes() throws -> [MacAudioChoice] {
+    public static func processes() throws -> [AudioEndpointChoice] {
+        let items = try processRecords()
+        var groups: [String: String] = [:]
+        for item in items where item.pid != ProcessInfo.processInfo.processIdentifier {
+            guard let app = NSRunningApplication(processIdentifier: item.pid), let name = app.localizedName else {
+                continue
+            }
+            groups[app.bundleIdentifier ?? item.bundle ?? "pid:\(item.pid)"] = name
+        }
+        return groups.map { AudioEndpointChoice(id: $0.key, name: $0.value) }
+            .sorted { $0.name.localizedStandardCompare($1.name) == .orderedAscending }
+    }
+
+    public static func microphones() throws -> [AudioEndpointChoice] {
+        try devices(scope: kAudioDevicePropertyScopeInput).map(\.choice)
+    }
+
+    public static func outputs() throws -> [AudioEndpointChoice] {
+        try devices(scope: kAudioDevicePropertyScopeOutput).map(\.choice)
+    }
+
+    fileprivate static func processGroup(_ group: String) throws -> [AudioObjectID] {
+        let processes = try processRecords()
+        if group.hasPrefix("pid:"), let pid = Int32(group.dropFirst(4)) {
+            return processes.filter { $0.pid == pid }.map(\.object)
+        }
+        let ids = AudioRouteSelection.applicationMembers(in: processes.compactMap(\.bundle), group: group)
+        return processes.filter { $0.bundle.map(ids.contains) == true }.map(\.object)
+    }
+
+    fileprivate static func ownProcess() -> [AudioObjectID] {
+        let pid = ProcessInfo.processInfo.processIdentifier
+        return (try? processRecords().filter { $0.pid == pid }.map(\.object)) ?? []
+    }
+
+    fileprivate static func uidOfDefaultOutput() throws -> String? {
+        var device = AudioObjectID(kAudioObjectUnknown)
+        var address = property(kAudioHardwarePropertyDefaultOutputDevice)
+        var size = UInt32(MemoryLayout<AudioObjectID>.size)
+        try check(AudioObjectGetPropertyData(AudioObjectID(kAudioObjectSystemObject), &address, 0, nil, &size, &device))
+        return stringProperty(device, kAudioDevicePropertyDeviceUID)
+    }
+
+    fileprivate static func devices(scope: AudioObjectPropertyScope) throws -> [(object: AudioObjectID, choice: AudioEndpointChoice)] {
+        try objectList(kAudioHardwarePropertyDevices).compactMap { object in
+            var streams = property(kAudioDevicePropertyStreams, scope: scope)
+            var size: UInt32 = 0
+            guard AudioObjectGetPropertyDataSize(object, &streams, 0, nil, &size) == noErr, size > 0,
+                  let name = stringProperty(object, kAudioObjectPropertyName),
+                  let uid = stringProperty(object, kAudioDevicePropertyDeviceUID) else { return nil }
+            return (object, AudioEndpointChoice(id: uid, name: name,
+                                                canTap: size == UInt32(MemoryLayout<AudioStreamID>.stride)))
+        }.sorted { $0.choice.name.localizedStandardCompare($1.choice.name) == .orderedAscending }
+    }
+
+    private static func processRecords() throws -> [(object: AudioObjectID, pid: pid_t, bundle: String?)] {
         try objectList(kAudioHardwarePropertyProcessObjectList).compactMap { object in
             var address = property(kAudioProcessPropertyPID)
             var pid: pid_t = 0
             var size = UInt32(MemoryLayout<pid_t>.size)
-            guard AudioObjectGetPropertyData(object, &address, 0, nil, &size, &pid) == noErr,
-                  pid != ProcessInfo.processInfo.processIdentifier,
-                  let application = NSRunningApplication(processIdentifier: pid),
-                  let name = application.localizedName else { return nil }
-            return MacAudioChoice(id: object, name: name)
-        }.sorted { $0.name.localizedStandardCompare($1.name) == .orderedAscending }
+            guard AudioObjectGetPropertyData(object, &address, 0, nil, &size, &pid) == noErr else { return nil }
+            let bundle = stringProperty(object, kAudioProcessPropertyBundleID)
+                ?? NSRunningApplication(processIdentifier: pid)?.bundleIdentifier
+            return (object, pid, bundle)
+        }
     }
 
-    public static func microphones() throws -> [MacAudioChoice] {
-        try objectList(kAudioHardwarePropertyDevices).compactMap { object in
-            var input = property(kAudioDevicePropertyStreams, scope: kAudioDevicePropertyScopeInput)
-            var size: UInt32 = 0
-            guard AudioObjectGetPropertyDataSize(object, &input, 0, nil, &size) == noErr, size > 0 else {
-                return nil
-            }
-            var nameAddress = property(kAudioObjectPropertyName)
-            var name: CFString?
-            size = UInt32(MemoryLayout<CFString?>.size)
-            guard AudioObjectGetPropertyData(object, &nameAddress, 0, nil, &size, &name) == noErr,
-                  let name else { return nil }
-            return MacAudioChoice(id: object, name: name as String)
-        }.sorted { $0.name.localizedStandardCompare($1.name) == .orderedAscending }
+    private static func stringProperty(_ id: AudioObjectID, _ selector: AudioObjectPropertySelector) -> String? {
+        var address = property(selector)
+        var result: CFString?
+        var size = UInt32(MemoryLayout<CFString?>.size)
+        guard AudioObjectGetPropertyData(id, &address, 0, nil, &size, &result) == noErr,
+              let result else { return nil }
+        return result as String
     }
 
     fileprivate static func objectList(_ selector: AudioObjectPropertySelector) throws -> [AudioObjectID] {
@@ -68,8 +110,10 @@ private func check(_ status: OSStatus) throws {
 
 public actor MacAudioSource: AudioSource {
     public enum Input: Sendable {
-        case microphone(AudioObjectID)
-        case process(AudioObjectID)
+        case microphone(uid: String)
+        case application(group: String)
+        case output(uid: String?)
+
     }
 
     private let source: CaptureSource
@@ -80,7 +124,7 @@ public actor MacAudioSource: AudioSource {
     private var tap = AudioObjectID(kAudioObjectUnknown)
     private var aggregate = AudioObjectID(kAudioObjectUnknown)
     private var ioProc: AudioDeviceIOProcID?
-    private var processListener: AudioObjectPropertyListenerBlock?
+    private var listeners: [(AudioObjectPropertySelector, AudioObjectPropertyListenerBlock)] = []
     private var conversionTask: Task<Void, Never>?
     private var rawOutput: AsyncThrowingStream<NativeAudioBufferPool.Lease, Error>.Continuation?
 
@@ -100,12 +144,53 @@ public actor MacAudioSource: AudioSource {
         rawOutput = buffers
         do {
             switch input {
-            case .microphone(let device):
-                guard await AVCaptureDevice.requestAccess(for: .audio) else { throw CaptureFailure.permissionDenied }
+            case .microphone(let uid):
+                let permission = AsyncStream<Bool> { status in
+                    AVCaptureDevice.requestAccess(for: .audio) {
+                        status.yield($0)
+                        status.finish()
+                    }
+                }
+                var responses = permission.makeAsyncIterator()
+                let granted = await responses.next()
+                try Task.checkCancellation()
+                guard granted == true else { throw CaptureFailure.permissionDenied }
                 guard runID == id else { throw CancellationError() }
+                guard let device = try MacAudioDevices.devices(scope: kAudioDevicePropertyScopeInput)
+                    .first(where: { $0.choice.id == uid })?.object else { throw CaptureFailure.sourceUnavailable }
                 try startMicrophone(device, output: buffers)
-            case .process(let process):
-                try startProcess(process, output: buffers)
+                try observe(kAudioHardwarePropertyDevices) {
+                    if (try? MacAudioDevices.microphones().contains { $0.id == uid }) != true {
+                        buffers.finish(throwing: CaptureFailure.sourceUnavailable)
+                    }
+                }
+            case .application(let group):
+                let selected = try Set(MacAudioDevices.processGroup(group))
+                guard !selected.isEmpty else { throw CaptureFailure.sourceUnavailable }
+                try startTap(CATapDescription(monoMixdownOfProcesses: selected.sorted()), output: buffers)
+                try observe(kAudioHardwarePropertyProcessObjectList) {
+                    let current = (try? Set(MacAudioDevices.processGroup(group))) ?? []
+                    if current.isEmpty { buffers.finish(throwing: CaptureFailure.sourceUnavailable) }
+                    else if current != selected { buffers.finish(throwing: CaptureFailure.routeChanged) }
+                }
+            case .output(let uid):
+                let defaultUID = uid == nil ? try MacAudioDevices.uidOfDefaultOutput() : nil
+                let selected = try AudioRouteSelection.output(in: MacAudioDevices.outputs(),
+                                                               selectedUID: uid, defaultUID: defaultUID)
+                try startTap(CATapDescription(excludingProcesses: MacAudioDevices.ownProcess(),
+                                              deviceUID: selected.id, stream: 0), output: buffers)
+                try observe(kAudioHardwarePropertyDevices) {
+                    if (try? MacAudioDevices.outputs().contains { $0.id == selected.id && $0.canTap }) != true {
+                        buffers.finish(throwing: uid == nil ? CaptureFailure.routeChanged : .sourceUnavailable)
+                    }
+                }
+                if uid == nil {
+                    try observe(kAudioHardwarePropertyDefaultOutputDevice) {
+                        if (try? MacAudioDevices.uidOfDefaultOutput()) != selected.id {
+                            buffers.finish(throwing: CaptureFailure.routeChanged)
+                        }
+                    }
+                }
             }
         } catch {
             if runID == id { await stop() }
@@ -117,7 +202,7 @@ public actor MacAudioSource: AudioSource {
                 for try await lease in raw {
                     defer { lease.release() }
                     try Task.checkCancellation()
-                    for frame in try encoder.convert(lease.buffer) {
+                    for frame in try encoder.convert(lease.buffer, capturedAt: lease.capturedAt) {
                         if case .dropped = output.yield(frame) { throw CaptureFailure.bufferOverrun }
                     }
                 }
@@ -142,12 +227,11 @@ public actor MacAudioSource: AudioSource {
             engine.inputNode.removeTap(onBus: 0)
         }
         engine = nil
-        if let processListener {
-            var address = property(kAudioHardwarePropertyProcessObjectList)
-            AudioObjectRemovePropertyListenerBlock(AudioObjectID(kAudioObjectSystemObject), &address, .main,
-                                                   processListener)
+        for (selector, listener) in listeners {
+            var address = property(selector)
+            AudioObjectRemovePropertyListenerBlock(AudioObjectID(kAudioObjectSystemObject), &address, .main, listener)
         }
-        processListener = nil
+        listeners.removeAll()
         if let ioProc {
             AudioDeviceStop(aggregate, ioProc)
             AudioDeviceDestroyIOProcID(aggregate, ioProc)
@@ -189,16 +273,17 @@ public actor MacAudioSource: AudioSource {
         try engine.start()
     }
 
-    private func startProcess(_ process: AudioObjectID,
-                              output: AsyncThrowingStream<NativeAudioBufferPool.Lease, Error>.Continuation) throws {
-        let selector = kAudioHardwarePropertyProcessObjectList
-        guard try MacAudioDevices.objectList(selector).contains(process) else { throw CaptureFailure.sourceUnavailable }
-        let description = CATapDescription()
+    private func observe(_ selector: AudioObjectPropertySelector, change: @escaping @Sendable () -> Void) throws {
+        var address = property(selector)
+        let listener: AudioObjectPropertyListenerBlock = { _, _ in change() }
+        try check(AudioObjectAddPropertyListenerBlock(AudioObjectID(kAudioObjectSystemObject), &address, .main, listener))
+        listeners.append((selector, listener))
+    }
+
+    private func startTap(_ description: CATapDescription,
+                          output: AsyncThrowingStream<NativeAudioBufferPool.Lease, Error>.Continuation) throws {
         description.name = "Mock Interview"
-        description.processes = [process]
         description.isPrivate = true
-        description.isMixdown = true
-        description.isMono = true
         description.muteBehavior = .unmuted
         try check(AudioHardwareCreateProcessTap(description, &tap))
 
@@ -228,14 +313,6 @@ public actor MacAudioSource: AudioSource {
             pool.copy(input, frames: frames, into: output)
         })
         guard let ioProc else { throw CaptureFailure.sourceUnavailable }
-        let listener: AudioObjectPropertyListenerBlock = { _, _ in
-            if (try? MacAudioDevices.objectList(selector).contains(process)) != true {
-                output.finish(throwing: CaptureFailure.sourceUnavailable)
-            }
-        }
-        address = property(selector)
-        try check(AudioObjectAddPropertyListenerBlock(AudioObjectID(kAudioObjectSystemObject), &address, .main, listener))
-        processListener = listener
         try check(AudioDeviceStart(aggregate, ioProc))
     }
 }
@@ -245,6 +322,7 @@ public actor MacAudioSource: AudioSource {
 private final class NativeAudioBufferPool: @unchecked Sendable {
     struct Lease: @unchecked Sendable {
         let buffer: AVAudioPCMBuffer
+        let capturedAt: ContinuousClock.Instant
         fileprivate let pool: NativeAudioBufferPool
         fileprivate let index: Int32
 
@@ -288,7 +366,7 @@ private final class NativeAudioBufferPool: @unchecked Sendable {
             return
         }
         let buffer = buffers[Int(index)]
-        let lease = Lease(buffer: buffer, pool: self, index: index)
+        let lease = Lease(buffer: buffer, capturedAt: .now, pool: self, index: index)
         buffer.frameLength = frames
         let inputs = UnsafeMutableAudioBufferListPointer(UnsafeMutablePointer(mutating: input))
         let targets = UnsafeMutableAudioBufferListPointer(buffer.mutableAudioBufferList)
@@ -331,7 +409,7 @@ private struct PCMEncoder {
 
     init(source: CaptureSource) { self.source = source }
 
-    mutating func convert(_ input: AVAudioPCMBuffer) throws -> [AudioFrame] {
+    mutating func convert(_ input: AVAudioPCMBuffer, capturedAt: ContinuousClock.Instant) throws -> [AudioFrame] {
         if converter == nil {
             guard let format = AVAudioFormat(commonFormat: .pcmFormatInt16, sampleRate: Double(Self.rate),
                                              channels: 1, interleaved: true) else { throw CaptureFailure.invalidFormat }
@@ -361,7 +439,7 @@ private struct PCMEncoder {
         var frames: [AudioFrame] = []
         while pending.count >= Self.frameBytes {
             frames.append(AudioFrame(source: source, sampleRate: Self.rate, startSample: startSample,
-                                     pcm: Data(pending.prefix(Self.frameBytes))))
+                                     pcm: Data(pending.prefix(Self.frameBytes)), capturedAt: capturedAt))
             pending.removeFirst(Self.frameBytes)
             startSample += Int64(Self.frameBytes / 2)
         }

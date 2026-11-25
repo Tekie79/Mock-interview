@@ -1,6 +1,6 @@
 # Architecture and interfaces
 
-See requirements §4–11 for complete contracts and data semantics. Initial scaffold: `ConversationCore` SwiftPM target (only source-role gate). Expand into SPM targets as implementation warrants; the project layout in §13.1 is guidance, not a mandate to create empty targets. The native macOS app and Xcode project are M00 tasks.
+See requirements §4–11 for complete contracts and data semantics. The portable SwiftPM target hosts pipeline, provider, context and storage contracts. The Xcode target composes SwiftUI and the native capture adapters. Apple-only adapters are platform-guarded within the package.
 
 ## Dependency direction
 
@@ -32,3 +32,11 @@ Persist only data enabled by explicit retention settings; local-only raw audio b
 ## macOS and cloud boundary
 
 Linux cloud builds portable Swift targets only. Native SwiftUI/AppKit and Core Audio require macOS SDK/Xcode. A macOS hosted CI runner can compile and test noninteractive UI-independent paths but is not equivalent to a physical Mac with a live selected application, mic permissions and real devices. Record compile-only versus real-device evidence separately. Do not substitute simulated audio for production capture.
+
+## M10.1 runtime boundaries
+
+Transcript ingestion publishes immediately and enqueues eligible final turns to a separate FIFO classification worker. The session owns role bindings, source lifecycle and answer revisions. A candidate microphone remains independently connected during a question route failure, while the session exposes degraded status. Retrieval and streaming answers cannot stall the transcription consumer.
+
+The common transcription boundary accepts normalized PCM and exposes readiness and commit/drain behavior. Provider adapters normalize item identities, replacement partials and finals before publishing. Native SpeechAnalyzer is conditionally available for installed on-device models, with a classic Speech path on earlier systems. Provider and billing selection are independent from capture route selection.
+
+See [audio routing](audio-routing.md), [real-time processing and timing](realtime-pipeline.md), and [provider capabilities](provider-compatibility.md).

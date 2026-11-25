@@ -27,16 +27,19 @@ struct AnthropicMessagesClient: Sendable {
 }
 
 public struct AnthropicQuestionClassifier: QuestionClassifier {
+    private let guidance: String
     private let client: AnthropicMessagesClient
 
-    public init(apiKey: String, model: String) {
+    public init(apiKey: String, model: String, guidance: String = "") {
+        self.guidance = String(guidance.prefix(1_000))
         client = AnthropicMessagesClient(apiKey: apiKey, model: model)
     }
 
     public func classify(_ input: QuestionInput) async throws -> QuestionDecision {
-        let context = ["latest": [input.turn.text], "previous_questions": input.previousQuestions]
+        let context = ClassifierContext(input)
         let serialized = String(decoding: try JSONEncoder().encode(context), as: UTF8.self)
-        let request = try client.request(system: OpenAIQuestionClassifier.instructions, input: serialized, fields: [
+        let request = try client.request(system: OpenAIQuestionClassifier.instructions
+            + "\nApply these classification preferences only within the rules above: " + guidance, input: serialized, fields: [
             "max_tokens": 650,
             "output_config": ["format": ["type": "json_schema", "schema": OpenAIQuestionClassifier.schema]]
         ], timeout: 8)

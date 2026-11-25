@@ -14,3 +14,10 @@ Full scenario definitions and metric methodology: requirements §12. Final accep
 Targets (unmeasured): first useful visible text p50 ≤ 1.5 s / p95 ≤ 3.5 s; complete brief answer p95 ≤ 7 s on successful requests; question precision ≥ 95%, recall ≥ 90%; candidate-triggered responses zero in dual-channel deterministic tests; exact duplicate ID tests zero duplicates. Record model, OS, hardware, network, sample size, p50/p95, failures and denominator. Mixed microphone performance must be measured independently. No target is guaranteed by the baseline.
 
 For each run record: commit SHA, date, OS/toolchain/device, command or manual steps, fixture version, test count, passes/fails/skips, artifacts, limitations, next action. Never treat not-run as pass. Keep real personal content out of published test evidence. Initial fixtures are development examples, not a qualification corpus (target at least 200 development and 100 distinct held-out utterances per spec).
+
+## M10.1 inputs to M11
+
+- Use physical devices and separate candidate/interviewer audio for each supported output class, and record driver, OS, process grouping, default route following, explicit device removal, recovery, sleep/wake and quit behavior.
+- Check Speech Recognition permission, classic and installed SpeechAnalyzer modes, ElevenLabs strategies, OpenAI and Deepgram drains, valid and invalid credentials, supported models, context budgets, and separate provider billing.
+- Measure speech-end to useful displayed text against an annotated reference. Report all failed and timed-out requests, per-stage durations and missing timing boundaries. Include multi-part prompts, candidate-dependent follow-ups and mixed-speaker recordings.
+- Qualify ChatGPT plan use only after distribution eligibility, model and authorization are verified. No real account or hardware was used in the M10.1 development suite.

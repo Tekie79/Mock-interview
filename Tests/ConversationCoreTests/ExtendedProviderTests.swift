@@ -44,3 +44,17 @@ final class ExtendedProviderTests: XCTestCase {
         XCTAssertThrowsError(try state.receive(#"{"type":"error","error":{"message":"synthetic"}}"#))
     }
 }
+
+extension ExtendedProviderTests {
+    func testDeepgramSummaryFlushesOnlyProviderFinalizedWords() throws {
+        var result = DeepgramTranscriptAssembler(source: .init(id: "source", role: .unknown), epoch: UUID())
+        let wire = Data(#"{"type":"Results","start":0,"duration":1.5,"is_final":true,"speech_final":false,"channel":{"alternatives":[{"transcript":"What's the tradeoff?","words":[{"word":"tradeoff","start":1.0,"end":1.4,"speaker":2}]}]}}"#.utf8)
+        XCTAssertEqual(try result.receive(wire)?.state, .partial)
+        XCTAssertTrue(DeepgramTranscriptAssembler.isStreamSummary(Data(#"{"type":"Metadata","duration":1.5}"#.utf8)))
+        let final = result.drain()
+        XCTAssertEqual(final?.state, .final)
+        XCTAssertEqual(final?.speaker, 2)
+        XCTAssertEqual(final?.words.first?.endSeconds, 1.4)
+        XCTAssertNil(result.drain())
+    }
+}

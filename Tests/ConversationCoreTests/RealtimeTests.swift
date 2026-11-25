@@ -35,3 +35,31 @@ final class RealtimeTests: XCTestCase {
         XCTAssertEqual((input["format"] as? [String: Any])?["rate"] as? Int, 24_000)
     }
 }
+
+extension RealtimeTests {
+    func testSessionReadyOnlyAfterUpdateAcknowledgment() async throws {
+        let socket = ScriptedSocket()
+        let source = CaptureSource(id: "source", role: .interviewer)
+        let provider = OpenAIRealtimeTranscriber(apiKey: "synthetic", model: "gpt-live-transcribe",
+                                                 socket: { _ in socket })
+        await socket.enqueue(#"{"type":"session.created"}"#)
+        await socket.enqueue(#"{"type":"session.updated"}"#)
+        let stream = try await provider.connect(source: source, epoch: UUID())
+        try await provider.append(.init(source: source, sampleRate: 24_000, startSample: 0, pcm: Data([0, 0])))
+        try await provider.commit()
+        let sent = await socket.sent
+        XCTAssertEqual(sent.count, 3)
+        XCTAssertTrue(sent.first?.contains("session.update") == true)
+        XCTAssertEqual(sent.last, OpenAIRealtimeWire.commit)
+        _ = stream
+        await provider.close()
+    }
+
+    func testLiveModelOmitsUnsupportedVocabularyPrompt() throws {
+        let live = try OpenAIRealtimeWire.session(model: "gpt-live-transcribe", language: "en", vocabulary: ["Swift"])
+        let other = try OpenAIRealtimeWire.session(model: "gpt-4o-transcribe", language: "en", vocabulary: ["Swift"])
+        XCTAssertFalse(live.contains("prompt"))
+        XCTAssertTrue(other.contains("Swift"))
+        XCTAssertFalse(other.contains("delay"))
+    }
+}

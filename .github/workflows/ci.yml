@@ -1,18 +1,26 @@
 name: Swift core CI
 on:
   push:
-    branches: [main, feature/v1-cloud-implementation]
+    branches: [main, feature/v1-cloud-implementation, feature/m10-1-pipeline-hardening]
   pull_request:
 permissions:
   contents: read
 jobs:
   macos-core:
-    runs-on: macos-15
+    name: macOS development (${{ matrix.runner }})
+    strategy:
+      fail-fast: false
+      matrix:
+        runner: [macos-15, macos-26]
+    runs-on: ${{ matrix.runner }}
     timeout-minutes: 15
     steps:
       - uses: actions/checkout@v4
       - name: Toolchain
-        run: swift --version
+        run: |
+          swift --version
+          xcodebuild -version
+          uname -m
       - name: Build portable core
         run: ./scripts/build.sh
       - name: Run deterministic tests

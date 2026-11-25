@@ -1,0 +1,15 @@
+# Audio routing and compatibility
+
+The question route and candidate microphone are independent. The candidate microphone always has the candidate role, even when the transcription provider returns speaker metadata. A shared microphone starts with unknown speakers. Deepgram supplies word-level diarization for user assignment, and assignments clear on source replacement or reconnect. Choose separate devices when using two microphones. Headphones reduce acoustic leakage.
+
+| Route | Implementation | Compatibility still to verify on hardware |
+|---|---|---|
+| macOS default output | Resolves the Core Audio default output UID and captures its digital stream using a private, unmuted tap. A route notification restarts the stream under a fresh epoch. | Built-in speakers, Bluetooth, USB, Thunderbolt, HDMI/DisplayPort, virtual devices, and route transitions |
+| Specific output | Resolves a saved Core Audio UID, selects stream zero only if the device exposes exactly one output stream, and excludes the assistant's own Core Audio process when available. | Driver-dependent support and aggregate-device permissions. Multistream outputs are explicitly unavailable in this implementation |
+| Application or process group | Selects identified Core Audio process objects from a bundle ID and its dotted helper IDs. Membership changes replace the tap; an empty group disconnects. | Zoom, Teams, Webex, and supported browsers. Unrelated helper IDs are outside the bundle match. A browser process may carry multiple tabs |
+| Interviewer or shared microphone | Resolves the saved input UID and uses an AVAudioEngine input tap. An absent device fails and never silently selects another input. | Physical permissions, Bluetooth formats, device removal and reselect |
+| Replay | Reads an explicitly selected raw 24 kHz mono PCM16 file and feeds the ordinary recognition transport. | Live provider handling of synthetic file playback |
+
+Source controls offer separate meters and local Test Audio, which does not open a cloud connection. Applying new routes cancels and releases the old activation before starting replacement streams. The default route may follow macOS changes. Explicit routes remain selected until changed by the user. Recent exact candidate speech matches are suppressed on the question path while retaining the transcript. This heuristic does not provide acoustic cancellation and cannot guarantee detection when speech differs or the remote copy arrives first.
+
+Core Audio uses the documented device-UID and stream-scoped initializer and disables muting. Device enumeration identifies output capability and an eligible stream shape, without making a capture-success claim before opening the tap. [Apple Core Audio taps](https://developer.apple.com/documentation/CoreAudio/capturing-system-audio-with-core-audio-taps) · [Device-scoped CATapDescription](https://developer.apple.com/documentation/coreaudio/catapdescription/init(excludingprocesses:deviceuid:stream:))

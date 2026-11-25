@@ -21,3 +21,7 @@ Cloud Linux can build/test portable Swift code and prepare Mac-specific source/p
 ## Review workflow
 
 Keep implementation on an isolated branch, with milestone commits, updated status/plan, actual tests, and open blockers. Review the task diff/PR before merge. If splitting the work, continue the same task or commit/push its changes before starting another isolated task. Never force push, auto-merge or release. After implementation, run M11 qualification on Apple Silicon hardware with the real providers and the full acceptance matrix.
+
+## M10.1 development
+
+Check out the M10.1 feature branch against the reviewed V1 base. Run `./scripts/build.sh`, `./scripts/test.sh` and `git diff --check` per checkpoint. Debian needs the SQLite and zlib headers and Swift 6.x. Hosted macOS 15 and 26 runners run the portable suite and `./scripts/package-macos.sh`; Darwin-only noninteractive tests are picked up by SwiftPM there. SpeechAnalyzer is compiled when the toolchain includes the macOS 26 Speech APIs. Apple Speech permissions, real Core Audio routes and live credentials are outside the default cloud job. See [M10.1 verification](verification/m10-1.md).

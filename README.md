@@ -7,8 +7,8 @@ A native macOS app for mock interviews and solo practice. It listens to selected
 Requires Apple Silicon, macOS 14.2 or later, and Xcode with a macOS SDK that supports Core Audio process taps.
 
 1. Open `MockInterview.xcodeproj`, select the **MockInterview** scheme, and run. For a local unsigned release build, run `./scripts/package-macos.sh`.
-2. Open **Settings**. Choose transcription, classification, and answer providers independently. Add the required API keys. The app stores them in Keychain. **Test Connection** sends synthetic requests and may incur provider charges.
-3. Choose an application, a microphone, or both. **Test Audio** shows input levels before the session. Allow indicated macOS permissions. The app does not automatically change the selected source.
+2. Open **Settings**. Choose transcription, classification, answers and optional embeddings independently, or apply a preset. API keys are stored in Keychain. Each service has its own connection test. Tests can incur provider charges. Apple Speech offers strict on-device processing where installed. ChatGPT subscription sign-in is unavailable pending eligibility.
+3. Choose question audio from the macOS default output, a supported specific digital device, an application/process group, a microphone, or replay. Optionally enable a separate candidate microphone. **Test Audio** shows levels locally. Allow the indicated macOS permissions.
 4. Optionally create a profile, import text, Markdown, PDF, or DOCX, and confirm the experience facts the assistant can use.
 5. Start the interview. Use the native workspace or compact window to review suggestions and control the session. Transcript and answers are kept in memory by default. Select local retention or save an individual session from **Review and History**.
 
@@ -25,3 +25,7 @@ The GitHub Actions workflow builds the portable package, runs deterministic test
 ## Repository policy
 
 Use feature branches and reviewed changes. Do not merge or publish releases automatically. No distribution license has been selected.
+
+## M10.1 development evidence
+
+See [requirements traceability](docs/requirements-traceability.md), [audio compatibility](docs/audio-routing.md), [provider capabilities](docs/provider-compatibility.md), and [pipeline and timing](docs/realtime-pipeline.md). The hosted release build is an unsigned packaging check. Physical Mac and live provider qualification are handled in M11.

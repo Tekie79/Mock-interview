@@ -28,14 +28,16 @@ public actor QuestionDetector {
 
     private let classifier: any QuestionClassifier
     private let threshold: Double
+    private let completionGrace: Duration
     private let now: @Sendable () -> ContinuousClock.Instant
     private var channels: [String: Channel] = [:]
     private var recent: [AcceptedQuestion] = []
 
     public init(classifier: any QuestionClassifier, threshold: Double = 0.8,
-                now: @escaping @Sendable () -> ContinuousClock.Instant = { .now }) {
+                completionGrace: Duration = .seconds(3), now: @escaping @Sendable () -> ContinuousClock.Instant = { .now }) {
         self.classifier = classifier
-        self.threshold = threshold
+        self.threshold = min(1, max(0, threshold))
+        self.completionGrace = completionGrace
         self.now = now
     }
 
@@ -63,7 +65,9 @@ public actor QuestionDetector {
         if !keepingContext { recent.removeAll() }
     }
 
-    public func receive(_ event: TranscriptEvent) async throws -> AcceptedQuestion? {
+    public func receive(_ event: TranscriptEvent, conversation: [ConversationTurn] = [],
+                        approvedEvidence: [String] = [], interviewContext: [String] = [],
+                        budget: ContextBudget = .init()) async throws -> AcceptedQuestion? {
         guard event.state == .final,
               var channel = channels[event.source.id], channel.source == event.source,
               channel.epoch == event.epoch, channel.finalizedIDs.count < 16_384,
@@ -83,22 +87,28 @@ public actor QuestionDetector {
             return nil
         }
         if let pending = channel.pending, pending.speaker == event.speaker,
-           pending.instant.duration(to: arrived) <= .seconds(3) {
+           pending.instant.duration(to: arrived) <= completionGrace {
             text = pending.text.trimmingCharacters(in: CharacterSet(charactersIn: ".… ")) + " " + text
         }
         channel.pending = nil
         channels[event.source.id] = channel
         guard text.utf8.count <= 16_000 else { return nil }
-        if text.hasSuffix("...") || text.hasSuffix("…") {
+        let lastWord = folded.split(whereSeparator: { !$0.isLetter }).last
+        if text.hasSuffix("...") || text.hasSuffix("…") || ["and", "or", "then", "because"].contains(lastWord.map(String.init) ?? "") {
             channels[event.source.id]?.pending = (text, arrived, event.speaker)
             return nil
         }
 
         let turn = TranscriptEvent(source: event.source, epoch: event.epoch, itemID: event.itemID,
-                                   previousItemID: event.previousItemID, text: text, state: .final, speaker: event.speaker)
+                                   previousItemID: event.previousItemID, text: text, state: .final, speaker: event.speaker,
+                                   turnProbability: event.turnProbability)
         let context = recent
         let result = try await classifier.classify(QuestionInput(
-            turn: turn, previousQuestions: context.map { String($0.normalized.prefix(1_000)) }))
+            turn: turn,
+            previousQuestions: budget.share(15).limit(context.suffix(4).reversed().map { "\($0.id.uuidString): \($0.normalized)" }),
+            conversation: budget.share(55).recent(conversation),
+            approvedEvidence: budget.share(15).limit(approvedEvidence),
+            interviewContext: budget.share(15).limit(interviewContext)))
         try Task.checkCancellation()
         guard let active = channels[event.source.id], active.epoch == event.epoch,
               AutomaticQuestionRoleGate.permitsClassification(for: Self.role(of: event, channel: active)),
@@ -114,9 +124,12 @@ public actor QuestionDetector {
               result.parts.count <= 12, result.parts.allSatisfy({
                   !$0.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty && $0.utf8.count <= 4_000
               }) else { return nil }
+        let references = Set(result.contextTurnIDs)
+        let matched = context.last(where: { references.contains($0.id.uuidString) })?.id
+            ?? conversation.last(where: { references.contains($0.id) && $0.questionID != nil })?.questionID
         let question = AcceptedQuestion(original: text, normalized: normalized, parts: result.parts,
                                         previousQuestionID: result.isFollowUp || result.isIntentionalRepeat
-                                            ? context.last?.id : nil)
+                                            ? matched ?? context.last?.id : nil)
         recent.append(question)
         if recent.count > 8 { recent.removeFirst() }
         return question
