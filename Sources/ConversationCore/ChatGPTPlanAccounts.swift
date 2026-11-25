@@ -376,7 +376,8 @@ public actor ChatGPTPlanAccounts {
     }
 
     private func readTokens(_ request: URLRequest) async throws -> TokenReply {
-        let (data, response) = try await OpenAIResponsesClient.protected { try await transport.data(request) }
+        let send = transport.data
+        let (data, response) = try await OpenAIResponsesClient.protected { @Sendable in try await send(request) }
         if response.statusCode == 400 || response.statusCode == 401,
            let error = try? JSONDecoder().decode(OAuthError.self, from: data) {
             switch error.error {
