@@ -19,6 +19,29 @@ The rebuilt app replayed all 497.036 seconds of frozen audio as one interviewer-
 
 OpenAI returned 95 finals. Ordered word alignment matched at least three tokens for 99 of the 100 cues. The native workspace repeatedly reported that the question buffer was full, retained the transcript, and reached end of file. It produced 0 answer cards for 40 expected accepts, so observed card recall was 0%. Card precision and time to rendered text have no sample. This failed end-to-end configuration adds no evidence about model accuracy on the full split. Most 550 ms clip gaps were shorter than the configured wait, and the single designated source treated speech from every speaker as interviewer activity. This outcome is distinct from the independent Apple transcription result and from separately assigned speaker channels.
 
+The retry kept the same PCM, provider models, attribution and profile settings and set additional wait to zero. It finished after 533.76 seconds with 95 finals and the same 99-cue alignment coverage. All 44 cards completed. The score used the retained automatic-answer transcript IDs, ordered word alignment, and the generated question parts for mixed cues.
+
+| Metric | Zero additional wait |
+|---|---:|
+| Matched question recall | 40/40, 100% |
+| Card precision | 40/44, 90.91% |
+| Unknown-voice activations | 4 standalone cards and 3 extra parts in otherwise matching cards |
+| Candidate-only false positives | 0 |
+| Duplicate cards | 0 |
+| Premature cards attributed solely to a wait cue | 0 |
+| Completed answer usage | 33,360 input and 3,153 output tokens |
+
+Stage times across the 44 completed automatic answers use the application's pipeline instrumentation. P95 uses nearest rank.
+
+| Stage | p50 | p95 |
+|---|---:|---:|
+| Classification | 1,542 ms | 2,289 ms |
+| Answer request to first text token | 755 ms | 3,561 ms |
+| Estimated endpoint to SwiftUI acknowledgment | 3,564 ms | 6,296 ms |
+| Estimated endpoint to terminal answer | 4,203 ms | 6,497 ms |
+
+Card precision misses the 95% target, and the overlapping unknown voice polluted three accepted answers. The zero-wait retry isolates a timing trade-off on the native mixed feed. App timestamps use a local endpoint estimate and SwiftUI acknowledgment. The independent speech-end to useful displayed-text gate remains open.
+
 ### Recorded speech and controlled silence
 
 Two parts of one recorded Federal Reserve question were cut at the Apple SpeechAnalyzer range boundaries of 9.00, 11.58 and 16.25 seconds relative to the recorded third question below. The app's production replay, transcription channel and question round controller processed the real spoken clips with inserted silences of 750 and 1,500 ms. The probe injected the Apple-transcribed final at each cut boundary and used fixed decision and generation fixtures. The metric runs from delivery of the second final to its classifier call. An early card entered classification before the second final.

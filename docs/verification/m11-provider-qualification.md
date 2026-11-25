@@ -49,7 +49,9 @@ Mock Interview displayed OpenAI and ElevenLabs items as present in Keychain. The
 
 OpenAI publishes Luna at `none`, `low`, `medium`, `high`, `xhigh` and `max` and Sol at `low` through `max`. Both advertise structured outputs and streaming. The app allows only explicit `none` or `low` where supported in classification, to fit the live deadline, and exposes the supported reasoning efforts for answers. [GPT-6 Luna](https://developers.openai.com/api/docs/models/gpt-6-luna) · [GPT-6.2 Sol](https://developers.openai.com/api/docs/models/gpt-6.2-sol)
 
-The continuation bundle returned structured decisions from Luna `low` and Sol `low`, and completed a Luna `none` answer stream. Later Settings observations bracketed the Sol structured decision between 0.56 and 3.95 s and the Luna stream completion between 0.60 and 3.99 s after click. These bounds include UI automation and polling. The reviewed bundle also passed Luna `none` classification and Sol `low` streaming as noted above. Account-level latency across all answer efforts remains open.
+The continuation bundle returned structured decisions from Luna `low` and Sol `low`. Native synthetic answer streams completed at all explicit answer efforts, six for Luna and five for Sol. Later Settings observations bracketed the Sol `low` structured decision between 0.56 and 3.95 s and the Luna `none` stream completion between 0.60 and 3.99 s after click. These bounds include UI automation and polling. The reviewed bundle also passed Luna `none` classification. Full latency distributions by model and effort still need repeated samples.
+
+A native manual answer using the isolated synthetic practice profile exposed **Profile evidence** and described the implemented retry worker, excluded database-platform ownership, and stated that it had no verified impact numbers. The app reported 617 input and 31 output tokens and 911 ms from request to first text token. This covers approved evidence, an explicit ownership limitation and a missing metric in one live answer. Conflicting and separately excluded facts remain open.
 
 ### Scribe v3 Live strategy comparison
 
@@ -65,7 +67,7 @@ Every strategy answered the four labeled questions and also answered the unknown
 
 ### Permission reuse
 
-The final correction serializes credential reads and writes off the UI thread and caches an authorized read per account for the running process. Saving or removing a key updates that cache only after successful Keychain persistence. Cold starts still ask the operating system for access to stored items. Stable app identity and the OS authorization decision control access across launches and updates. The unsigned development builds used during qualification have separate binaries and can prompt again. [Apple Keychain ACLs](https://developer.apple.com/documentation/security/access-control-lists) · [macOS designated requirements](https://developer.apple.com/library/archive/technotes/tn2206/)
+The final correction serializes credential reads and writes off the UI thread and caches an authorized read per account for the running process. Saving or removing a key updates that cache only after successful Keychain persistence. On first provider use after launch, macOS can authorize the Keychain read silently when the existing grant and app identity match. The unsigned development builds used during qualification have separate binaries and can prompt again. [Apple Keychain ACLs](https://developer.apple.com/documentation/security/access-control-lists) · [macOS designated requirements](https://developer.apple.com/library/archive/technotes/tn2206/)
 
 ## Spending
 

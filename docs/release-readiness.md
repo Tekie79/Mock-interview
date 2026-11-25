@@ -2,7 +2,7 @@
 
 **Hold release.** The current M11 continuation has passing local tests and unsigned packaging. The native frozen-corpus failure and Scribe drain failures are open. Release gates remain open:
 
-- Live shared-feed question precision and recall. A one-second mixed-feed run reached the input end with 95 finals and zero cards. The matched Scribe runs showed unconfirmed audio in all three modes and an unknown-speaker false positive in each. [Defect register](verification/m11-defect-register.md) · [Benchmark](verification/m11-performance-benchmark.md)
+- Live shared-feed question precision and recall. A one-second mixed-feed run reached the input end with 95 finals and zero cards. At zero additional wait, the same file reached full recall and 90.91% card precision, with extra unknown-speaker parts. The matched Scribe runs showed unconfirmed audio in all three modes and an unknown-speaker false positive in each. [Defect register](verification/m11-defect-register.md) · [Benchmark](verification/m11-performance-benchmark.md)
 - Independently measured speech-end to first useful displayed text and completion, plus the actual 90-minute remote run. No remote endpoint is currently available. [Acceptance report](verification/m11-final-acceptance.md)
 - Intermittent native **Test Audio** reproduction, physical candidate microphone, overlap, isolation, permission and hardware recovery. Both stacks captured 20/20 timed loop starts at the adapter layer. [Audio compatibility](verification/m11-audio-compatibility.md)
 - Remaining live model/effort, alternate provider, grounding and interruption checks. [Provider qualification](verification/m11-provider-qualification.md)
