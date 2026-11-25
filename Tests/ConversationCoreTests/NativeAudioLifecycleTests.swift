@@ -46,6 +46,22 @@ final class NativeAudioLifecycleTests: XCTestCase {
         XCTAssertGreaterThan(downmixed[0][240], 0)
     }
 
+    func testFramesFromOneNativeCallbackHaveDistinctSampleTimes() throws {
+        let format = try XCTUnwrap(AVAudioFormat(commonFormat: .pcmFormatInt16, sampleRate: 24_000,
+                                                channels: 1, interleaved: false))
+        let input = try XCTUnwrap(AVAudioPCMBuffer(pcmFormat: format, frameCapacity: 960))
+        input.frameLength = 960
+        let samples = try XCTUnwrap(input.int16ChannelData)
+        for sample in 0..<960 { samples[0][sample] = 1_000 }
+        let observed = ContinuousClock.now
+        var encoder = PCMEncoder(source: .init(id: "interviewer", role: .interviewer))
+        let first = try encoder.convert(input, capturedAt: observed)
+        let second = try encoder.convert(input, capturedAt: observed.advanced(by: .milliseconds(45)))
+        XCTAssertEqual((first + second).map(\.startSample), [0, 480, 960, 1_440])
+        XCTAssertEqual((first + second).map { observed.duration(to: $0.capturedAt) },
+                       [.milliseconds(-40), .milliseconds(-20), .zero, .milliseconds(20)])
+    }
+
     func testExplicitUnpluggedOutputDoesNotFallBackToDefault() async throws {
         let capture = MacAudioSource(source: .init(id: "interviewer", role: .interviewer),
                                      input: .output(uid: UUID().uuidString))

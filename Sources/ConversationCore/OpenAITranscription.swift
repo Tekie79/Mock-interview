@@ -235,11 +235,17 @@ public actor OpenAIRealtimeTranscriber: StreamingSTT {
         connection = id
         do {
             try await socket.send(sessionUpdate)
+            let expectedModel = model
             try await receiveReadiness(on: socket, timeout: .seconds(15)) { bytes in
                 guard let event = try? JSONSerialization.jsonObject(with: bytes) as? [String: Any],
                       let kind = event["type"] as? String else { throw ProviderFailure.malformedEvent }
                 if kind == "session.updated" {
-                    guard (event["session"] as? [String: Any])?["type"] as? String == "transcription" else {
+                    guard let session = event["session"] as? [String: Any], session["type"] as? String == "transcription",
+                          let audio = session["audio"] as? [String: Any], let input = audio["input"] as? [String: Any],
+                          let format = input["format"] as? [String: Any], format["type"] as? String == "audio/pcm",
+                          format["rate"] as? Int == 24_000,
+                          (input["transcription"] as? [String: Any])?["model"] as? String == expectedModel,
+                          input["turn_detection"] == nil || input["turn_detection"] is NSNull else {
                         throw ProviderFailure.malformedEvent
                     }
                     return true

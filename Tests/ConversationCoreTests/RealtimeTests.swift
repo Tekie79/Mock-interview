@@ -43,7 +43,7 @@ extension RealtimeTests {
         let provider = OpenAIRealtimeTranscriber(apiKey: "synthetic", model: "gpt-live-transcribe",
                                                  socket: { _ in UnresponsivePingSocket(base: socket) })
         await socket.enqueue(#"{"type":"session.created"}"#)
-        await socket.enqueue(#"{"type":"session.updated","session":{"type":"transcription"}}"#)
+        await socket.enqueue(#"{"type":"session.updated","session":{"type":"transcription","audio":{"input":{"format":{"type":"audio/pcm","rate":24000},"transcription":{"model":"gpt-live-transcribe"},"turn_detection":null}}}}"#)
         let stream = try await provider.connect(source: source, epoch: UUID())
         try await provider.append(.init(source: source, sampleRate: 24_000, startSample: 0, pcm: Data([0, 0])))
         try await provider.commit()
@@ -61,16 +61,22 @@ extension RealtimeTests {
         await provider.close()
     }
 
-    func testRejectsNonTranscriptionSessionAcknowledgment() async throws {
-        let socket = ScriptedSocket()
-        await socket.enqueue(#"{"type":"session.updated","session":{"type":"realtime"}}"#)
-        await socket.fail()
-        let provider = OpenAIRealtimeTranscriber(apiKey: "synthetic", model: "gpt-live-transcribe", socket: { _ in socket })
-        do {
-            _ = try await provider.connect(source: .init(id: "source", role: .interviewer), epoch: UUID())
-            XCTFail("Expected the non-transcription acknowledgment to be rejected")
-        } catch {
-            XCTAssertEqual(error as? ProviderFailure, .malformedEvent)
+    func testRejectsMismatchedSessionAcknowledgment() async throws {
+        let configurations = [("realtime", "gpt-live-transcribe", 24_000, "null"),
+                              ("transcription", "gpt-transcribe", 24_000, "null"),
+                              ("transcription", "gpt-live-transcribe", 16_000, "null"),
+                              ("transcription", "gpt-live-transcribe", 24_000, #"{"type":"server_vad"}"#)]
+        for (type, model, rate, vad) in configurations {
+            let socket = ScriptedSocket()
+            await socket.enqueue(#"{"type":"session.updated","session":{"type":"\#(type)","audio":{"input":{"format":{"type":"audio/pcm","rate":\#(rate)},"transcription":{"model":"\#(model)"},"turn_detection":\#(vad)}}}}"#)
+            await socket.fail()
+            let provider = OpenAIRealtimeTranscriber(apiKey: "synthetic", model: "gpt-live-transcribe", socket: { _ in socket })
+            do {
+                _ = try await provider.connect(source: .init(id: "source", role: .interviewer), epoch: UUID())
+                XCTFail("Expected the mismatched acknowledgment to be rejected")
+            } catch {
+                XCTAssertEqual(error as? ProviderFailure, .malformedEvent)
+            }
         }
     }
 

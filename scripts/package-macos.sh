@@ -8,6 +8,8 @@ xcodebuild -project MockInterview.xcodeproj -scheme MockInterview -configuration
 app="$output/Build/Products/Release/MockInterview.app"
 plist="$app/Contents/Info.plist"
 test -x "$app/Contents/MacOS/MockInterview"
+xcrun lipo -verify_arch arm64 "$app/Contents/MacOS/MockInterview"
+test ! -d "$app/Contents/_CodeSignature"
 plutil -lint "$plist"
 test "$(plutil -extract CFBundlePackageType raw "$plist")" = APPL
 test "$(plutil -extract LSMinimumSystemVersion raw "$plist")" = 14.2

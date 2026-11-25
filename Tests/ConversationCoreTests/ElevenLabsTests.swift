@@ -42,7 +42,7 @@ private actor LateFinalSocket: RealtimeSocket {
     func read() async throws -> Data {
         if !didStart {
             didStart = true
-            return Data(#"{"message_type":"session_started","session_id":"synthetic","config":{}}"#.utf8)
+            return Data(scribeReady.utf8)
         }
         return await withCheckedContinuation {
             pending = $0
@@ -56,21 +56,37 @@ private actor LateFinalSocket: RealtimeSocket {
     }
 }
 
+private let scribeReady = #"{"message_type":"session_started","session_id":"synthetic","config":{"audio_format":"pcm_24000","sample_rate":24000,"model_id":"scribe_v3_live"}}"#
+
 final class ElevenLabsTests: XCTestCase {
     private let source = CaptureSource(id: "replay", role: .interviewer)
 
     func testWireConfigurationGuardsUnsupportedStrategyAndKeepsCredentialInHeader() throws {
-        let language = ElevenLabsSpeechConfiguration(language: "en", vocabulary: ["A & B"])
+        let language = ElevenLabsSpeechConfiguration(language: "en", vocabulary: ["A & B", "C++"])
         let request = try language.request(key: "synthetic")
         XCTAssertEqual(request.value(forHTTPHeaderField: "xi-api-key"), "synthetic")
         let items = try XCTUnwrap(URLComponents(url: try XCTUnwrap(request.url), resolvingAgainstBaseURL: false)?.queryItems)
         XCTAssertTrue(items.contains(.init(name: "commit_strategy", value: "turn_prediction")))
         XCTAssertTrue(items.contains(.init(name: "audio_format", value: "pcm_24000")))
         XCTAssertTrue(items.contains(.init(name: "keyterms", value: "A & B")))
+        XCTAssertTrue(request.url?.absoluteString.contains("keyterms=C%2B%2B") == true)
         XCTAssertFalse(request.url?.absoluteString.contains("synthetic") ?? true)
         XCTAssertThrowsError(try ElevenLabsSpeechConfiguration(model: "scribe_v2_realtime").request(key: "test"))
         XCTAssertThrowsError(try ElevenLabsSpeechConfiguration(language: "en-US").request(key: "test"))
         XCTAssertThrowsError(try language.request(key: ""))
+    }
+
+    func testRejectsMismatchedAudioConfigurationBeforeCapture() async throws {
+        let socket = ScriptedSocket()
+        await socket.enqueue(scribeReady.replacingOccurrences(of: "24000", with: "16000"))
+        await socket.fail()
+        let provider = ElevenLabsTranscriber(apiKey: "synthetic", configuration: .init(), socket: { _ in socket })
+        do {
+            _ = try await provider.connect(source: source, epoch: UUID())
+            XCTFail("Expected the mismatched audio configuration to be rejected")
+        } catch {
+            XCTAssertEqual(error as? ProviderFailure, .malformedEvent)
+        }
     }
 
     func testDelayedReadinessAndGracefulSemanticCommitWithWordMetadata() async throws {
@@ -182,6 +198,34 @@ final class ElevenLabsTests: XCTestCase {
         XCTAssertEqual(second?.itemID, interim?.itemID)
         XCTAssertEqual(second?.turnProbability, 0.7)
         XCTAssertEqual(second?.previousItemID, first?.itemID)
+        XCTAssertNil(end)
+        await provider.close()
+    }
+
+    func testDelayedPlainFinalCannotTakeTheNewerIdenticalPartial() async throws {
+        let (provider, socket, stream) = try await connect()
+        var cursor = stream.makeAsyncIterator()
+        try await provider.append(audio(at: 0))
+        try await provider.append(audio(at: 2_400))
+        await socket.enqueue(#"{"message_type":"partial_transcript","text":"Why?","turn_probability":0.7}"#)
+        let newer = try await cursor.next()
+        try await provider.finishInput()
+
+        await socket.enqueue(#"{"message_type":"committed_transcript","text":"Why?"}"#)
+        await socket.enqueue(detailed("Why?", 0.01, 0.09))
+        await socket.enqueue(#"{"message_type":"committed_transcript","text":"Why?"}"#)
+        await socket.enqueue(detailed("Why?", 0.11, 0.19))
+        await socket.fail()
+
+        let first = try await cursor.next()
+        let second = try await cursor.next()
+        let end = try await cursor.next()
+        XCTAssertEqual(first?.state, .final)
+        XCTAssertEqual(second?.state, .final)
+        XCTAssertNotEqual(first?.itemID, newer?.itemID)
+        XCTAssertNil(first?.turnProbability)
+        XCTAssertEqual(second?.itemID, newer?.itemID)
+        XCTAssertEqual(second?.turnProbability, 0.7)
         XCTAssertNil(end)
         await provider.close()
     }
@@ -308,7 +352,7 @@ final class ElevenLabsTests: XCTestCase {
         -> (ElevenLabsTranscriber, ScriptedSocket, AsyncThrowingStream<TranscriptEvent, Error>) {
         let socket = ScriptedSocket()
         let provider = ElevenLabsTranscriber(apiKey: "fake", configuration: .init(strategy: strategy), socket: { _ in socket })
-        await socket.enqueue(#"{"message_type":"session_started","session_id":"synthetic","config":{}}"#)
+        await socket.enqueue(scribeReady)
         return (provider, socket, try await provider.connect(source: source, epoch: UUID()))
     }
 

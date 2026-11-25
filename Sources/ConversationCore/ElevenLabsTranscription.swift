@@ -55,6 +55,7 @@ public struct ElevenLabsSpeechConfiguration: Equatable, Sendable {
         for word in vocabulary.prefix(25) where !word.isEmpty {
             parts.queryItems?.append(.init(name: "keyterms", value: String(word.prefix(32))))
         }
+        parts.percentEncodedQuery = parts.percentEncodedQuery?.replacingOccurrences(of: "+", with: "%2B")
         guard let url = parts.url else { throw ProviderFailure.requestRejected }
         var request = URLRequest(url: url, timeoutInterval: 12)
         request.setValue(key, forHTTPHeaderField: "xi-api-key")
@@ -63,6 +64,12 @@ public struct ElevenLabsSpeechConfiguration: Equatable, Sendable {
 }
 
 struct ElevenLabsWire: Decodable, Sendable {
+    struct Configuration: Decodable, Sendable {
+        let model_id: String
+        let audio_format: String
+        let sample_rate: Int
+    }
+
     struct Word: Decodable, Sendable {
         let text: String
         let start: Double?
@@ -72,6 +79,7 @@ struct ElevenLabsWire: Decodable, Sendable {
 
     let message_type: String
     let session_id: String?
+    let config: Configuration?
     let text: String?
     let language_code: String?
     let turn_probability: Double?
@@ -177,10 +185,14 @@ public actor ElevenLabsTranscriber: StreamingSTT {
         let id = UUID()
         connectionID = id
         do {
+            let expectedModel = config.model
             try await receiveReadiness(on: socket) { data in
                 let event = try ElevenLabsWire.decode(data)
                 guard event.message_type == "session_started" else { return false }
-                guard event.session_id?.isEmpty == false else { throw ProviderFailure.malformedEvent }
+                guard event.session_id?.isEmpty == false, let config = event.config, config.model_id == expectedModel,
+                      config.audio_format == "pcm_24000", config.sample_rate == 24_000 else {
+                    throw ProviderFailure.malformedEvent
+                }
                 return true
             }
             guard connectionID == id else { throw CancellationError() }
@@ -377,7 +389,7 @@ public actor ElevenLabsTranscriber: StreamingSTT {
                 }
                 let candidate = companions.removeFirst().partial
                 var resolved = candidate
-                if let candidate, !matches(candidate.text, next.text), !canBelong(candidate, to: next) {
+                if let candidate, !canBelong(candidate, to: next) {
                     // A plain boundary is tentative: a late older result cannot take a newer partial.
                     if partial == nil { partial = candidate }
                     resolved = nil

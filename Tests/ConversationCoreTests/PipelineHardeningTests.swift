@@ -406,6 +406,32 @@ extension PipelineHardeningTests {
         XCTAssertNil(reset?.timing.audioTimingBasis)
     }
 
+    func testProviderFinalRangesCoverSplitSpeechWithoutCountingOverlapTwice() async throws {
+        let progress = RecognitionProgress(providerCommits: true)
+        let source = CaptureSource(id: "remote", role: .interviewer)
+        let epoch = UUID()
+        let time = ContinuousClock.now
+        let frame = AudioFrame(source: source, sampleRate: 24_000, startSample: 0,
+                               pcm: Data(repeating: 0, count: 144_000), capturedAt: time)
+        await progress.sending(frame, voiced: false, now: time)
+        await progress.sent()
+        var speech = PipelineTiming()
+        speech.speechStart = time
+        speech.endpoint = time.advanced(by: .seconds(3))
+        try await progress.endedSpeech(speech, now: time.advanced(by: .seconds(3)))
+
+        let ranges = [(0.0, 0.75), (0.1, 0.8), (2.6, 3.0), (1.1, 1.8)]
+        for (index, range) in ranges.enumerated() {
+            let raw = TranscriptEvent(source: source, epoch: epoch, itemID: "\(index)", text: "Synthetic speech",
+                                      state: .final, audioRange: .init(startSeconds: range.0, endSeconds: range.1))
+            let tagged = await progress.tag(raw)
+            await progress.delivered(try XCTUnwrap(tagged))
+            let deadline = await progress.expired(recognition: .seconds(5), drain: .seconds(2),
+                                                  now: time.advanced(by: .seconds(9)))
+            XCTAssertEqual(deadline, index < 3 ? .timeout : nil)
+        }
+    }
+
     func testClientCommitEmptyFinalAndExplicitStreamAcknowledgmentAreIndependent() async throws {
         let progress = RecognitionProgress(providerCommits: false, requiresStreamEnd: true)
         let time = ContinuousClock.now

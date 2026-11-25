@@ -319,7 +319,7 @@ actor RecognitionProgress {
     func endedSpeech(_ timing: PipelineTiming, now: ContinuousClock.Instant = .now) throws {
         speech = nil
         speechProgress = nil
-        if !coverage.contains(where: { Self.covers($0, timing) }) {
+        if !Self.covers(coverage, timing) {
             try queue(timing, now: now)
         }
     }
@@ -388,24 +388,32 @@ actor RecognitionProgress {
         if !providerCommits {
             if !pending.isEmpty { pending.removeFirst() }
         } else if let start = event.timing.speechStart, let end = event.timing.endpoint {
-            let span = (start, end)
-            if event.timing.audioTimingBasis == .providerRangeEstimate {
-                pending.removeAll { Self.covers(span, $0.timing) }
-            } else if pending.first?.timing.endpoint == end {
-                pending.removeFirst()
+            let providerRange = event.timing.audioTimingBasis == .providerRangeEstimate
+            if providerRange || pending.first?.timing.endpoint == end {
+                coverage.append((start, end))
+                if coverage.count > 64 { coverage.removeFirst() }
+                if providerRange { pending.removeAll { Self.covers(coverage, $0.timing) } }
+                else { pending.removeFirst() }
             }
-            coverage.append(span)
-            if coverage.count > 64 { coverage.removeFirst() }
-            if let speech, Self.covers(span, speech) { speechProgress = event.timing.final }
+            if let speech, Self.covers(coverage, speech) { speechProgress = event.timing.final }
         }
         signal.yield(())
     }
 
-    private static func covers(_ span: (start: ContinuousClock.Instant, end: ContinuousClock.Instant),
+    private static func covers(_ spans: [(start: ContinuousClock.Instant, end: ContinuousClock.Instant)],
                                _ timing: PipelineTiming) -> Bool {
-        guard let start = timing.speechStart, let end = timing.endpoint else { return false }
-        let overlap = max(span.start, start).duration(to: min(span.end, end))
-        return overlap > .zero && overlap >= start.duration(to: end) / 2
-            && span.end >= end.advanced(by: .milliseconds(-250))
+        guard let start = timing.speechStart, let end = timing.endpoint, end > start else { return false }
+        // One local speech observation can contain multiple provider utterances. Measure their
+        // union inside this observation so overlapping results cannot accrue coverage twice.
+        var covered: Duration = .zero
+        var through = start
+        for span in spans.sorted(by: { $0.start < $1.start }) {
+            let lower = max(through, span.start)
+            let upper = min(end, span.end)
+            guard upper > lower else { continue }
+            covered += lower.duration(to: upper)
+            through = upper
+        }
+        return covered >= start.duration(to: end) / 2 && through >= end.advanced(by: .milliseconds(-250))
     }
 }

@@ -538,13 +538,14 @@ final class NativePCMConverter {
     }
 }
 
-private struct PCMEncoder {
+struct PCMEncoder {
     private static let rate = 24_000
     private static let frameBytes = 960
     let source: CaptureSource
     private var converter: NativePCMConverter?
     private var pending = Data()
     private var startSample: Int64 = 0
+    private var captureAnchor: ContinuousClock.Instant?
 
     init(source: CaptureSource) { self.source = source }
 
@@ -553,8 +554,12 @@ private struct PCMEncoder {
             guard let format = AVAudioFormat(commonFormat: .pcmFormatInt16, sampleRate: Double(Self.rate),
                                              channels: 1, interleaved: true) else { throw CaptureFailure.invalidFormat }
             converter = try NativePCMConverter(from: input.format, to: format)
+            // A callback observes a block after capture. Estimate the first sample from that
+            // observation, then keep distinct frame boundaries on this activation's sample clock.
+            let nanoseconds = Double(input.frameLength) * 1_000_000_000 / input.format.sampleRate
+            captureAnchor = capturedAt.advanced(by: .nanoseconds(-Int64(nanoseconds.rounded())))
         }
-        guard let converter else { throw CaptureFailure.invalidFormat }
+        guard let converter, let captureAnchor else { throw CaptureFailure.invalidFormat }
         let converted = try converter.convert(input)
         guard converted.frameLength > 0 else { return [] }
         guard let samples = converted.int16ChannelData else {
@@ -563,8 +568,10 @@ private struct PCMEncoder {
         pending.append(Data(bytes: samples[0], count: Int(converted.frameLength) * 2))
         var frames: [AudioFrame] = []
         while pending.count >= Self.frameBytes {
+            let start = Duration.milliseconds(startSample / Int64(Self.frameBytes / 2) * 20)
+            let estimatedStart = captureAnchor.advanced(by: start)
             frames.append(AudioFrame(source: source, sampleRate: Self.rate, startSample: startSample,
-                                     pcm: Data(pending.prefix(Self.frameBytes)), capturedAt: capturedAt))
+                                     pcm: Data(pending.prefix(Self.frameBytes)), capturedAt: estimatedStart))
             pending.removeFirst(Self.frameBytes)
             startSample += Int64(Self.frameBytes / 2)
         }
