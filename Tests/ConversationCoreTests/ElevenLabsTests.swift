@@ -395,6 +395,41 @@ final class ElevenLabsTests: XCTestCase {
         await provider.close()
     }
 
+    func testAllScribeStrategiesAccountForAnchoredAcousticEdgesBeyondWordTimings() async throws {
+        for strategy: TranscriptionCommitStrategy in [.manual, .voiceActivity, .semanticTurn] {
+            let (provider, socket, stream) = try await connect(strategy: strategy)
+            for offset in [0, 2_400, 4_800] { try await provider.append(audio(at: Int64(offset))) }
+            try await provider.finishInput()
+            var cursor = stream.makeAsyncIterator()
+            await socket.enqueue(detailed("Bounded onset and decay.", 0.04, 0.26))
+            await socket.fail()
+            let final = try await cursor.next()
+            XCTAssertEqual(final?.text, "Bounded onset and decay.")
+            let end = try await cursor.next()
+            XCTAssertNil(end, strategy.rawValue)
+            await provider.close()
+        }
+    }
+
+    func testTwoFinalsDoNotConsumeInteriorGapEvenIfItFitsEdgeTolerance() async throws {
+        let (provider, socket, stream) = try await connect(strategy: .semanticTurn)
+        for offset in [0, 2_400, 4_800] { try await provider.append(audio(at: Int64(offset))) }
+        try await provider.finishInput()
+        var cursor = stream.makeAsyncIterator()
+        await socket.enqueue(detailed("Leading", 0, 0.15))
+        await socket.enqueue(detailed("Trailing", 0.19, 0.3))
+        await socket.fail()
+        for text in ["Leading", "Trailing"] {
+            let final = try await cursor.next()
+            XCTAssertEqual(final?.text, text)
+        }
+        do {
+            _ = try await cursor.next()
+            XCTFail("A word timing edge cannot erase the uncovered interior.")
+        } catch { XCTAssertEqual(error as? ProviderFailure, .timeout) }
+        await provider.close()
+    }
+
     func testTinyOverlapCannotAcknowledgeNewerAudioOrItsCommit() async throws {
         let (provider, socket, stream) = try await connect(strategy: .manual)
         try await provider.append(audio(at: 0))

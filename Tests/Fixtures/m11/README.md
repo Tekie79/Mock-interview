@@ -16,6 +16,8 @@ Each conversation yields three aligned raw mono PCM16 little-endian tracks at 24
 
 `qualification.jsonl` is the fresh M11 correction holdout. It was frozen before the correction and reserved for evaluation. It contains ten new scenarios and 100 turns with 40 accept, 50 ignore and 10 wait labels. Its SHA-256 is `5dd9e1f824c83b5a4299917db29d92d776ec25cf1f9095b26db013688d749f3f`. Run `python3 Tests/Fixtures/m11/render.py --render qualification --output <directory>` to generate its three PCM tracks and one label file per scenario. The renderer validates separation from both historical splits. Generated insertion boundaries require an independent speech-end audit for displayed-latency qualification.
 
+`rc-holdout.jsonl` replaces `qualification.jsonl` as the independent synthetic split, because the earlier split informed the RC changes. Its 100 new cues span ten technical and behavioral conversations with 40 accept, 50 ignore and 10 wait labels. Its SHA-256 is `9b3ef25876d2c2cc79b44dceb7cd457df386f01e4410484b28f59a10428977c5`. Run `python3 -B Tests/Fixtures/m11/render.py --render rc-holdout --output <directory>`. On this Mac the renderer used six English voices and five speaking rates. The synthetic split supplements independently labeled human recordings and visually observed response timing.
+
 ## 90-minute remote playback
 
 On a Mac with the three voices installed, build the tracks in a new scratch directory:

@@ -32,10 +32,11 @@ def read_split(name, expected_count):
     return rows
 
 
-def clip(row, voice, temp):
+def clip(row, voice, temp, rate=None):
     text_file, aiff, wav = [temp / name for name in ("clip.txt", "clip.aiff", "clip.wav")]
     text_file.write_text(row["text"])
-    subprocess.run(["/usr/bin/say", "-v", voice, "-f", str(text_file), "-o", str(aiff)], check=True)
+    rate_flags = [] if rate is None else ["-r", str(rate)]
+    subprocess.run(["/usr/bin/say", "-v", voice, *rate_flags, "-f", str(text_file), "-o", str(aiff)], check=True)
     subprocess.run(
         ["/usr/bin/afconvert", "-f", "WAVE", "-d", "LEI16@24000", "-c", "1", str(aiff), str(wav)],
         check=True,
@@ -56,12 +57,19 @@ def render(rows, destination, name):
         grouped.setdefault(row["session"], []).append(row)
     with tempfile.TemporaryDirectory() as scratch:
         temp = Path(scratch)
-        for session, turns in grouped.items():
-            tracks = {role: array("h") for role in voices}
+        for index, (session, turns) in enumerate(grouped.items()):
+            selected_voices = voices
+            rate = None
+            if name == "rc-holdout":
+                accents = ["Samantha", "Daniel", "Karen", "Moira", "Aman", "Tessa"]
+                selected_voices = {role: accents[(index + offset) % len(accents)]
+                                   for role, offset in zip(voices, (0, 2, 4))}
+                rate = [145, 167, 190, 157, 203][index % 5]
+            tracks = {role: array("h") for role in selected_voices}
             position = RATE // 2
             marks = []
             for row in turns:
-                samples = clip(row, voices[row["role"]], temp)
+                samples = clip(row, selected_voices[row["role"]], temp, rate)
                 start = position
                 if marks and "overlap_previous_ms" in row:
                     start = marks[-1]["clip_end_sample"] - row["overlap_previous_ms"] * RATE // 1_000
@@ -84,11 +92,11 @@ def normalize(text):
 
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("--render", choices=("development", "held-out", "both", "qualification"))
+    parser.add_argument("--render", choices=("development", "held-out", "both", "qualification", "rc-holdout"))
     parser.add_argument("--output", type=Path)
     args = parser.parse_args()
     sets = {name: read_split(name, count) for name, count in
-            [("development", 200), ("held-out", 100), ("qualification", 100)]}
+            [("development", 200), ("held-out", 100), ("qualification", 100), ("rc-holdout", 100)]}
     seen = set()
     for name, rows in sets.items():
         normalized = {normalize(row["text"]) for row in rows}
@@ -102,7 +110,7 @@ def main():
             parser.error("--render requires --output")
         args.output.mkdir(parents=True, exist_ok=True)
         for name, rows in sets.items():
-            if args.render == name or (args.render == "both" and name != "qualification"):
+            if args.render == name or (args.render == "both" and name in {"development", "held-out"}):
                 render(rows, args.output, name)
 
 

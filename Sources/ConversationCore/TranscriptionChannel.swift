@@ -22,6 +22,7 @@ public struct TranscriptionChannel: Sendable {
     private let makeSTT: @Sendable () -> any StreamingSTT
     private let threshold: Float
     private let replay: Bool
+    var isReplay: Bool { replay }
     private let drainTimeout: Duration
     private let recognitionTimeout: Duration
     private let heartbeatInterval: Duration
@@ -135,7 +136,7 @@ public struct TranscriptionChannel: Sendable {
                     if voiced {
                         latestVoicedAt = frame.capturedAt.advanced(by: .seconds(Double(frame.pcm.count / 2) / 24_000))
                     }
-                    if source.role != .candidate, voiced,
+                    if source.role == .interviewer, voiced,
                        lastQuestionReport.map({ $0.duration(to: frame.capturedAt) >= .milliseconds(100) }) != false {
                         lastQuestionReport = frame.capturedAt
                         await events(.questionSpeech(source: source, epoch: epoch))

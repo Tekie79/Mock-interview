@@ -123,7 +123,8 @@ public struct OpenAIQuestionClassifier: QuestionClassifier {
         from their experience, including broad requests for a project. Use a different category for hypothetical work.
         Keep named tools, technologies and other constraints from the latest request in the accepted wording.
         One latest turn may contain several consecutive finalized fragments or questions. Read them together and
-        return each substantive request in its spoken order.
+        return each substantive request in its spoken order. Keep a complete request even if later finalized
+        text in the same input is unrelated or starts a separate unfinished thought.
         When the interviewer asks a prior question again, return its ID and mark it as an intentional repeat.
         Wait when the interviewer signals additional parts or the utterance ends mid-thought.
         """
@@ -157,6 +158,7 @@ enum AnswerPrompt {
         Match the speaking sample's tone, sentence length, and phrasing. Use it for style only.
         Listed profile skills can establish familiarity. Use project evidence to establish where or how a skill was used.
         Attribute a team accomplishment to the team and describe the candidate's own contribution only when supplied.
+        If evidence conflicts about ownership, tools or outcomes, use the supported common details and omit disputed claims.
         Use interview context to interpret questions and tailor advice. Job requirements do not establish experience.
         Never invent experience, responsibilities, metrics, dates or credentials.
         For a question about actual past work, check both approved_facts and approved_work_examples. Start with one

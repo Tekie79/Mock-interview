@@ -121,13 +121,7 @@ public actor MacAudioSource: AudioSource {
     private let source: CaptureSource
     private let input: Input
     private var runID: UUID?
-    private var engine: AVAudioEngine?
-    private var engineObserver: NSObjectProtocol?
-    private var applicationObserver: NSObjectProtocol?
-    private var tap = AudioObjectID(kAudioObjectUnknown)
-    private var aggregate = AudioObjectID(kAudioObjectUnknown)
-    private var ioProc: AudioDeviceIOProcID?
-    private var listeners: [(AudioObjectID, AudioObjectPropertyAddress, AudioObjectPropertyListenerBlock)] = []
+    private var hardware: NativeAudioHardware?
     private var conversionTask: Task<Void, Never>?
     private var rawOutput: AsyncThrowingStream<NativeAudioBufferPool.Lease, Error>.Continuation?
 
@@ -147,59 +141,17 @@ public actor MacAudioSource: AudioSource {
             bufferingPolicy: .bufferingOldest(40))
         rawOutput = buffers
         do {
-            switch input {
-            case .microphone(let uid):
-                let granted = await Self.requestMicrophonePermission()
+            if case .microphone = input {
+                let granted = try await Self.requestMicrophonePermission()
                 try Task.checkCancellation()
                 guard runID == id else { throw CancellationError() }
                 guard granted else { throw CaptureFailure.permissionDenied }
-                guard let device = try MacAudioDevices.devices(scope: kAudioDevicePropertyScopeInput)
-                    .first(where: { $0.choice.id == uid })?.object else { throw CaptureFailure.sourceUnavailable }
-                try monitorDevice(device, uid: uid, scope: kAudioDevicePropertyScopeInput, followsDefault: false,
-                                  output: buffers)
-                try startMicrophone(device, output: buffers)
-            case .application(let group):
-                let selected = try Set(MacAudioDevices.processGroup(group))
-                guard !selected.isEmpty else { throw CaptureFailure.sourceUnavailable }
-                applicationObserver = Self.observeApplicationTermination(group, output: buffers)
-                let validate: @Sendable () throws -> Void = {
-                    guard let current = try? Set(MacAudioDevices.processGroup(group)) else { throw CaptureFailure.routeChanged }
-                    guard !current.isEmpty else { throw CaptureFailure.sourceUnavailable }
-                    guard current == selected else { throw CaptureFailure.routeChanged }
-                }
-                try observe(property(kAudioHardwarePropertyProcessObjectList)) {
-                    do { try validate() } catch { buffers.finish(throwing: error) }
-                }
-                try validate()
-                try startTap(CATapDescription(monoMixdownOfProcesses: selected.sorted()), output: buffers)
-                try validate()
-            case .output(let uid):
-                let defaultUID = uid == nil ? try MacAudioDevices.uidOfDefaultOutput() : nil
-                let devices = try MacAudioDevices.devices(scope: kAudioDevicePropertyScopeOutput)
-                let selected = try AudioRouteSelection.output(in: devices.map(\.choice), selectedUID: uid,
-                                                               defaultUID: defaultUID)
-                guard let device = devices.first(where: { $0.choice.id == selected.id })?.object else {
-                    throw CaptureFailure.sourceUnavailable
-                }
-                try monitorDevice(device, uid: selected.id, scope: kAudioDevicePropertyScopeOutput,
-                                  followsDefault: uid == nil, output: buffers)
-                if uid == nil {
-                    try observe(property(kAudioHardwarePropertyDefaultOutputDevice)) {
-                        if (try? MacAudioDevices.uidOfDefaultOutput()) != selected.id {
-                            buffers.finish(throwing: CaptureFailure.routeChanged)
-                        }
-                    }
-                    guard (try? MacAudioDevices.uidOfDefaultOutput()) == selected.id else {
-                        throw CaptureFailure.routeChanged
-                    }
-                }
-                try startTap(CATapDescription(excludingProcesses: MacAudioDevices.ownProcess(),
-                                              deviceUID: selected.id, stream: 0), output: buffers)
-                if uid == nil, (try? MacAudioDevices.uidOfDefaultOutput()) != selected.id {
-                    throw CaptureFailure.routeChanged
-                }
             }
+            guard let worker = NativeAudioHardware.reserve() else { throw CaptureFailure.hardwareStartupBusy }
+            hardware = worker
+            try await worker.start(input, buffers: buffers)
             try Task.checkCancellation()
+            guard runID == id else { throw CancellationError() }
         } catch {
             if runID == id { await stop() }
             throw error
@@ -232,6 +184,118 @@ public actor MacAudioSource: AudioSource {
 
     public func stop() async {
         runID = nil
+        let worker = hardware
+        hardware = nil
+        rawOutput?.finish()
+        rawOutput = nil
+        let previous = conversionTask
+        conversionTask = nil
+        previous?.cancel()
+        await worker?.stop()
+        await previous?.value
+    }
+
+    private func stop(_ id: UUID) async {
+        if id == runID { await stop() }
+    }
+
+    private static func requestMicrophonePermission() async throws -> Bool {
+        switch AVCaptureDevice.authorizationStatus(for: .audio) {
+        case .authorized: return true
+        case .notDetermined:
+            let (responses, response) = AsyncThrowingStream<Bool, Error>.makeStream()
+            AVCaptureDevice.requestAccess(for: .audio) {
+                response.yield($0)
+                response.finish()
+            }
+            return try await awaitAudioResult(responses, timeout: .seconds(12))
+        case .denied, .restricted: return false
+        @unknown default: return false
+        }
+    }
+}
+
+private func awaitAudioResult<Value: Sendable>(_ events: AsyncThrowingStream<Value, Error>,
+                                                timeout: Duration) async throws -> Value {
+    try await withThrowingTaskGroup(of: Value.self) { group in
+        group.addTask {
+            var iterator = events.makeAsyncIterator()
+            guard let value = try await iterator.next() else { throw CancellationError() }
+            return value
+        }
+        group.addTask {
+            try await Task.sleep(for: timeout)
+            throw CaptureFailure.hardwareStartupTimedOut
+        }
+        defer { group.cancelAll() }
+        guard let result = try await group.next() else { throw CancellationError() }
+        return result
+    }
+}
+
+// One HAL lane owns all low-level setup and teardown. Reservations are held until physical
+// teardown returns, even when the calling task has timed out or stopped waiting.
+private final class NativeAudioHardware: @unchecked Sendable {
+    private static let lane = DispatchQueue(label: "com.mockinterview.core-audio", qos: .userInitiated)
+    private static let reservations = OSAllocatedUnfairLock(initialState: 0)
+    private let cancelled = OSAllocatedUnfairLock(initialState: false)
+    private var engine: AVAudioEngine?
+    private var engineObserver: NSObjectProtocol?
+    private var applicationObserver: NSObjectProtocol?
+    private var tap = AudioObjectID(kAudioObjectUnknown)
+    private var aggregate = AudioObjectID(kAudioObjectUnknown)
+    private var ioProc: AudioDeviceIOProcID?
+    private var listeners: [(AudioObjectID, AudioObjectPropertyAddress, AudioObjectPropertyListenerBlock)] = []
+
+    static func reserve() -> NativeAudioHardware? {
+        reservations.withLock { count in
+            guard count < 2 else { return nil }
+            count += 1
+            return NativeAudioHardware()
+        }
+    }
+
+    private func checkActive() throws {
+        if cancelled.withLock({ $0 }) { throw CancellationError() }
+    }
+
+    func start(_ input: MacAudioSource.Input,
+               buffers: AsyncThrowingStream<NativeAudioBufferPool.Lease, Error>.Continuation) async throws {
+        let (events, completion) = AsyncThrowingStream<Void, Error>.makeStream()
+        Self.lane.async { [self] in
+            do {
+                try checkActive()
+                try initialize(input, buffers: buffers)
+                try checkActive()
+                completion.yield(())
+                completion.finish()
+            } catch {
+                completion.finish(throwing: error)
+            }
+        }
+        try await awaitAudioResult(events, timeout: .seconds(8))
+    }
+
+    func stop() async {
+        let requested = cancelled.withLock { state in
+            guard !state else { return false }
+            state = true
+            return true
+        }
+        guard requested else { return }
+        let (events, completion) = AsyncThrowingStream<Void, Error>.makeStream()
+        Self.lane.async { [self] in
+            tearDown()
+            Self.reservations.withLock { $0 -= 1 }
+            completion.yield(())
+            completion.finish()
+        }
+        // Core Audio can be inside a non-cancellable call. Cleanup remains owned by the
+        // serial worker and a new attempt cannot acquire the reserved hardware slot.
+        _ = try? await awaitAudioResult(events, timeout: .seconds(1))
+    }
+
+    private func tearDown() {
         if let engineObserver { NotificationCenter.default.removeObserver(engineObserver) }
         engineObserver = nil
         if let applicationObserver { NSWorkspace.shared.notificationCenter.removeObserver(applicationObserver) }
@@ -254,24 +318,57 @@ public actor MacAudioSource: AudioSource {
         aggregate = AudioObjectID(kAudioObjectUnknown)
         if tap != kAudioObjectUnknown { AudioHardwareDestroyProcessTap(tap) }
         tap = AudioObjectID(kAudioObjectUnknown)
-        rawOutput?.finish()
-        rawOutput = nil
-        let previous = conversionTask
-        conversionTask = nil
-        previous?.cancel()
-        await previous?.value
     }
 
-    private func stop(_ id: UUID) async {
-        if id == runID { await stop() }
-    }
-
-    private static func requestMicrophonePermission() async -> Bool {
-        switch AVCaptureDevice.authorizationStatus(for: .audio) {
-        case .authorized: return true
-        case .notDetermined: return await AVCaptureDevice.requestAccess(for: .audio)
-        case .denied, .restricted: return false
-        @unknown default: return false
+    private func initialize(_ input: MacAudioSource.Input,
+                            buffers: AsyncThrowingStream<NativeAudioBufferPool.Lease, Error>.Continuation) throws {
+        switch input {
+        case .microphone(let uid):
+            guard let device = try MacAudioDevices.devices(scope: kAudioDevicePropertyScopeInput)
+                .first(where: { $0.choice.id == uid })?.object else { throw CaptureFailure.sourceUnavailable }
+            try monitorDevice(device, uid: uid, scope: kAudioDevicePropertyScopeInput, followsDefault: false,
+                              output: buffers)
+            try startMicrophone(device, output: buffers)
+        case .application(let group):
+            let selected = try Set(MacAudioDevices.processGroup(group))
+            guard !selected.isEmpty else { throw CaptureFailure.sourceUnavailable }
+            applicationObserver = Self.observeApplicationTermination(group, output: buffers)
+            let validate: @Sendable () throws -> Void = {
+                guard let current = try? Set(MacAudioDevices.processGroup(group)) else { throw CaptureFailure.routeChanged }
+                guard !current.isEmpty else { throw CaptureFailure.sourceUnavailable }
+                guard current == selected else { throw CaptureFailure.routeChanged }
+            }
+            try observe(property(kAudioHardwarePropertyProcessObjectList)) {
+                do { try validate() } catch { buffers.finish(throwing: error) }
+            }
+            try validate()
+            try startTap(CATapDescription(monoMixdownOfProcesses: selected.sorted()), output: buffers)
+            try validate()
+        case .output(let uid):
+            let defaultUID = uid == nil ? try MacAudioDevices.uidOfDefaultOutput() : nil
+            let devices = try MacAudioDevices.devices(scope: kAudioDevicePropertyScopeOutput)
+            let selected = try AudioRouteSelection.output(in: devices.map(\.choice), selectedUID: uid,
+                                                           defaultUID: defaultUID)
+            guard let device = devices.first(where: { $0.choice.id == selected.id })?.object else {
+                throw CaptureFailure.sourceUnavailable
+            }
+            try monitorDevice(device, uid: selected.id, scope: kAudioDevicePropertyScopeOutput,
+                              followsDefault: uid == nil, output: buffers)
+            if uid == nil {
+                try observe(property(kAudioHardwarePropertyDefaultOutputDevice)) {
+                    if (try? MacAudioDevices.uidOfDefaultOutput()) != selected.id {
+                        buffers.finish(throwing: CaptureFailure.routeChanged)
+                    }
+                }
+                guard (try? MacAudioDevices.uidOfDefaultOutput()) == selected.id else {
+                    throw CaptureFailure.routeChanged
+                }
+            }
+            try startTap(CATapDescription(excludingProcesses: MacAudioDevices.ownProcess(),
+                                          deviceUID: selected.id, stream: 0), output: buffers)
+            if uid == nil, (try? MacAudioDevices.uidOfDefaultOutput()) != selected.id {
+                throw CaptureFailure.routeChanged
+            }
         }
     }
 
@@ -293,6 +390,7 @@ public actor MacAudioSource: AudioSource {
         engineObserver = NotificationCenter.default.addObserver(
             forName: .AVAudioEngineConfigurationChange, object: engine, queue: nil
         ) { _ in output.finish(throwing: CaptureFailure.routeChanged) }
+        try checkActive()
         try engine.start()
         var actual = AudioObjectID(kAudioObjectUnknown)
         var size = UInt32(MemoryLayout<AudioObjectID>.size)
@@ -396,6 +494,7 @@ public actor MacAudioSource: AudioSource {
                 kAudioSubTapDriftCompensationKey: true
             ]]
         ]
+        try checkActive()
         try check(AudioHardwareCreateAggregateDevice(configuration as CFDictionary, &aggregate))
         let pool = try NativeAudioBufferPool(format: format)
         let bytesPerFrame = streamFormat.mBytesPerFrame
@@ -411,7 +510,9 @@ public actor MacAudioSource: AudioSource {
             let frames = bytes / bytesPerFrame
             pool.copy(input, frames: frames, into: output)
         }
+        try checkActive()
         try check(AudioDeviceCreateIOProcIDWithBlock(&ioProc, aggregate, nil, copy))
+        try checkActive()
         guard let ioProc else { throw CaptureFailure.sourceUnavailable }
         try check(AudioDeviceStart(aggregate, ioProc))
     }

@@ -1,0 +1,100 @@
+{"session": "rc-holdout-01", "turn": 1, "role": "interviewer", "expected": "ignore", "text": "Let me move the little call window first. Can you see the diagram now?", "gap_ms": 870}
+{"session": "rc-holdout-01", "turn": 2, "role": "interviewer", "expected": "accept", "text": "When the two regions disagree about a receipt, which record would you present to a customer and why?", "gap_ms": 1300}
+{"session": "rc-holdout-01", "turn": 3, "role": "candidate", "expected": "ignore", "text": "Um, I would show the last confirmed receipt while the reconciliation runs.", "gap_ms": 350}
+{"session": "rc-holdout-01", "turn": 4, "role": "interviewer", "expected": "wait", "text": "Okay, imagine the network comes back just as", "gap_ms": 950}
+{"session": "rc-holdout-01", "turn": 5, "role": "interviewer", "expected": "accept", "text": "both regions try to reserve the same receipt number. How would you prevent duplicates, and how would you test that?", "gap_ms": 870}
+{"session": "rc-holdout-01", "turn": 6, "role": "candidate", "expected": "ignore", "text": "We used a separate reconciliation job. I remember thinking, “Which record should win?”", "gap_ms": 1300}
+{"session": "rc-holdout-01", "turn": 7, "role": "unknown", "expected": "ignore", "text": "Could you tell us the order number before lunch?", "gap_ms": 350}
+{"session": "rc-holdout-01", "turn": 8, "role": "interviewer", "expected": "accept", "text": "And when you said confirmed, what did you mean by that?", "gap_ms": 600}
+{"session": "rc-holdout-01", "turn": 9, "role": "interviewer", "expected": "ignore", "text": "That gives me a good picture. I need a moment to note it.", "gap_ms": 870}
+{"session": "rc-holdout-01", "turn": 10, "role": "interviewer", "expected": "accept", "text": "Tell me about a decision you personally owned on a system with inconsistent data.", "gap_ms": 1300}
+{"session": "rc-holdout-02", "turn": 1, "role": "interviewer", "expected": "ignore", "text": "I think your sound went away. Can you hear me?", "gap_ms": 1300}
+{"session": "rc-holdout-02", "turn": 2, "role": "candidate", "expected": "ignore", "text": "Yes, I can now. I lost you just after the first sentence.", "gap_ms": 350}
+{"session": "rc-holdout-02", "turn": 3, "role": "interviewer", "expected": "accept", "text": "I would love to hear how you made a keyboard-only checkout easier to use.", "gap_ms": 600}
+{"session": "rc-holdout-02", "turn": 4, "role": "interviewer", "expected": "wait", "text": "And if there were a bug that only happened", "gap_ms": 1280}
+{"session": "rc-holdout-02", "turn": 5, "role": "interviewer", "expected": "accept", "text": "when focus came back from the payment dialog, where would you look first?", "gap_ms": 1300}
+{"session": "rc-holdout-02", "turn": 6, "role": "candidate", "expected": "ignore", "text": "In my last project we checked the browser accessibility tree and replayed the focus sequence.", "gap_ms": 350}
+{"session": "rc-holdout-02", "turn": 7, "role": "unknown", "expected": "ignore", "text": "I’m collecting lunch choices. What would you like?", "overlap_previous_ms": 330}
+{"session": "rc-holdout-02", "turn": 8, "role": "interviewer", "expected": "accept", "text": "Walk me through the handoff when a designer disagreed with your fix.", "gap_ms": 870}
+{"session": "rc-holdout-02", "turn": 9, "role": "candidate", "expected": "ignore", "text": "We compared the interaction with the written requirement, and then I added a note.", "gap_ms": 1300}
+{"session": "rc-holdout-02", "turn": 10, "role": "interviewer", "expected": "accept", "text": "What would tell you that you had fixed the problem across browsers rather than on your own laptop?", "gap_ms": 350}
+{"session": "rc-holdout-03", "turn": 1, "role": "interviewer", "expected": "ignore", "text": "The alarm just went off in the other room. One minute, please.", "gap_ms": 350}
+{"session": "rc-holdout-03", "turn": 2, "role": "interviewer", "expected": "accept", "text": "Our dashboard says latency doubled but requests still succeed. What would you check in the first five minutes?", "gap_ms": 600}
+{"session": "rc-holdout-03", "turn": 3, "role": "candidate", "expected": "ignore", "text": "I would look at the traffic split and compare the individual routes.", "gap_ms": 870}
+{"session": "rc-holdout-03", "turn": 4, "role": "interviewer", "expected": "accept", "text": "Which metric would cause you to stop the rollout, and how would you explain your call to someone in support?", "gap_ms": 1300}
+{"session": "rc-holdout-03", "turn": 5, "role": "candidate", "expected": "ignore", "text": "The release manager usually owned that call. I supplied traces and the error summary.", "gap_ms": 350}
+{"session": "rc-holdout-03", "turn": 6, "role": "interviewer", "expected": "wait", "text": "If you could change only one alert and the noisy one was", "gap_ms": 1560}
+{"session": "rc-holdout-03", "turn": 7, "role": "unknown", "expected": "ignore", "text": "Are you asking our operations team to page someone?", "gap_ms": 870}
+{"session": "rc-holdout-03", "turn": 8, "role": "interviewer", "expected": "accept", "text": "the synthetic probe, what change would you make and how would you validate it?", "gap_ms": 1300}
+{"session": "rc-holdout-03", "turn": 9, "role": "candidate", "expected": "ignore", "text": "I would give the new alert a week of parallel observation first.", "gap_ms": 350}
+{"session": "rc-holdout-03", "turn": 10, "role": "interviewer", "expected": "accept", "text": "Tell me about a time you changed your mind after seeing incident evidence.", "gap_ms": 600}
+{"session": "rc-holdout-04", "turn": 1, "role": "interviewer", "expected": "ignore", "text": "I’m opening a fresh note. Please give me a second.", "gap_ms": 600}
+{"session": "rc-holdout-04", "turn": 2, "role": "interviewer", "expected": "accept", "text": "I was hoping you could talk us through a project where the original estimate turned out to be wrong.", "gap_ms": 870}
+{"session": "rc-holdout-04", "turn": 3, "role": "candidate", "expected": "ignore", "text": "It was a migration. We found out that the vendor export had a different shape.", "gap_ms": 1300}
+{"session": "rc-holdout-04", "turn": 4, "role": "interviewer", "expected": "wait", "text": "Before you continue, I’m particularly interested in the trade-off between", "gap_ms": 720}
+{"session": "rc-holdout-04", "turn": 5, "role": "interviewer", "expected": "accept", "text": "removing part of scope and pushing the delivery date. What did you recommend, and what was your responsibility?", "gap_ms": 600}
+{"session": "rc-holdout-04", "turn": 6, "role": "candidate", "expected": "ignore", "text": "My lead owned the agreement with the customer. I drafted the two scheduling options.", "gap_ms": 870}
+{"session": "rc-holdout-04", "turn": 7, "role": "unknown", "expected": "ignore", "text": "What is the updated date then?", "overlap_previous_ms": 380}
+{"session": "rc-holdout-04", "turn": 8, "role": "interviewer", "expected": "ignore", "text": "Thanks for clarifying who signed off.", "gap_ms": 350}
+{"session": "rc-holdout-04", "turn": 9, "role": "interviewer", "expected": "accept", "text": "What would you do differently the next time you inherit an estimate from another team?", "gap_ms": 600}
+{"session": "rc-holdout-04", "turn": 10, "role": "interviewer", "expected": "accept", "text": "How would you bring the affected customers into the plan?", "gap_ms": 870}
+{"session": "rc-holdout-05", "turn": 1, "role": "interviewer", "expected": "ignore", "text": "Sorry, the calendar reminder covered up my notes.", "gap_ms": 870}
+{"session": "rc-holdout-05", "turn": 2, "role": "interviewer", "expected": "accept", "text": "Show me how you would design a backfill that can be stopped safely and resumed later.", "gap_ms": 1300}
+{"session": "rc-holdout-05", "turn": 3, "role": "candidate", "expected": "ignore", "text": "We had checkpoints in a separate table. I added a unique job key.", "gap_ms": 350}
+{"session": "rc-holdout-05", "turn": 4, "role": "interviewer", "expected": "wait", "text": "That makes sense. For the worker that is interrupted while it is", "gap_ms": 950}
+{"session": "rc-holdout-05", "turn": 5, "role": "interviewer", "expected": "accept", "text": "writing the checkpoint, what failure mode matters most, and what should a load test prove?", "gap_ms": 870}
+{"session": "rc-holdout-05", "turn": 6, "role": "unknown", "expected": "ignore", "text": "Can you send me that test when you’re done with the call?", "gap_ms": 1300}
+{"session": "rc-holdout-05", "turn": 7, "role": "candidate", "expected": "ignore", "text": "Um, I would first try that with the slowest dependency and watch the queue.", "gap_ms": 350}
+{"session": "rc-holdout-05", "turn": 8, "role": "interviewer", "expected": "accept", "text": "You mentioned a separate table. Why did you keep it separate?", "gap_ms": 600}
+{"session": "rc-holdout-05", "turn": 9, "role": "interviewer", "expected": "ignore", "text": "Okay, I’ve written that down.", "gap_ms": 870}
+{"session": "rc-holdout-05", "turn": 10, "role": "interviewer", "expected": "accept", "text": "How would your approach change if the original data changed halfway through the backfill?", "gap_ms": 1300}
+{"session": "rc-holdout-06", "turn": 1, "role": "candidate", "expected": "ignore", "text": "I last worked with a small product analytics crew, mostly on internal tooling.", "gap_ms": 1300}
+{"session": "rc-holdout-06", "turn": 2, "role": "interviewer", "expected": "accept", "text": "Describe a time you made a dashboard results review less confusing for people outside your team.", "gap_ms": 350}
+{"session": "rc-holdout-06", "turn": 3, "role": "candidate", "expected": "ignore", "text": "I wrote the glossary, but another engineer designed the chart.", "gap_ms": 600}
+{"session": "rc-holdout-06", "turn": 4, "role": "interviewer", "expected": "accept", "text": "How did you decide which numbers to show and which limitations to mention?", "gap_ms": 870}
+{"session": "rc-holdout-06", "turn": 5, "role": "interviewer", "expected": "wait", "text": "Ah, and if people started using that report to compare", "gap_ms": 1280}
+{"session": "rc-holdout-06", "turn": 6, "role": "interviewer", "expected": "accept", "text": "two teams with different support workloads, what would you add to the report?", "gap_ms": 350}
+{"session": "rc-holdout-06", "turn": 7, "role": "unknown", "expected": "ignore", "text": "Can you forward the report to our whole channel?", "overlap_previous_ms": 430}
+{"session": "rc-holdout-06", "turn": 8, "role": "candidate", "expected": "ignore", "text": "Someone once asked that, and we ended up making a short methods appendix.", "gap_ms": 870}
+{"session": "rc-holdout-06", "turn": 9, "role": "interviewer", "expected": "ignore", "text": "I appreciate the example. It’s a useful distinction.", "gap_ms": 1300}
+{"session": "rc-holdout-06", "turn": 10, "role": "interviewer", "expected": "accept", "text": "Which parts of that work did you do yourself?", "gap_ms": 350}
+{"session": "rc-holdout-07", "turn": 1, "role": "interviewer", "expected": "ignore", "text": "Are we still on the half-hour call? I think we have enough time.", "gap_ms": 350}
+{"session": "rc-holdout-07", "turn": 2, "role": "interviewer", "expected": "accept", "text": "I am curious how you would debug a service that hangs only when it shuts down.", "gap_ms": 600}
+{"session": "rc-holdout-07", "turn": 3, "role": "candidate", "expected": "ignore", "text": "I would start from a thread capture and compare progress before and after the shutdown signal.", "gap_ms": 870}
+{"session": "rc-holdout-07", "turn": 4, "role": "interviewer", "expected": "accept", "text": "What happens to that plan if a library call cannot be canceled?", "gap_ms": 1300}
+{"session": "rc-holdout-07", "turn": 5, "role": "unknown", "expected": "ignore", "text": "Should I restart the demo service now?", "gap_ms": 350}
+{"session": "rc-holdout-07", "turn": 6, "role": "interviewer", "expected": "wait", "text": "Let me add one thing. If the service is also holding", "gap_ms": 1560}
+{"session": "rc-holdout-07", "turn": 7, "role": "interviewer", "expected": "accept", "text": "an open file while it hangs, how do you avoid losing data, and what would you tell the operator?", "gap_ms": 870}
+{"session": "rc-holdout-07", "turn": 8, "role": "candidate", "expected": "ignore", "text": "I previously shipped only the log cleanup, not the process supervisor.", "gap_ms": 1300}
+{"session": "rc-holdout-07", "turn": 9, "role": "interviewer", "expected": "accept", "text": "Tell me about a shutdown issue you actually investigated and the evidence that pointed to the cause.", "gap_ms": 350}
+{"session": "rc-holdout-07", "turn": 10, "role": "interviewer", "expected": "ignore", "text": "All right, I have enough for that topic.", "gap_ms": 600}
+{"session": "rc-holdout-08", "turn": 1, "role": "interviewer", "expected": "ignore", "text": "I might take a sip of water. Keep the camera where it is.", "gap_ms": 600}
+{"session": "rc-holdout-08", "turn": 2, "role": "interviewer", "expected": "accept", "text": "Give me an example of getting useful feedback from a colleague who was reluctant to disagree with you.", "gap_ms": 870}
+{"session": "rc-holdout-08", "turn": 3, "role": "candidate", "expected": "ignore", "text": "I asked if we could go through the proposal together. The final call was theirs.", "gap_ms": 1300}
+{"session": "rc-holdout-08", "turn": 4, "role": "interviewer", "expected": "wait", "text": "I want to understand what changed in your behavior once", "gap_ms": 720}
+{"session": "rc-holdout-08", "turn": 5, "role": "interviewer", "expected": "accept", "text": "the colleague pointed out the part that felt risky. What did you do in the next meeting?", "gap_ms": 600}
+{"session": "rc-holdout-08", "turn": 6, "role": "unknown", "expected": "ignore", "text": "Can you hear me in the other room?", "overlap_previous_ms": 480}
+{"session": "rc-holdout-08", "turn": 7, "role": "candidate", "expected": "ignore", "text": "We made a list of alternatives first, and I asked for comments earlier that week.", "gap_ms": 1300}
+{"session": "rc-holdout-08", "turn": 8, "role": "interviewer", "expected": "accept", "text": "How did you know whether the situation had improved?", "gap_ms": 350}
+{"session": "rc-holdout-08", "turn": 9, "role": "interviewer", "expected": "ignore", "text": "Thanks. I’m going to let that sit for a moment.", "gap_ms": 600}
+{"session": "rc-holdout-08", "turn": 10, "role": "interviewer", "expected": "accept", "text": "What would you take from that experience to a distributed team?", "gap_ms": 870}
+{"session": "rc-holdout-09", "turn": 1, "role": "interviewer", "expected": "ignore", "text": "Let me switch from the team calendar to our interview notes.", "gap_ms": 870}
+{"session": "rc-holdout-09", "turn": 2, "role": "interviewer", "expected": "accept", "text": "Take me through the way you would enforce a document retention policy in a small desktop app.", "gap_ms": 1300}
+{"session": "rc-holdout-09", "turn": 3, "role": "candidate", "expected": "ignore", "text": "I would keep the database settings separate from ephemeral captures.", "gap_ms": 350}
+{"session": "rc-holdout-09", "turn": 4, "role": "interviewer", "expected": "wait", "text": "Suppose the owner deletes the document but there is still", "gap_ms": 950}
+{"session": "rc-holdout-09", "turn": 5, "role": "interviewer", "expected": "accept", "text": "a title in the local search index. How would you reproduce that, and how would you prevent it?", "gap_ms": 870}
+{"session": "rc-holdout-09", "turn": 6, "role": "unknown", "expected": "ignore", "text": "What is the name of that file again?", "gap_ms": 1300}
+{"session": "rc-holdout-09", "turn": 7, "role": "candidate", "expected": "ignore", "text": "The file isn’t important for the test. We can use a sample document with invented details.", "gap_ms": 350}
+{"session": "rc-holdout-09", "turn": 8, "role": "interviewer", "expected": "accept", "text": "Which condition would lead you to rollback the database change?", "gap_ms": 600}
+{"session": "rc-holdout-09", "turn": 9, "role": "interviewer", "expected": "ignore", "text": "Got it. I’m looking at the time now.", "gap_ms": 870}
+{"session": "rc-holdout-09", "turn": 10, "role": "interviewer", "expected": "accept", "text": "How would you explain the limits of deletion to a person using the app?", "gap_ms": 1300}
+{"session": "rc-holdout-10", "turn": 1, "role": "interviewer", "expected": "ignore", "text": "The call timer is still ticking. Okay, I can see the remaining time.", "gap_ms": 1300}
+{"session": "rc-holdout-10", "turn": 2, "role": "interviewer", "expected": "accept", "text": "Tell me about a time when a release seemed ready but you held it back.", "gap_ms": 350}
+{"session": "rc-holdout-10", "turn": 3, "role": "candidate", "expected": "ignore", "text": "The test build looked fine until a physical device went into sleep mode.", "gap_ms": 600}
+{"session": "rc-holdout-10", "turn": 4, "role": "interviewer", "expected": "accept", "text": "What evidence convinced you that it was a release blocker, and who made the final decision?", "gap_ms": 870}
+{"session": "rc-holdout-10", "turn": 5, "role": "interviewer", "expected": "wait", "text": "And once you had fixed the crash, I’m wondering how", "gap_ms": 1280}
+{"session": "rc-holdout-10", "turn": 6, "role": "interviewer", "expected": "accept", "text": "you showed that it stayed fixed during an ordinary session.", "gap_ms": 350}
+{"session": "rc-holdout-10", "turn": 7, "role": "unknown", "expected": "ignore", "text": "Did someone already publish the meeting notes?", "overlap_previous_ms": 530}
+{"session": "rc-holdout-10", "turn": 8, "role": "candidate", "expected": "ignore", "text": "We separated the simulated repeat from the physical acceptance run.", "gap_ms": 870}
+{"session": "rc-holdout-10", "turn": 9, "role": "interviewer", "expected": "ignore", "text": "Okay, that covers what I wanted to hear on release criteria.", "gap_ms": 1300}
+{"session": "rc-holdout-10", "turn": 10, "role": "interviewer", "expected": "accept", "text": "What would you record for someone trying to reproduce the result six months later?", "gap_ms": 350}

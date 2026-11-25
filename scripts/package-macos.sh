@@ -8,11 +8,13 @@ xcodebuild -project MockInterview.xcodeproj -scheme MockInterview -configuration
 app="$output/Build/Products/Release/MockInterview.app"
 plist="$app/Contents/Info.plist"
 test -x "$app/Contents/MacOS/MockInterview"
-xcrun lipo "$app/Contents/MacOS/MockInterview" -verify_arch arm64
+xcrun lipo "$app/Contents/MacOS/MockInterview" -verify_arch arm64 x86_64
 test ! -d "$app/Contents/_CodeSignature"
 plutil -lint "$plist"
 test "$(plutil -extract CFBundlePackageType raw "$plist")" = APPL
 test "$(plutil -extract LSMinimumSystemVersion raw "$plist")" = 14.2
+test -n "$(plutil -extract CFBundleShortVersionString raw "$plist")"
+test -n "$(plutil -extract CFBundleVersion raw "$plist")"
 for usage in NSAudioCaptureUsageDescription NSMicrophoneUsageDescription NSSpeechRecognitionUsageDescription; do
   test -n "$(plutil -extract "$usage" raw "$plist")"
 done

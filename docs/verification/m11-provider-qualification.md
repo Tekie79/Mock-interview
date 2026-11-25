@@ -1,5 +1,22 @@
 # M11 provider qualification
 
+## Release candidate after f726664
+
+| Configuration | RC observation and qualification |
+|---|---|
+| Apple SpeechAnalyzer | On-device en-US file recognition completed on 30 fresh holdout tracks with 126 finals and 3.60% word error rate across isolated tracks. The earlier classic Apple Speech and SpeechAnalyzer application smoke remains historical. Capture permissions and long-running rollover remain open. |
+| ElevenLabs `scribe_v3_live` · Manual | Fixture verifies that acknowledged leading/trailing edge slack is bounded and pending commits remain independent. Live matched retest required. |
+| ElevenLabs `scribe_v3_live` · VAD | Same edge, interior-gap and incomplete outcome fixtures with provider-driven commits. Live matched retest required. |
+| ElevenLabs `scribe_v3_live` · Semantic turn | Same coverage fixtures with semantic turn. Live matched retest required. |
+| ElevenLabs `scribe_v2_realtime` | Prior sentinel smoke only. Live multi-turn drain remains unqualified. |
+| OpenAI transcription, structured classification, streamed answers and optional embeddings | Account-specific smoke described below. The recommended comparative evaluation is Luna `none` for classification and Luna `none` vs Sol `low` for streaming answers. Current repeated model latency, grounding and connection recovery remain open. |
+| Deepgram and Anthropic | The owner supplied no test credentials. Fixture behavior is covered. Deepgram diarization and Anthropic live responses remain unqualified. |
+| ChatGPT subscription | Unavailable in Settings until official distribution eligibility and activation details are confirmed. |
+
+The Scribe coverage correction allows at most 60 ms of slack at each original voiced-span edge when the final intersects at least half of the span. The existing 20 ms word handoff applies, and coverage preserves a larger interior gap and unrelated leading or trailing audio. At incomplete drain the adapter logs strategy and bounded counts for pending ranges, samples, commits, companions and partial state, without content. The earlier identical PCM comparison produced unconfirmed audio in all three modes. The fixtures exercise a possible coverage mechanism. Only a new authorized matched live replay can verify how the provider behaved. [Event reference](https://elevenlabs.io/docs/eleven-api/guides/how-to/speech-to-text/realtime/event-reference)
+
+The RC investigation made no new billable calls while awaiting an account-side balance against the cumulative US$10 cap. The previous calls below establish smoke evidence and the amount actually charged remains owner-visible in the provider accounts.
+
 Live provider smoke inputs in this report are synthetic. Keys are entered by the owner in the application's separate secure fields under **Settings → Accounts and billing**. The presence of a Keychain item is setup evidence. Provider availability and accepted model IDs require successful tests against the selected account. The table and PCM results below predate the latest correction.
 
 | Service | Exact model or configuration | Status | Observed scope |

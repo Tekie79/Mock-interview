@@ -41,6 +41,10 @@ public func publicErrorMessage(_ error: Error) -> String {
         "The selected source changed or stopped. Stop the session and reselect the source."
     case CaptureFailure.bufferOverrun:
         "The input queue filled and audio was dropped."
+    case CaptureFailure.hardwareStartupTimedOut:
+        "Audio startup timed out waiting for macOS. Check Privacy & Security and retry once the device is available."
+    case CaptureFailure.hardwareStartupBusy:
+        "macOS is still releasing an earlier audio setup. Retry when the device is available."
     case CaptureFailure.invalidFormat:
         "The selected audio format is unsupported."
     case CaptureFailure.hardware:
@@ -68,7 +72,10 @@ public extension InterviewSnapshot {
             "Provider-reported recognition seconds: \(recognitionTime)",
             "Provider-reported recognition tokens: \(recognitionUsage)",
             "Minimum dropped audio chunks: \(droppedAudioChunks)",
-            "Question queue overflows: \(discardedQuestions)",
+            "Discarded questions: \(discardedQuestions)",
+            "Peak pending classifier batches: \(questionQueuePeak)",
+            "Question decisions: " + questionDispositions.sorted { $0.key.rawValue < $1.key.rawValue }
+                .map { "\($0.key.rawValue)=\($0.value)" }.joined(separator: ", "),
             "Final transcript segments: \(transcript.filter(\.isFinal).count)",
             "Accepted and manual questions: \(answers.count)",
             "Completed answers: \(answers.filter { $0.state == .complete }.count)",

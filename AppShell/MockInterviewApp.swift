@@ -311,7 +311,11 @@ final class WorkspaceModel: ObservableObject {
     @Published var processes: [AudioEndpointChoice] = []
     @Published var microphones: [AudioEndpointChoice] = []
     @Published var outputs: [AudioEndpointChoice] = []
-    @Published var replayURL: URL?
+    @Published var replayURL: URL? {
+        didSet { if oldValue != replayURL { replayAttribution = .unresolved } }
+    }
+    @Published var replayAttribution: QuestionAudioAttribution = .unresolved
+    @Published private(set) var liveQuestionMode: QuestionAudioMode = .unresolved
     @Published var snapshot: InterviewSnapshot?
     @Published var error: String?
     @Published var busy = false
@@ -344,6 +348,21 @@ final class WorkspaceModel: ObservableObject {
     private var chatGPTTask: Task<Void, Never>?
 
     var state: InterviewSnapshot.State { snapshot?.state ?? .idle }
+    var requestsSpeakerLabels: Bool {
+        route.requiresSpeakerLabels || (route.question == .replay && replayAttribution == .speakerLabels)
+    }
+
+    private var selectedQuestionMode: QuestionAudioMode {
+        let defaults = UserDefaults.standard
+        let provider = SpeechProvider(rawValue: defaults.string(forKey: "speechProvider") ?? "") ?? .openai
+        let model = switch provider {
+        case .eleven: defaults.string(forKey: "elevenModel") ?? "scribe_v3_live"
+        case .deepgram: defaults.string(forKey: "deepgramModel") ?? "nova-3"
+        default: ""
+        }
+        return route.questionMode(speakerLabelsAvailable: ProviderCapabilities.describe(provider.provider, model: model).diarization,
+                                  replayAttribution: replayAttribution)
+    }
     var active: Bool { state.isRunning || [.pausing, .paused, .stopping, .failed].contains(state) }
     var startActionLabel: String? {
         switch state {
@@ -432,7 +451,7 @@ final class WorkspaceModel: ObservableObject {
                 switch service {
                 case .transcription:
                     let factory = try await SessionProviders.transcriptionFactory(defaults: defaults,
-                                                                            diarize: route.requiresSpeakerLabels)
+                                                                            diarize: requestsSpeakerLabels)
                     try await factory().testConnection()
                     providerTest = "Transcription provider acknowledged the connection."
                 case .classification:
@@ -506,7 +525,7 @@ final class WorkspaceModel: ObservableObject {
             }
             do {
                 let options = UserDefaults.standard
-                let diarize = route.requiresSpeakerLabels
+                let diarize = requestsSpeakerLabels
                 let providers = try await SessionProviders(defaults: options, diarize: diarize)
                 let embedding = try? await SessionProviders.embeddings(defaults: options)
                 let format = AnswerFormat(rawValue: options.string(forKey: "answerFormat") ?? "") ?? .brief
@@ -563,6 +582,7 @@ final class WorkspaceModel: ObservableObject {
                 )
                 observations?.cancel()
                 session = next
+                liveQuestionMode = selectedQuestionMode
                 sessionUsesChatGPT = providers.usesChatGPT
                 selectedAnswer = nil
                 pinned = false
@@ -744,7 +764,9 @@ final class WorkspaceModel: ObservableObject {
                             }
                         }
                         group.addTask {
-                            try await Task.sleep(for: .seconds(8))
+                            // Allow the OS permission and HAL startup deadlines to report their errors.
+                            try await Task.sleep(for: .seconds(22))
+                            await self.finishAudioTestIfMissingFrames(expected: sources.map { $0.0.id })
                             throw CancellationError()
                         }
                         while try await group.next() != nil {}
@@ -760,6 +782,12 @@ final class WorkspaceModel: ObservableObject {
     }
 
     private func displayTestLevel(_ level: Float, source: String) { testLevels[source] = level }
+
+    private func finishAudioTestIfMissingFrames(expected: [String]) {
+        if expected.contains(where: { testLevels[$0] == nil }) {
+            error = "The audio test did not receive frames from every selected source. Check source availability and macOS Privacy & Security."
+        }
+    }
 
     private func makeChannels(_ transcriber: @escaping @Sendable () -> any StreamingSTT, sensitivity: Float) throws -> [TranscriptionChannel] {
         try captureSources().map { source, audio in
@@ -778,8 +806,9 @@ final class WorkspaceModel: ObservableObject {
                 let options = UserDefaults.standard
                 let sensitivity = SessionProviders.audioActivityThreshold(defaults: options)
                 let speech = try await SessionProviders.transcriptionFactory(defaults: options,
-                    diarize: route.requiresSpeakerLabels, activityThreshold: sensitivity)
+                    diarize: requestsSpeakerLabels, activityThreshold: sensitivity)
                 let channels = try makeChannels(speech, sensitivity: sensitivity)
+                liveQuestionMode = selectedQuestionMode
                 await session.replaceChannels(channels)
             } catch {
                 self.error = publicErrorMessage(error)
@@ -794,7 +823,7 @@ final class WorkspaceModel: ObservableObject {
             return value
         }
         let question = CaptureSource(id: route.question == .replay ? "Replay" : "Question",
-                                     role: route.requiresSpeakerLabels ? .unknown : .interviewer)
+                                     role: selectedQuestionMode.questionRole)
         let audio: any AudioSource
         switch route.question {
         case .defaultOutput: audio = MacAudioSource(source: question, input: .output(uid: nil))
@@ -950,16 +979,6 @@ private struct WorkspaceView: View {
                 get: { model.route.question == .sharedMicrophone },
                 set: { model.route.setOtherDeviceInterview($0) }
             ))
-            if model.route.questionUsesOutput {
-                Toggle("Assign speakers in question audio", isOn: Binding(
-                    get: { model.route.labelOutputSpeakers == true },
-                    set: { model.route.labelOutputSpeakers = $0 }
-                ))
-                if model.route.requiresSpeakerLabels && !supportsSpeakerLabels {
-                    Text("Speaker assignment requires ElevenLabs Scribe v3 Live or a supported Deepgram Nova model.")
-                        .font(.caption).foregroundStyle(.secondary)
-                }
-            }
             HStack {
                 switch model.route.question {
                 case .defaultOutput:
@@ -981,6 +1000,24 @@ private struct WorkspaceView: View {
                 if model.route.candidateEnabled {
                     sourcePicker("Candidate input", choices: model.microphones,
                                  selection: $model.route.candidateMicrophoneUID)
+                }
+            }
+            if model.route.questionUsesOutput || model.route.question == .replay {
+                Picker("Speaker attribution", selection: Binding(
+                    get: { model.route.question == .replay ? model.replayAttribution : model.route.outputAttribution },
+                    set: {
+                        if model.route.question == .replay { model.replayAttribution = $0 }
+                        else { model.route.outputAttribution = $0 }
+                    }
+                )) {
+                    ForEach(QuestionAudioAttribution.allCases, id: \.self) { Text($0.rawValue).tag($0) }
+                }
+                .disabled((model.route.question == .application && model.route.applicationID == nil)
+                          || (model.route.question == .outputDevice && model.route.outputUID == nil)
+                          || (model.route.question == .replay && model.replayURL == nil))
+                if model.requestsSpeakerLabels && !supportsSpeakerLabels {
+                    Text("This transcription model supplies no speaker labels. Use ElevenLabs Scribe v3 Live, a supported Deepgram Nova model, or ask manually.")
+                        .font(.caption).foregroundStyle(.secondary)
                 }
             }
             HStack {
@@ -1040,10 +1077,13 @@ private struct WorkspaceView: View {
                         Text(source + " · " + (snapshot.sources[source]?.rawValue.capitalized ?? "Idle"))
                     }
                 }
-                if model.route.requiresSpeakerLabels, model.state.isRunning, supportsSpeakerLabels {
+                if model.liveQuestionMode == .diarized, model.state.isRunning {
                     Text(snapshot.speakers.contains(where: { $0.role == .interviewer })
                          ? "Confirmed interviewer questions can trigger answers."
                          : "Automatic answers wait until you label an interviewer. Match voices to the transcript below.")
+                        .font(.caption).foregroundStyle(.secondary)
+                } else if model.liveQuestionMode == .unresolved, model.state.isRunning {
+                    Text("Speaker identity is unresolved. Select transcript text to ask manually.")
                         .font(.caption).foregroundStyle(.secondary)
                 }
                 ForEach(snapshot.speakers) { speaker in
@@ -1060,7 +1100,7 @@ private struct WorkspaceView: View {
                               turn.isFinal ? nil : "Partial"].compactMap { $0 }.joined(separator: " · "))
                             .font(.caption).foregroundStyle(.secondary)
                         Text(turn.text).textSelection(.enabled)
-                        if turn.isFinal && model.state.isRunning {
+                        if model.state.isRunning {
                             Button("Use as question") { manualText = turn.text }.buttonStyle(.link)
                         }
                     }

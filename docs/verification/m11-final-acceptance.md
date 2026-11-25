@@ -1,6 +1,24 @@
 # M11 final acceptance
 
-**Hold release.** The M11 correction passed local regression tests and unsigned packaging. Live shared-feed quality, Scribe strategy comparison, physical microphone attribution, visible-answer timing and the real 90-minute run remain open. The reports below distinguish current results from historical smoke. [Benchmark](m11-performance-benchmark.md) · [Provider results](m11-provider-qualification.md) · [Audio compatibility](m11-audio-compatibility.md) · [Defects](m11-defect-register.md)
+**Hold release.** The RC fixes a deterministic starvation reproduction and makes mixed-source attribution fail closed. Live quality and audio startup remain unqualified. [Benchmark](m11-performance-benchmark.md) · [Provider results](m11-provider-qualification.md) · [Audio compatibility](m11-audio-compatibility.md) · [Defects](m11-defect-register.md)
+
+## Release candidate after f726664
+
+The source revision, regression counts and artifact checksum are recorded on [draft PR #3](https://github.com/Tekie79/Mock-interview/pull/3). The physical host is the Mac17,8 Apple M5 Pro on macOS 26.3.2 (25D2150), with Xcode 26.6 (17F113) and SDK 26.5. The unsigned bundle is version 1.0.0 (11.1), universal arm64/x86_64, with a 14.2 deployment target.
+
+| Acceptance cases | RC evidence and disposition |
+|---|---|
+| AT-01 | Historical live process smoke. Current selected-source output start hit a pending system audio authorization. Native repeat remains open. |
+| AT-02, AT-18 | Deterministic separation, unknown-role rejection, mapping changes and late provenance invalidation passed. Independent microphone, overlap, and mixed native role assignment remain open. |
+| AT-03, AT-04, AT-06, AT-09 | Deterministic requests, logistics, follow-up and intentional-repeat regressions passed. The frozen one-second replay recovered 40/40 labeled requests with a fixture classifier. Current live accuracy remains unmeasured. |
+| AT-05, AT-07 | Clock-controlled pause, overlapping and delayed finals, unresolved partials, multipart and replay drain regressions passed. No RC visible answer completeness or premature-rate measurement. |
+| AT-08, AT-10, AT-17 | Deterministic transport ordering, deduplication, backpressure, cancellation, concurrent capture/generation, replay and diagnostics passed. |
+| AT-11 | PDFKit, wrapped Markdown, profile switching, pending/excluded evidence, ownership and untrusted prompt boundaries exercised in tests. The requested word limit is advisory. Live conflict, exclusions and curated unsupported-claim rate remain open. |
+| AT-12, AT-13 | Deterministic late-event, timeout and fresh-epoch recovery passed. A sample shows the HAL startup wait on a worker. Full physical startup/Stop, teardown and live network interruption remain open. |
+| AT-14, AT-15 | Prior native save-off, SQLite and missing-provider checks predate the RC. Deterministic retention, credential redaction and provider failure tests passed. Distribution upgrade, TCC changes and VoiceOver checks remain open. |
+| AT-16 | The 5,400-second playback plan is reproducible. A second endpoint and a verified remaining balance within the cumulative US$10 cap are needed for the remote test. |
+
+The new holdout contains 100 separately authored cues in ten scenarios. Thirty TTS tracks were rendered before evaluation. A local SpeechAnalyzer file run covered all tracks. Independent live audio-to-answer precision, recall, unsupported claims, duplicate and premature rates, and observed display latency still need measurement. The human holdout and the RC remote endurance run remain open. [RC benchmark](m11-performance-benchmark.md#release-candidate-after-f726664)
 
 ## Continuation after b2946d6
 

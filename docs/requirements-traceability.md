@@ -53,16 +53,16 @@ Statuses are **Not started**, **In progress**, **Implemented — qualification p
 | M10.2-8 | Linux and macOS 15/26 development validation | P0/P1 | Implemented — qualification pending | Swift core CI, scripts/package-macos.sh | [M10.2 verification](verification/m10-2.md) | M11 owns hardware, live-provider and acceptance qualification |
 | M10.2-F | Late attribution correction across automatic answer history | P0 | Implemented — qualification pending | InterviewSession, QuestionDetection, InterviewReview, AppShell | PipelineHardeningTests, ReviewTests | Cross-source evidence remains bounded. Legacy saved answers carry no inferred provenance |
 | M10.2-G | Graceful recognition outcomes and required stream acknowledgment | P1 | Implemented — qualification pending | TranscriptionChannel, DeepgramTranscription | PipelineHardeningTests, ExtendedProviderTests | Provider-specific empty results must be attributable to the pending audio |
-| M10.2-H | Subtract partial ElevenLabs coverage and track independent commit requests | P0/P1 | Implemented — qualification pending | ElevenLabsTranscription | ElevenLabsTests | 20 ms edge tolerance is a development setting pending live qualification |
+| M10.2-H | Subtract partial ElevenLabs coverage and track independent commit requests | P0/P1 | Implemented — qualification pending | ElevenLabsTranscription | ElevenLabsTests | 20 ms inter-word handoff and up to 60 ms at original voiced-span edges; live qualification pending |
 
 
 ## M11 qualification evidence
 
 | Requirements or gate | Evidence | Remaining acceptance work |
 |---|---|---|
-| FR-01–03, FR-14, FR-21 | [20 physical capture starts per revision](verification/m11-audio-compatibility.md), shared-output speaker role gate and Scribe final-pair regressions | Native Test Audio defect reproduction, independent physical microphones, hardware transitions, sleep/wake and acoustic isolation |
-| FR-04–07, FR-09, FR-13, NFR-12 | [Fresh holdout, recorded nine-window classifier-boundary diagnostic and four quiet-window timings](verification/m11-performance-benchmark.md), [AT-01–18 evidence](verification/m11-final-acceptance.md) | Live native quality, duplicates and premature responses, independent displayed latency and sustained performance |
-| FR-08, FR-20 | Wrapped Markdown and pending-upgrade fixtures, native PDFKit simple two-column fixture and source locations | Live conflict/missing evidence, complex PDF layout and retrieval quality |
+| FR-01–03, FR-14, FR-21 | [Native HAL authorization reproduction and bounded failure exercise](verification/m11-audio-compatibility.md), explicit shared-output role gate and Scribe final-pair regressions | Successful physical dual-source cycles, hardware transitions, sleep/wake and acoustic isolation |
+| FR-04–07, FR-09, FR-13, NFR-12 | [One-second starvation regression, fresh synthetic holdout and four quiet-window timings](verification/m11-performance-benchmark.md), [AT-01–18 evidence](verification/m11-final-acceptance.md) | Live native quality, duplicates and premature responses, independent displayed latency and sustained performance |
+| FR-08, FR-20 | Wrapped Markdown and pending-upgrade fixtures, native PDFKit simple two-column fixture and source locations, instruction-injection boundary and disputed-ownership prompt test | Live conflict, exclusions and unsupported-claim rate, complex PDF layout and retrieval quality |
 | FR-10–12, FR-15–19 | [Native interaction, retention and provider results](verification/m11-final-acceptance.md) | Complete accessible session controls, retention, export, and unqualified provider configurations |
 | M11 permission reuse | Launch-local read reuse, serialized Keychain operations and microphone/Speech authorization checks. [Provider qualification](verification/m11-provider-qualification.md) | OS authorization across stable signed upgrades and recovery of native process-tap setup |
 | M10.1-8, M10.2-4 | [Provider eligibility and tested account scopes](verification/m11-provider-qualification.md) | Official ChatGPT distribution eligibility and subsequent live browser/account tests |

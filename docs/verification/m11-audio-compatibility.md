@@ -1,5 +1,15 @@
 # M11 audio compatibility
 
+## Release candidate after f726664
+
+The versioned app launched locally and showed **Mixed audio · Manual answers** for the previously selected default output. Test Audio reproduced the HAL stall. A process sample placed `AudioDeviceCreateIOProcIDWithBlock` in `HALC_ProxyIOContext::_TellServerAboutStreamUsage`, waiting on the audio server on `com.mockinterview.core-audio`. AppKit was idle in its normal event loop. A macOS TCC event for the same process showed that its rebuilt unsigned binary did not match the permission already recorded for `kTCCServiceAudioCapture` and triggered an OS request. This ties the reproduced startup stall to the authorization path. The earlier intermittent failure after switching routes can have a separate cause.
+
+The RC serializes HAL initialization and teardown off the UI thread. It caps waits at 8 seconds for hardware startup, 12 seconds for microphone authorization and 1 second for the caller to await physical teardown. If macOS still owns a blocked operation, the worker retains teardown ownership and holds its reservation until the OS returns. No cancelled activation can publish frames or be reused. A local 20-start probe alternating default and explicit output during the authorization wait produced two timeouts and 18 bounded busy outcomes, with zero usable frames. It exercised failure containment. Twenty successful native dual-source cycles and physical source transitions remain required.
+
+System audio permissions follow the application's designated identity. Stable signing and installation are needed to qualify permission persistence across upgrades. The current unsigned build remains under normal TCC controls. No helper process, permission reset or automatic grant was introduced. [Core Audio taps](https://developer.apple.com/documentation/CoreAudio/capturing-system-audio-with-core-audio-taps) · [macOS designated requirements](https://developer.apple.com/library/archive/technotes/tn2206/)
+
+## Earlier native runs
+
 Host is the Apple M5 Pro MacBook Pro (Mac17,8), macOS 26.3.2 build 25D2150. The baseline native bundle used the approved M10.2 source `6fdcc4b3e35c489499e4f1014cd69f5ce98167ed` with the local Swift 6.3.2 compiler and SDK 26.5. No audio recordings from the capture device were persisted. Locally generated speech supplied the stimulus.
 
 | Route or behavior | Status | Evidence and scope |

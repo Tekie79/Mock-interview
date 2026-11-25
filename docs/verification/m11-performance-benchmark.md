@@ -1,5 +1,18 @@
 # M11 performance benchmark
 
+## Release candidate after f726664
+
+| Experiment | Results | Boundary |
+|---|---|---|
+| Freeze the 100-turn starvation case before correction | With a 550 ms virtual cadence and a one-second wait, `f726664` retained 100/100 finals, recovered 0/40 labeled requests and reported a queue discard. The RC retained 100/100 finals, recovered 40/40 labeled requests and reported no discard. | Identical frozen text, virtual clock and oracle classifier. Counts are labeled question parts and measure assembly recall. The earlier native attempt below retained 95 finals. |
+| Silence and processing | With a controlled 750 ms gap, 0 and 500 ms released before the continuation. 1,000 and 2,000 ms combined the two parts. An endpoint 800 ms before final delivery leaves 200 ms of a one-second configured wait. | Deterministic clock. Earlier recorded-speech probes below used controlled provider finals. No RC independently observed screen timing. |
+| Fresh audio holdout | 100 cues, 40 accept, 50 ignore and 10 wait, in ten new scenes. Thirty separately routed macOS TTS tracks rendered with six English voices, five rates and overlapping insertions. | `rc-holdout.jsonl` SHA-256 `9b3ef25876d2c2cc79b44dceb7cd457df386f01e4410484b28f59a10428977c5`. No audio-to-answer scoring of this holdout used for tuning. Human voices and independent acoustic endpoint annotation are still needed. |
+| Local SpeechAnalyzer on the RC holdout | en-US, time-indexed progressive transcription, 30 isolated WAV files, 126 finals. Per scene and role, punctuation-insensitive word edit distance was 45/1,250 (3.60% WER). Interviewer 15/865 (1.73%), candidate 10/302 (3.31%), unknown 20/83 (24.10%). | At the Apple file API, with role tracks separated. Number forms are counted as written. No microphone, speaker diarization or answer generation in this run. |
+
+The RC starts semantic evaluation from finalized packets bounded by source, speaker and epoch. A recent mapped speech endpoint credits observed silence. When the endpoint is unavailable, the quiet period begins at final arrival. A four-second packet deadline at the one-second setting bounds continuous speech. Packet size is capped at 64 segments and 16,000 UTF-8 bytes. An unresolved partial can be used manually. The deadline sends only previously finalized text for semantic evaluation. Diagnostics expose decisions and peak queue occupancy without dialogue.
+
+The acceptance thresholds remain 1,500 ms p50 and 3,500 ms p95 to first useful visible text and 7,000 ms p95 to a complete brief answer. Prior SwiftUI acknowledgments and provider event timings estimate stage delays. No current displayed-latency distribution is available. No model or effort default was promoted on smoke evidence.
+
 ## Continuation after b2946d6
 
 Installed Apple SpeechAnalyzer ran on all 30 separate qualification tracks on macOS 26.3.2. A nonblank final overlapping a cue by at least 80 ms counted as transcription coverage. Track-level WER uses word edit distance after case and punctuation normalization against the frozen text. There were 134 finals covering all 100 cues. Overlap establishes coverage, and a single final may cover multiple cues.

@@ -15,7 +15,7 @@ Requires Apple Silicon, macOS 14.2 or later, and Xcode with a macOS SDK that sup
 
 For an interview running on a second device, turn on **Interview on another device**, choose the Mac’s **Room microphone**, and play the call through the other device’s speakers. Select ElevenLabs Scribe v3 Live or a supported Deepgram Nova model for transcription. After **Start**, match the detected speakers in **Transcript** and assign **Interviewer** and **Candidate**. Confirm labels again after a reconnect or speaker merge.
 
-For system or application audio that contains both speakers, turn on **Assign speakers in question audio** with a transcription model that supports speaker labels. Automatic answers begin once you assign the interviewer in **Transcript**. Facts still marked pending in older profiles are excluded until you enable them in the profile editor.
+System, application and replay audio starts in **Mixed audio · Manual answers**. Choose **Mixed audio · Assign speakers** with a transcription model that supplies speaker labels, then assign the interviewer in **Transcript**. Use **Interviewer-only audio** only for a source dedicated to the interviewer. Enabling the independent candidate microphone does not establish the role of the question source. Facts still marked pending in older profiles are excluded until you enable them in the profile editor.
 
 In **Settings → Question classification**, adjust **Wait for silence** to hold short pauses open. It starts at two seconds and can be changed during a session. Finalized pieces from the same speaker within the quiet window are answered together. Choose **0** for immediate handling of finalized questions.
 

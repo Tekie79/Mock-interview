@@ -2,6 +2,33 @@ import XCTest
 @testable import ConversationCore
 
 final class AudioRouteTests: XCTestCase {
+    func testOldMeetingPreferencesAndNewOutputSelectionsAreUnresolvedByDefault() throws {
+        let legacy = try JSONDecoder().decode(AudioRoutePreference.self, from: Data(
+            #"{"question":"Application or process group","applicationID":"conference","candidateEnabled":true}"#.utf8))
+        XCTAssertEqual(legacy.questionMode(speakerLabelsAvailable: true), .unresolved)
+        var route = legacy
+        route.outputAttribution = .interviewerOnly
+        XCTAssertEqual(route.questionMode(speakerLabelsAvailable: false), .separateChannels)
+        route.candidateEnabled = false
+        XCTAssertEqual(route.questionMode(speakerLabelsAvailable: false), .trustedInterviewerOnly)
+        route = try JSONDecoder().decode(AudioRoutePreference.self, from: JSONEncoder().encode(route))
+        route.applicationID = "different-process"
+        XCTAssertEqual(route.questionMode(speakerLabelsAvailable: true), .unresolved)
+        route.question = .defaultOutput
+        XCTAssertEqual(route.questionMode(speakerLabelsAvailable: true), .unresolved)
+    }
+
+    func testUnsupportedDiarizationAndNewReplaysStayUnresolved() {
+        var route = AudioRoutePreference(question: .defaultOutput)
+        route.outputAttribution = .speakerLabels
+        XCTAssertEqual(route.questionMode(speakerLabelsAvailable: true), .diarized)
+        XCTAssertEqual(route.questionMode(speakerLabelsAvailable: false).questionRole, .unknown)
+        route.question = .replay
+        XCTAssertEqual(route.questionMode(speakerLabelsAvailable: true), .unresolved)
+        XCTAssertEqual(route.questionMode(speakerLabelsAvailable: true, replayAttribution: .speakerLabels), .diarized)
+        XCTAssertEqual(route.questionMode(speakerLabelsAvailable: false, replayAttribution: .interviewerOnly).questionRole,
+                       .interviewer)
+    }
     func testMixedOutputRoleAssignmentIsOptInAndSurvivesPreferenceRoundTrip() throws {
         var route = AudioRoutePreference(question: .application, applicationID: "conference")
         XCTAssertFalse(route.requiresSpeakerLabels)

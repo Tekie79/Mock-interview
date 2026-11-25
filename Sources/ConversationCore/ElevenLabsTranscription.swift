@@ -1,4 +1,7 @@
 import Foundation
+#if canImport(os)
+import os
+#endif
 #if canImport(FoundationNetworking)
 import FoundationNetworking
 #endif
@@ -165,8 +168,15 @@ public actor ElevenLabsTranscriber: StreamingSTT {
     private var output: AsyncThrowingStream<TranscriptEvent, Error>.Continuation?
     private var chunk = Data()
     private var sentSamples: Int64 = 0
-    private static let wordEdgeTolerance: Int64 = 480 // 20 ms at 24 kHz.
-    private var voice: [Range<Int64>] = []
+    private struct VoicedSpan {
+        let samples: Range<Int64>
+        var leadingEdge = true
+        var trailingEdge = true
+    }
+
+    private static let minimumCommitOverlap: Int64 = 480 // 20 ms at 24 kHz.
+    private static let wordEdgeTolerance: Int64 = 1_440 // 60 ms. Acoustic edges only.
+    private var voice: [VoicedSpan] = []
     private var lastVoicedFrameStart: Int64?
     private var commitRequests: [CommitRequest] = []
     private var lastCommitRequest: Int64 = 0
@@ -254,11 +264,12 @@ public actor ElevenLabsTranscriber: StreamingSTT {
             let start = sentSamples + Int64(chunk.count / 2)
             let end = start + Int64(frame.pcm.count / 2)
             lastVoicedFrameStart = start
-            if let last = voice.last, last.upperBound == start, start != lastCommitRequest {
-                voice[voice.count - 1] = last.lowerBound..<end
+            if let last = voice.last, last.samples.upperBound == start, last.trailingEdge,
+               start != lastCommitRequest {
+                voice[voice.count - 1] = .init(samples: last.samples.lowerBound..<end, leadingEdge: last.leadingEdge)
             } else {
                 guard voice.count < 4_096 else { throw CaptureFailure.bufferOverrun }
-                voice.append(start..<end)
+                voice.append(.init(samples: start..<end))
             }
         }
         chunk.append(frame.pcm)
@@ -274,7 +285,7 @@ public actor ElevenLabsTranscriber: StreamingSTT {
         guard inputState == .open else { return }
         guard let id = connectionID, output != nil else { throw ProviderFailure.disconnected }
         inputState = .flushing
-        let hasUncommittedVoice = voice.last.map { $0.upperBound > lastCommitRequest } ?? false
+        let hasUncommittedVoice = voice.last.map { $0.samples.upperBound > lastCommitRequest } ?? false
         if hasUncommittedVoice || (partial != nil && sentSamples + Int64(chunk.count / 2) > lastCommitRequest) {
             try await requestCommit()
         } else if !chunk.isEmpty {
@@ -288,6 +299,17 @@ public actor ElevenLabsTranscriber: StreamingSTT {
     }
 
     public func close() async {
+        #if canImport(os)
+        if inputState == .flushing || inputState == .draining {
+            let samples = voice.reduce(0) { $0 + $1.samples.count }
+            let mode = config.strategy.rawValue
+            let hasPartial = partial != nil
+            let companionCount = companions.count + deferredDetails.count + diarizedCommits.count
+            Logger(subsystem: "com.mockinterview.desktop", category: "Scribe").notice(
+                "Unconfirmed drain mode=\(mode, privacy: .public) voicedRanges=\(self.voice.count, privacy: .public) voicedSamples=\(samples, privacy: .public) commits=\(self.commitRequests.count, privacy: .public) partial=\(hasPartial, privacy: .public) companions=\(companionCount, privacy: .public)"
+            )
+        }
+        #endif
         connectionID = nil
         let previous = reader
         reader = nil
@@ -504,7 +526,7 @@ public actor ElevenLabsTranscriber: StreamingSTT {
         guard !finalRanges.contains(range) else { return false }
         // Older results can resolve gaps. Once their audio is accounted for, a replay cannot
         // create a new item even if its exact fingerprint has aged out of the bounded cache.
-        return range.upperBound > furthestFinalSample || voice.contains(where: { $0.overlaps(range) })
+        return range.upperBound > furthestFinalSample || voice.contains(where: { $0.samples.overlaps(range) })
             || commitRequests.contains { !$0.receivedFinal && Self.confirms($0.samples, with: range) }
     }
 
@@ -527,7 +549,7 @@ public actor ElevenLabsTranscriber: StreamingSTT {
             commitRequests[index].receivedFinal = true
         }
         commitRequests.removeAll { request in
-            request.receivedFinal && !voice.contains(where: { $0.overlaps(request.samples) })
+            request.receivedFinal && !voice.contains(where: { $0.samples.overlaps(request.samples) })
         }
 
         furthestFinalSample = max(furthestFinalSample, range.upperBound)
@@ -551,21 +573,31 @@ public actor ElevenLabsTranscriber: StreamingSTT {
         if case .dropped = output.yield(event) { throw CaptureFailure.bufferOverrun }
     }
 
-    private static func subtract(_ covered: Range<Int64>, from pending: Range<Int64>) -> [Range<Int64>] {
-        guard pending.overlaps(covered) else { return [pending] }
-        let start = max(pending.lowerBound, covered.lowerBound)
-        let end = min(pending.upperBound, covered.upperBound)
-        // Word timings omit acoustic edges. A tiny overlap cannot consume a distinct span.
-        let tolerance = end - start >= min(wordEdgeTolerance, (pending.upperBound - pending.lowerBound + 1) / 2)
-            ? wordEdgeTolerance : 0
-        return [pending.lowerBound..<start, end..<pending.upperBound].filter {
-            $0.upperBound - $0.lowerBound > tolerance
+    private static func subtract(_ covered: Range<Int64>, from pending: VoicedSpan) -> [VoicedSpan] {
+        let samples = pending.samples
+        guard samples.overlaps(covered) else { return [pending] }
+        let start = max(samples.lowerBound, covered.lowerBound)
+        let end = min(samples.upperBound, covered.upperBound)
+        // Word timestamps can omit onset and decay. Allow tolerance only against an
+        // original acoustic edge, never against a boundary cut by another final.
+        let half = (samples.upperBound - samples.lowerBound + 1) / 2
+        let anchored = end - start >= half
+        let handoff = end - start >= min(minimumCommitOverlap, half) ? minimumCommitOverlap : 0
+        let leading = anchored && pending.leadingEdge ? wordEdgeTolerance : handoff
+        let trailing = anchored && pending.trailingEdge ? wordEdgeTolerance : handoff
+        var remaining: [VoicedSpan] = []
+        if start - samples.lowerBound > leading {
+            remaining.append(.init(samples: samples.lowerBound..<start, leadingEdge: pending.leadingEdge, trailingEdge: false))
         }
+        if samples.upperBound - end > trailing {
+            remaining.append(.init(samples: end..<samples.upperBound, leadingEdge: false, trailingEdge: pending.trailingEdge))
+        }
+        return remaining
     }
 
     private static func confirms(_ request: Range<Int64>, with result: Range<Int64>) -> Bool {
         let overlap = min(request.upperBound, result.upperBound) - max(request.lowerBound, result.lowerBound)
-        return overlap >= min(wordEdgeTolerance, (result.upperBound - result.lowerBound + 1) / 2)
+        return overlap >= min(minimumCommitOverlap, (result.upperBound - result.lowerBound + 1) / 2)
     }
 
     private func allocateItem() -> Int {
