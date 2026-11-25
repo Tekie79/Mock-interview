@@ -78,6 +78,8 @@ public struct TranscriptEvent: Equatable, Sendable {
     public let audioRange: TranscriptAudioRange?
     public let recognitionUsage: RecognitionUsage?
 
+    var transcriptID: String { epoch.uuidString + "/" + source.id + "/" + itemID }
+
     public init(source: CaptureSource, epoch: UUID, itemID: String, previousItemID: String? = nil,
                 text: String, state: State, speaker: Int? = nil, timing: PipelineTiming = .init(),
                 utteranceID: String? = nil, words: [TranscriptWord] = [],

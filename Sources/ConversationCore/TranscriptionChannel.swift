@@ -203,7 +203,8 @@ public struct TranscriptionChannel: Sendable {
                     await events(.transcript(tagged))
                     await progress.delivered(tagged)
                 }
-                guard await progress.streamEnded() else { throw ProviderFailure.disconnected }
+                try Task.checkCancellation()
+                try await progress.streamEnded()
                 return false
             }
             group.addTask {
@@ -229,13 +230,14 @@ public struct TranscriptionChannel: Sendable {
     }
 
     private func drain(_ progress: RecognitionProgress) async throws {
-        if await progress.isFinished { return }
+        try Task.checkCancellation()
+        if await progress.drainOutcome != nil { return }
         let changes = progress.changes
         try await withThrowingTaskGroup(of: Void.self) { group in
             group.addTask {
                 for await _ in changes {
                     try Task.checkCancellation()
-                    if await progress.isFinished { return }
+                    if await progress.drainOutcome != nil { return }
                 }
                 throw CancellationError()
             }
@@ -246,10 +248,13 @@ public struct TranscriptionChannel: Sendable {
             defer { group.cancelAll() }
             _ = try await group.next()
         }
+        try Task.checkCancellation()
     }
 }
 
 actor RecognitionProgress {
+    enum DrainOutcome: Equatable { case transcribed, noSpeech }
+
     private struct Observation {
         let timing: PipelineTiming
         let closedAt: ContinuousClock.Instant
@@ -264,6 +269,7 @@ actor RecognitionProgress {
     private var finishing: ContinuousClock.Instant?
     private var finishWritten = false
     private var ended = false
+    private var transcribed = false
     private let providerCommits: Bool
     private let requiresStreamEnd: Bool
     private var speech: PipelineTiming?
@@ -278,12 +284,16 @@ actor RecognitionProgress {
         (changes, signal) = AsyncStream.makeStream(bufferingPolicy: .bufferingNewest(1))
     }
 
-    var isFinished: Bool { finishWritten && (requiresStreamEnd ? ended : pending.isEmpty) }
+    private var unresolved: Bool { !pending.isEmpty || speech != nil || !partials.isEmpty }
+    var drainOutcome: DrainOutcome? {
+        guard finishWritten, !unresolved, !requiresStreamEnd || ended else { return nil }
+        return transcribed ? .transcribed : .noSpeech
+    }
     var isFinishing: Bool { finishing != nil }
 
     func expired(recognition: Duration, drain: Duration, now: ContinuousClock.Instant = .now) -> ProviderFailure? {
         if let finishing {
-            return !isFinished && finishing.duration(to: now) >= drain ? .incompleteTranscription : nil
+            return drainOutcome == nil && finishing.duration(to: now) >= drain ? .incompleteTranscription : nil
         }
         if [writeStarted, pending.first?.closedAt].compactMap({ $0 }).contains(where: {
             $0.duration(to: now) >= recognition
@@ -291,10 +301,12 @@ actor RecognitionProgress {
         return nil
     }
 
-    func streamEnded() -> Bool {
+    func streamEnded() throws {
+        try Task.checkCancellation()
+        guard finishing != nil else { throw ProviderFailure.disconnected }
+        guard !unresolved else { throw ProviderFailure.incompleteTranscription }
         ended = true
         signal.yield(())
-        return finishing != nil && (requiresStreamEnd || pending.isEmpty)
     }
 
     func sending(_ frame: AudioFrame, voiced: Bool, now: ContinuousClock.Instant = .now) {
@@ -372,10 +384,11 @@ actor RecognitionProgress {
                     event.timing.endpoint = boundary.end
                     event.timing.audioTimingBasis = .providerRangeEstimate
                 }
-            } else if let observation = pending.first?.timing ?? speech,
-                      let start = observation.speechStart, first.map({ $0 >= start }) ?? true {
+            } else if let first, let pending = pending.first,
+                      let start = pending.timing.speechStart, first >= start,
+                      first <= pending.closedAt.advanced(by: .milliseconds(250)) {
                 // An untimed final can acknowledge at most the oldest local speech observation.
-                event.timing = observation
+                event.timing = pending.timing
             }
             event.timing.firstPartial = first ?? event.timing.firstPartial
             event.timing.final = now
@@ -385,6 +398,7 @@ actor RecognitionProgress {
 
     func delivered(_ event: TranscriptEvent) {
         guard event.state == .final, finalIDs.count < 32_768, finalIDs.insert(event.itemID).inserted else { return }
+        if !event.text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty { transcribed = true }
         if !providerCommits {
             if !pending.isEmpty { pending.removeFirst() }
         } else if let start = event.timing.speechStart, let end = event.timing.endpoint {
@@ -407,13 +421,16 @@ actor RecognitionProgress {
         // union inside this observation so overlapping results cannot accrue coverage twice.
         var covered: Duration = .zero
         var through = start
+        var first: ContinuousClock.Instant?
         for span in spans.sorted(by: { $0.start < $1.start }) {
             let lower = max(through, span.start)
             let upper = min(end, span.end)
             guard upper > lower else { continue }
+            if first == nil { first = lower }
             covered += lower.duration(to: upper)
             through = upper
         }
-        return covered >= start.duration(to: end) / 2 && through >= end.advanced(by: .milliseconds(-250))
+        return first.map { $0 <= start.advanced(by: .milliseconds(250)) } == true
+            && covered >= start.duration(to: end) / 2 && through >= end.advanced(by: .milliseconds(-250))
     }
 }

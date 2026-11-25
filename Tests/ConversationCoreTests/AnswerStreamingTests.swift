@@ -9,10 +9,11 @@ private struct NeverClassify: QuestionClassifier {
     }
 }
 
-private actor ControlledGenerator: TextGenerator {
+actor ControlledGenerator: TextGenerator {
     private var streams: [AsyncThrowingStream<GenerationEvent, Error>.Continuation] = []
     private let requests: AsyncStream<AnswerRequest>.Continuation
     let started: AsyncStream<AnswerRequest>
+    private(set) var submitted: [AnswerRequest] = []
 
     init() {
         (started, requests) = AsyncStream.makeStream()
@@ -21,6 +22,7 @@ private actor ControlledGenerator: TextGenerator {
     func stream(_ request: AnswerRequest) async throws -> AsyncThrowingStream<GenerationEvent, Error> {
         let (stream, continuation) = AsyncThrowingStream<GenerationEvent, Error>.makeStream()
         streams.append(continuation)
+        submitted.append(request)
         requests.yield(request)
         return stream
     }

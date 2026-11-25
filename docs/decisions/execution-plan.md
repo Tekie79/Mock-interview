@@ -15,3 +15,16 @@ Use `./scripts/build.sh`, `./scripts/test.sh`, and `git diff --check`. Hosted ma
 The branch already contained uncommitted M10.2 implementation and regression fixtures at the reviewed base. Preserve those changes, record them as a development checkpoint, and run hosted CI while auditing the remaining edge cases. The local Swift 6.3.2 Command Line Tools build passed. Local XCTest requires the Xcode test SDK, so use the Swift 6.2.3 Linux container and the hosted macOS matrix for full results.
 
 Checkpoint `2620b3d` passed all three hosted build and test jobs. The macOS 26 packaging check uncovered a missing Core Audio permission key after a successful compile. The follow-up adds explicit app permission metadata, tests overlapping speech coverage and delayed identical finals, and tightens provider readiness and native timestamp correlation. Run the same hosted matrix on the follow-up and record results for the PR head in the review description. See [M10.1 verification](../verification/m10-1.md) and [M10.2 verification](../verification/m10-2.md).
+
+## Final review corrections
+
+Continue on `feature/m10-2-final-development` from reviewed commit `8e7ccc254c6a89428e5c504703914045e2677940` in PR #2. Keep the ChatGPT eligibility gate closed and leave M11 pending.
+
+| Checkpoint | Scope and checks |
+|---|---|
+| F | Persist answer provenance, invalidate automatic answers across revisions and history, and remove affected context in `InterviewSession` and `QuestionDetection`. Verify queued, streaming, completed and subsequent-question corrections plus saved-history compatibility. |
+| G | Make successful drain depend on attributed recognition results and the required completion acknowledgment in `TranscriptionChannel`. Verify confirmation, silence, failure, delayed acknowledgment and cancellation. |
+| H | Subtract bounded ElevenLabs timestamp intervals from pending voice and commits. Verify preservation of leading, middle and trailing gaps, allowable edge tolerance, repeats and out-of-order results. |
+| I | Run full Linux and macOS 15/26 hosted checks and unsigned packaging. Update traceability, status, verification and PR #2 with exact-head evidence. |
+
+Risks include stale question references, old saved answer payloads, and different provider and local speech boundaries. Preserve original transcripts, user-requested manual answers, approximate timing and bounded state. The local macOS Swift core build and Linux Swift 6.2.3 suite passed during implementation. The hosted matrix will verify the final PR revision.

@@ -260,6 +260,85 @@ final class ElevenLabsTests: XCTestCase {
         await provider.close()
     }
 
+    func testInteriorFinalPreservesBothSidesAndAcceptsAnOverlappingEarlierResult() async throws {
+        let (provider, socket, stream) = try await connect(strategy: .manual)
+        for offset in [0, 2_400, 4_800] { try await provider.append(audio(at: Int64(offset))) }
+        try await provider.finishInput()
+        var cursor = stream.makeAsyncIterator()
+        await socket.enqueue(detailed("Middle", 0.1, 0.2))
+        await socket.enqueue(detailed("Trailing", 0.19, 0.29))
+        await socket.enqueue(detailed("Leading", 0.01, 0.11))
+        await socket.fail()
+
+        for expected in ["Middle", "Trailing", "Leading"] {
+            let final = try await cursor.next()
+            XCTAssertEqual(final?.text, expected)
+        }
+        let end = try await cursor.next()
+        XCTAssertNil(end)
+        await provider.close()
+    }
+
+    func testFinalsOnBothSidesOfANontrivialIntermediateGapCannotCompleteDrain() async throws {
+        let (provider, socket, stream) = try await connect(strategy: .manual)
+        for offset in [0, 2_400, 4_800] { try await provider.append(audio(at: Int64(offset))) }
+        try await provider.finishInput()
+        var cursor = stream.makeAsyncIterator()
+        await socket.enqueue(detailed("Leading", 0.01, 0.1))
+        await socket.enqueue(detailed("Trailing", 0.2, 0.29))
+        await socket.fail()
+
+        for expected in ["Leading", "Trailing"] {
+            let final = try await cursor.next()
+            XCTAssertEqual(final?.text, expected)
+        }
+        do {
+            _ = try await cursor.next()
+            XCTFail("A missing middle result cannot acknowledge the commit")
+        } catch { XCTAssertEqual(error as? ProviderFailure, .timeout) }
+        await provider.close()
+    }
+
+    func testTinyOverlapCannotAcknowledgeNewerAudioOrItsCommit() async throws {
+        let (provider, socket, stream) = try await connect(strategy: .manual)
+        try await provider.append(audio(at: 0))
+        try await provider.commit()
+        try await provider.append(audio(at: 2_400, bytes: 960))
+        try await provider.commit()
+        try await provider.finishInput()
+        var cursor = stream.makeAsyncIterator()
+        await socket.enqueue(detailed("First", 0.01, 0.101))
+        await socket.enqueue(detailed("Second", 0.102, 0.119))
+        await socket.fail()
+
+        let first = try await cursor.next()
+        let second = try await cursor.next()
+        let end = try await cursor.next()
+        XCTAssertEqual(first?.text, "First")
+        XCTAssertEqual(second?.text, "Second")
+        XCTAssertNil(end)
+        await provider.close()
+    }
+
+    func testLaterManualResultLeavesMissingEarlierCommitPending() async throws {
+        let (provider, socket, stream) = try await connect(strategy: .manual)
+        for offset in [0, 2_400] {
+            try await provider.append(audio(at: Int64(offset)))
+            try await provider.commit()
+        }
+        try await provider.finishInput()
+        await socket.enqueue(detailed("Later", 0.11, 0.19))
+        await socket.fail()
+        var cursor = stream.makeAsyncIterator()
+        let final = try await cursor.next()
+        XCTAssertEqual(final?.text, "Later")
+        do {
+            _ = try await cursor.next()
+            XCTFail("The newer result cannot acknowledge the older commit")
+        } catch { XCTAssertEqual(error as? ProviderFailure, .timeout) }
+        await provider.close()
+    }
+
     func testSilenceOnlyDrainFlushesBufferedAudioWithoutCommitOrTranscript() async throws {
         let (provider, socket, stream) = try await connect()
         try await provider.append(audio(at: 0, voiced: false, bytes: 960))

@@ -119,3 +119,9 @@ See `docs/verification/baseline.md` for the initial build/test run. No native Ma
 - Dual-source practice keeps candidate and interviewer transcripts intact. Timing and lexical evidence can mark ambiguous remote attribution as unknown and invalidate affected automatic work. Native timestamps use activation-local frame positions. Mapped timing remains approximate.
 - The ChatGPT coordinator, account panel, native loopback and subscription-only text composition are implemented against synthetic grants. The owner must confirm the supported distribution path before enabling live linking. See [provider compatibility](provider-compatibility.md).
 - The first hosted checkpoint passed deterministic tests on Linux, macOS 15 and macOS 26. Its packaging check found a missing Core Audio permission string on macOS 26. The follow-up supplies permission strings explicitly and verifies the arm64 bundle, minimum OS, and unsigned package on both hosts. See [development verification](verification/m10-2.md) for test counts and the pull request evidence.
+
+### Final review corrections
+
+- Automatic answer provenance is retained with the answer, including in saved sessions. Late attribution corrections withdraw affected answers and remove the question from follow-up context. Explicit manual answers and original transcript text are retained.
+- Graceful drain distinguishes unresolved audio from confirmed recognition and silence. ElevenLabs tracks remaining voiced intervals and independent commit acknowledgments, including when timestamped results overlap or arrive out of order.
+- Validation uses the full Linux and macOS 15/26 matrix and unsigned macOS packaging. Exact-head test counts and warning evidence are recorded in PR #2. Live ChatGPT authorization remains gated and M11 remains pending. [Development verification](verification/m10-2.md)

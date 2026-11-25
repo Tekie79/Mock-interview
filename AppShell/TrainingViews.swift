@@ -103,8 +103,14 @@ struct InterviewReviewView: View {
                     ForEach(entry.suggestions) { answer in
                         VStack(alignment: .leading) {
                             Text(answer.question.original).fontWeight(.medium)
+                            if let label = answer.originLabel { Text(label).font(.caption).foregroundStyle(.secondary) }
+                            if answer.state == .invalidated {
+                                Text("Invalidated after attribution correction").font(.caption).foregroundStyle(.secondary)
+                            }
                             Text(answer.text).textSelection(.enabled)
-                            Button("Review This Question") { question = answer.question.original }.buttonStyle(.link)
+                            if answer.state != .invalidated {
+                                Button("Review This Question") { question = answer.question.original }.buttonStyle(.link)
+                            }
                         }
                     }
                     if !entry.missedQuestions.isEmpty {

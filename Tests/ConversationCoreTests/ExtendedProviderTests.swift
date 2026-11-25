@@ -148,4 +148,15 @@ extension ExtendedProviderTests {
         XCTAssertEqual(final.words.first?.endSeconds, 1.4)
         XCTAssertNil(result.drain())
     }
+
+    func testDeepgramEmptyFinalCarriesNoSpeechRangeButSummaryDoesNot() throws {
+        var state = DeepgramTranscriptAssembler(source: .init(id: "source", role: .interviewer), epoch: UUID())
+        let summary = Data(#"{"type":"Metadata","duration":2.5}"#.utf8)
+        XCTAssertNil(try state.receive(summary))
+        let empty = Data(#"{"type":"Results","start":1.5,"duration":1.0,"is_final":true,"from_finalize":true,"channel":{"alternatives":[{"transcript":"","words":[]}]}}"#.utf8)
+        let final = try XCTUnwrap(state.receive(empty))
+        XCTAssertEqual(final.state, .final)
+        XCTAssertEqual(final.text, "")
+        XCTAssertEqual(final.audioRange, .init(startSeconds: 1.5, endSeconds: 2.5))
+    }
 }

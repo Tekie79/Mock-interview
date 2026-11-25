@@ -136,10 +136,9 @@ public actor ElevenLabsTranscriber: StreamingSTT {
         let samples: Range<Int64>
     }
 
-    private struct VoiceSpan {
-        var start: Int64
-        var lastFrameStart: Int64
-        var end: Int64
+    private struct CommitRequest {
+        let samples: Range<Int64>
+        var receivedFinal = false
     }
 
     private enum InputState { case open, flushing, draining, drained }
@@ -154,15 +153,18 @@ public actor ElevenLabsTranscriber: StreamingSTT {
     private var output: AsyncThrowingStream<TranscriptEvent, Error>.Continuation?
     private var chunk = Data()
     private var sentSamples: Int64 = 0
-    private var voice: [VoiceSpan] = []
-    private var commitRequests: [Range<Int64>] = []
+    private static let wordEdgeTolerance: Int64 = 480 // 20 ms at 24 kHz.
+    private var voice: [Range<Int64>] = []
+    private var lastVoicedFrameStart: Int64?
+    private var commitRequests: [CommitRequest] = []
     private var lastCommitRequest: Int64 = 0
     private var inputState = InputState.open
     private var nextItem = 0
     private var partial: Partial?
     private var companions: [Companion] = []
     private var lastFinalID: Int?
-    private var lastFinalRange: TranscriptAudioRange?
+    private var finalRanges: [Range<Int64>] = []
+    private var furthestFinalSample: Int64 = 0
     private var recentFinalTexts: [String] = []
     private var endpoint = AudioEndpoint()
 
@@ -235,12 +237,12 @@ public actor ElevenLabsTranscriber: StreamingSTT {
         if endpoint.observe(frame).level >= config.localActivityThreshold {
             let start = sentSamples + Int64(chunk.count / 2)
             let end = start + Int64(frame.pcm.count / 2)
-            if let last = voice.last, last.end == start, start != lastCommitRequest {
-                voice[voice.count - 1].lastFrameStart = start
-                voice[voice.count - 1].end = end
+            lastVoicedFrameStart = start
+            if let last = voice.last, last.upperBound == start, start != lastCommitRequest {
+                voice[voice.count - 1] = last.lowerBound..<end
             } else {
                 guard voice.count < 4_096 else { throw CaptureFailure.bufferOverrun }
-                voice.append(.init(start: start, lastFrameStart: start, end: end))
+                voice.append(start..<end)
             }
         }
         chunk.append(frame.pcm)
@@ -256,7 +258,7 @@ public actor ElevenLabsTranscriber: StreamingSTT {
         guard inputState == .open else { return }
         guard let id = connectionID, output != nil else { throw ProviderFailure.disconnected }
         inputState = .flushing
-        let hasUncommittedVoice = voice.last.map { $0.lastFrameStart >= lastCommitRequest } ?? false
+        let hasUncommittedVoice = voice.last.map { $0.upperBound > lastCommitRequest } ?? false
         if hasUncommittedVoice || (partial != nil && sentSamples + Int64(chunk.count / 2) > lastCommitRequest) {
             try await requestCommit()
         } else if !chunk.isEmpty {
@@ -281,6 +283,7 @@ public actor ElevenLabsTranscriber: StreamingSTT {
         chunk.removeAll()
         sentSamples = 0
         voice.removeAll()
+        lastVoicedFrameStart = nil
         commitRequests.removeAll()
         lastCommitRequest = 0
         inputState = .open
@@ -288,7 +291,8 @@ public actor ElevenLabsTranscriber: StreamingSTT {
         partial = nil
         companions.removeAll()
         lastFinalID = nil
-        lastFinalRange = nil
+        finalRanges.removeAll()
+        furthestFinalSample = 0
         recentFinalTexts.removeAll()
         endpoint = AudioEndpoint()
         await previous?.value
@@ -298,7 +302,7 @@ public actor ElevenLabsTranscriber: StreamingSTT {
         let end = sentSamples + Int64(chunk.count / 2)
         guard end > lastCommitRequest else { return }
         guard commitRequests.count < 64 else { throw CaptureFailure.bufferOverrun }
-        commitRequests.append(lastCommitRequest..<end)
+        commitRequests.append(.init(samples: lastCommitRequest..<end))
         lastCommitRequest = end
         try await flush(commit: true)
     }
@@ -343,7 +347,7 @@ public actor ElevenLabsTranscriber: StreamingSTT {
                 if let prediction { partial?.prediction = prediction }
                 return true
             }
-            var current = partial ?? Partial(id: allocateItem(), observedFrame: voice.last?.lastFrameStart,
+            var current = partial ?? Partial(id: allocateItem(), observedFrame: lastVoicedFrameStart,
                                               text: text, prediction: nil)
             current.text = text
             if let prediction { current.prediction = prediction }
@@ -369,26 +373,23 @@ public actor ElevenLabsTranscriber: StreamingSTT {
             TranscriptWord(text: $0.text, startSeconds: $0.start, endSeconds: $0.end)
         }
         // No request ID or end-of-input acknowledgment is exposed. Never discharge pending audio
-        // on an unpositioned/empty final or on a timestamp that goes backwards or beyond sent audio.
+        // on an unpositioned/empty final or on a timestamp beyond sent audio.
         guard let start = words.first?.startSeconds, let end = words.last?.endSeconds,
               start.isFinite, end.isFinite, start >= 0, end > start,
               end <= Double(sentSamples) / 24_000,
-              let first = Int64(exactly: (start * 24_000).rounded(.down)),
-              let last = Int64(exactly: (end * 24_000).rounded(.up)),
+              let first = Int64(exactly: (start * 24_000).rounded()),
+              let last = Int64(exactly: (end * 24_000).rounded()),
               first < last else { return true }
         let detail = Detail(text: text, words: words, language: wire.language_code,
                             range: .init(startSeconds: start, endSeconds: end), samples: first..<last)
-        guard advances(detail) else { return true }
+        guard accepts(detail) else { return true }
 
         if let match = companions.firstIndex(where: { $0.text == text }) {
             // A different segment's detailed result can wait behind the earlier plain boundary.
             guard companions[match].detail == nil else { return true }
             companions[match].detail = detail
             while let next = companions.first?.detail {
-                guard advances(next) else {
-                    companions[0].detail = nil
-                    break
-                }
+                guard accepts(next) else { companions[0].detail = nil; break }
                 let candidate = companions.removeFirst().partial
                 var resolved = candidate
                 if let candidate, !canBelong(candidate, to: next) {
@@ -405,9 +406,13 @@ public actor ElevenLabsTranscriber: StreamingSTT {
         return !finishDrainIfReady()
     }
 
-    private func advances(_ detail: Detail) -> Bool {
-        guard let previous = lastFinalRange else { return true }
-        return detail.range.startSeconds >= previous.startSeconds && detail.range.endSeconds > previous.endSeconds
+    private func accepts(_ detail: Detail) -> Bool {
+        let range = detail.samples
+        guard !finalRanges.contains(range) else { return false }
+        // Older results can resolve gaps. Once their audio is accounted for, a replay cannot
+        // create a new item even if its exact fingerprint has aged out of the bounded cache.
+        return range.upperBound > furthestFinalSample || voice.contains(where: { $0.overlaps(range) })
+            || commitRequests.contains { !$0.receivedFinal && Self.confirms($0.samples, with: range) }
     }
 
     private func canBelong(_ partial: Partial, to detail: Detail) -> Bool {
@@ -422,16 +427,14 @@ public actor ElevenLabsTranscriber: StreamingSTT {
 
     private func finalize(_ detail: Detail, partial: Partial?, source: CaptureSource, epoch: UUID,
                           output: AsyncThrowingStream<TranscriptEvent, Error>.Continuation) throws {
-        let first = detail.samples.lowerBound
-        let last = detail.samples.upperBound
-        voice = voice.compactMap { span in
-            guard first < span.end, last > span.start else { return span }
-            guard last <= span.lastFrameStart else { return nil }
-            return .init(start: last, lastFrameStart: span.lastFrameStart, end: span.end)
+        let range = detail.samples
+        voice = voice.flatMap { Self.subtract(range, from: $0) }
+        guard voice.count <= 4_096 else { throw CaptureFailure.bufferOverrun }
+        for index in commitRequests.indices where Self.confirms(commitRequests[index].samples, with: range) {
+            commitRequests[index].receivedFinal = true
         }
-        if let request = commitRequests.first, detail.samples.overlaps(request),
-           !voice.contains(where: { $0.start < request.upperBound && $0.end > request.lowerBound }) {
-            commitRequests.removeFirst()
+        commitRequests.removeAll { request in
+            request.receivedFinal && !voice.contains(where: { $0.overlaps(request.samples) })
         }
 
         let item = partial?.id ?? allocateItem()
@@ -440,10 +443,29 @@ public actor ElevenLabsTranscriber: StreamingSTT {
                                     text: detail.text, state: .final, words: detail.words,
                                     language: detail.language, turnProbability: partial?.prediction, audioRange: detail.range)
         lastFinalID = item
-        lastFinalRange = detail.range
+        furthestFinalSample = max(furthestFinalSample, range.upperBound)
+        if finalRanges.count == 256 { finalRanges.removeFirst() }
+        finalRanges.append(range)
         if recentFinalTexts.count == 32 { recentFinalTexts.removeFirst() }
         recentFinalTexts.append(detail.text)
         if case .dropped = output.yield(event) { throw CaptureFailure.bufferOverrun }
+    }
+
+    private static func subtract(_ covered: Range<Int64>, from pending: Range<Int64>) -> [Range<Int64>] {
+        guard pending.overlaps(covered) else { return [pending] }
+        let start = max(pending.lowerBound, covered.lowerBound)
+        let end = min(pending.upperBound, covered.upperBound)
+        // Word timings omit acoustic edges. A tiny overlap cannot consume a distinct span.
+        let tolerance = end - start >= min(wordEdgeTolerance, (pending.upperBound - pending.lowerBound + 1) / 2)
+            ? wordEdgeTolerance : 0
+        return [pending.lowerBound..<start, end..<pending.upperBound].filter {
+            $0.upperBound - $0.lowerBound > tolerance
+        }
+    }
+
+    private static func confirms(_ request: Range<Int64>, with result: Range<Int64>) -> Bool {
+        let overlap = min(request.upperBound, result.upperBound) - max(request.lowerBound, result.lowerBound)
+        return overlap >= min(wordEdgeTolerance, (result.upperBound - result.lowerBound + 1) / 2)
     }
 
     private func allocateItem() -> Int {

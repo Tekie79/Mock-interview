@@ -3,6 +3,16 @@ import XCTest
 @testable import ConversationCore
 
 final class ReviewTests: XCTestCase {
+    func testSavedAnswerWithoutProvenanceRemainsReadable() throws {
+        let oldAnswer = InterviewAnswer(question: .init(original: "Explain queues", normalized: "Explain queues"),
+                                        revision: UUID(), format: .brief, text: "A queue is ordered.", state: .complete)
+        let raw = try XCTUnwrap(JSONSerialization.jsonObject(with: JSONEncoder().encode(oldAnswer)) as? [String: Any])
+        XCTAssertNil(raw["origin"])
+        let decoded = try JSONDecoder().decode(InterviewAnswer.self, from: JSONSerialization.data(withJSONObject: raw))
+        XCTAssertEqual(decoded, oldAnswer)
+        XCTAssertNil(decoded.originLabel)
+    }
+
     func testHistorySearchOnlyAfterExplicitSaveAndDeletesIndex() async throws {
         let library = try KnowledgeStore()
         let now = Date()

@@ -994,15 +994,18 @@ private struct AnswerPanel: View {
             }
             if let answer = model.displayedAnswer {
                 Text(answer.question.original).font(.title3.weight(.medium))
+                if let label = answer.originLabel { Text(label).font(.caption).foregroundStyle(.secondary) }
                 ScrollView {
                     VStack(alignment: .leading, spacing: 10) {
-                        Text(answer.text).font(.system(size: fontSize)).textSelection(.enabled)
-                            .onChange(of: answer.text, initial: true) { _, value in
-                                if value.contains(where: { $0.isLetter || $0.isNumber }) {
-                                    model.responseVisible(answer.revision)
+                        if answer.state != .invalidated {
+                            Text(answer.text).font(.system(size: fontSize)).textSelection(.enabled)
+                                .onChange(of: answer.text, initial: true) { _, value in
+                                    if value.contains(where: { $0.isLetter || $0.isNumber }) {
+                                        model.responseVisible(answer.revision)
+                                    }
                                 }
-                            }
-                        if !answer.evidence.isEmpty {
+                        }
+                        if answer.state != .invalidated, !answer.evidence.isEmpty {
                             DisclosureGroup("Approved evidence") {
                                 ForEach(Array(answer.evidence.enumerated()), id: \.offset) { _, fact in
                                     Text(fact).textSelection(.enabled)
@@ -1022,7 +1025,9 @@ private struct AnswerPanel: View {
                     if answer.state == .generating {
                         Button("Cancel", action: model.cancelAnswer)
                     }
-                    Button(answer.state == .failed ? "Retry" : "Regenerate") { model.regenerate() }
+                    Button(answer.state == .invalidated ? "Generate manually" : answer.state == .failed ? "Retry" : "Regenerate") {
+                        model.regenerate()
+                    }
                     Menu("Format") {
                         ForEach(AnswerFormat.allCases) { format in
                             Button(format.rawValue) { model.regenerate(format) }

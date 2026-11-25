@@ -60,7 +60,7 @@ public struct DeepgramTranscriptAssembler {
             throw ProviderFailure.malformedEvent
         }
         guard start + duration > completedThrough else { return nil }
-        let text = alternative.transcript
+        let text = alternative.transcript.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty ? "" : alternative.transcript
         let speaker: Int?
         if let words = alternative.words, let first = words.first?.speaker, first >= 0,
            words.allSatisfy({ $0.speaker == first }) {
@@ -81,8 +81,13 @@ public struct DeepgramTranscriptAssembler {
         guard finalized.count <= 64 else { throw ProviderFailure.disconnected }
         var accumulated = finalized
         if result.is_final != true, !text.isEmpty, accumulated[start] == nil { accumulated[start] = segment }
-        let event = combined(accumulated, final: boundary)
+        var event = combined(accumulated, final: boundary)
         if boundary {
+            if event == nil, duration > 0 {
+                event = TranscriptEvent(source: source, epoch: epoch, itemID: "deepgram-\(utterance)",
+                                        text: "", state: .final,
+                                        audioRange: .init(startSeconds: start, endSeconds: start + duration))
+            }
             completedThrough = start + duration
             utterance += 1
             finalized.removeAll(keepingCapacity: true)

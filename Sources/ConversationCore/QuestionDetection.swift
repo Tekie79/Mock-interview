@@ -18,12 +18,17 @@ public struct AcceptedQuestion: Identifiable, Equatable, Sendable, Codable {
 }
 
 public actor QuestionDetector {
+    struct Detection: Sendable {
+        let question: AcceptedQuestion
+        let transcriptIDs: [String]
+    }
+
     private struct Channel {
         let source: CaptureSource
         let epoch: UUID
         var finalizedIDs: Set<String> = []
         var speakerRoles: [Int: SourceRole] = [:]
-        var pending: (text: String, instant: ContinuousClock.Instant, speaker: Int?)?
+        var pending: (text: String, instant: ContinuousClock.Instant, speaker: Int?, transcriptIDs: [String])?
     }
 
     private let classifier: any QuestionClassifier
@@ -31,7 +36,8 @@ public actor QuestionDetector {
     private let completionGrace: Duration
     private let now: @Sendable () -> ContinuousClock.Instant
     private var channels: [String: Channel] = [:]
-    private var recent: [AcceptedQuestion] = []
+    private var recent: [Detection] = []
+    private var inFlight: [UUID: Set<String>] = [:]
 
     public init(classifier: any QuestionClassifier, threshold: Double = 0.8,
                 completionGrace: Duration = .seconds(3), now: @escaping @Sendable () -> ContinuousClock.Instant = { .now }) {
@@ -65,9 +71,26 @@ public actor QuestionDetector {
         if !keepingContext { recent.removeAll() }
     }
 
+    func revokeAttribution(_ transcriptIDs: Set<String>) {
+        guard !transcriptIDs.isEmpty else { return }
+        inFlight = inFlight.filter { $0.value.isDisjoint(with: transcriptIDs) }
+        recent.removeAll { $0.transcriptIDs.contains(where: transcriptIDs.contains) }
+        for id in Array(channels.keys) {
+            if channels[id]?.pending?.transcriptIDs.contains(where: transcriptIDs.contains) == true {
+                channels[id]?.pending = nil
+            }
+        }
+    }
+
     public func receive(_ event: TranscriptEvent, conversation: [ConversationTurn] = [],
                         approvedEvidence: [String] = [], interviewContext: [String] = [],
                         budget: ContextBudget = .init()) async throws -> AcceptedQuestion? {
+        try await detect(event, conversation: conversation, approvedEvidence: approvedEvidence,
+                         interviewContext: interviewContext, budget: budget)?.question
+    }
+
+    func detect(_ event: TranscriptEvent, conversation: [ConversationTurn], approvedEvidence: [String],
+                interviewContext: [String], budget: ContextBudget, trustedQuestionIDs: Set<UUID>? = nil) async throws -> Detection? {
         guard event.state == .final,
               var channel = channels[event.source.id], channel.source == event.source,
               channel.epoch == event.epoch, channel.finalizedIDs.count < 16_384,
@@ -79,6 +102,7 @@ public actor QuestionDetector {
         }
 
         let arrived = now()
+        var transcriptIDs = [event.transcriptID]
         var text = event.text.trimmingCharacters(in: .whitespacesAndNewlines)
         let folded = text.lowercased().replacingOccurrences(of: "’", with: "'")
             .trimmingCharacters(in: .punctuationCharacters)
@@ -89,20 +113,25 @@ public actor QuestionDetector {
         if let pending = channel.pending, pending.speaker == event.speaker,
            pending.instant.duration(to: arrived) <= completionGrace {
             text = pending.text.trimmingCharacters(in: CharacterSet(charactersIn: ".… ")) + " " + text
+            transcriptIDs = pending.transcriptIDs + transcriptIDs
         }
         channel.pending = nil
         channels[event.source.id] = channel
-        guard text.utf8.count <= 16_000 else { return nil }
+        guard text.utf8.count <= 16_000, transcriptIDs.count <= 64 else { return nil }
         let lastWord = folded.split(whereSeparator: { !$0.isLetter }).last
         if text.hasSuffix("...") || text.hasSuffix("…") || ["and", "or", "then", "because"].contains(lastWord.map(String.init) ?? "") {
-            channels[event.source.id]?.pending = (text, arrived, event.speaker)
+            channels[event.source.id]?.pending = (text, arrived, event.speaker, transcriptIDs)
             return nil
         }
 
         let turn = TranscriptEvent(source: event.source, epoch: event.epoch, itemID: event.itemID,
                                    previousItemID: event.previousItemID, text: text, state: .final, speaker: event.speaker,
                                    turnProbability: event.turnProbability)
-        let context = recent
+        let history = recent.filter { trustedQuestionIDs?.contains($0.question.id) != false }
+        let context = history.map(\.question)
+        let request = UUID()
+        inFlight[request] = Set(transcriptIDs + conversation.map(\.id) + history.flatMap(\.transcriptIDs))
+        defer { inFlight.removeValue(forKey: request) }
         let result = try await classifier.classify(QuestionInput(
             turn: turn,
             previousQuestions: budget.share(15).limit(context.suffix(4).reversed().map { "\($0.id.uuidString): \($0.normalized)" }),
@@ -110,12 +139,12 @@ public actor QuestionDetector {
             approvedEvidence: budget.share(15).limit(approvedEvidence),
             interviewContext: budget.share(15).limit(interviewContext)))
         try Task.checkCancellation()
-        guard let active = channels[event.source.id], active.epoch == event.epoch,
+        guard inFlight[request] != nil, let active = channels[event.source.id], active.epoch == event.epoch,
               AutomaticQuestionRoleGate.permitsClassification(for: Self.role(of: event, channel: active)),
               arrived.duration(to: now()) <= .seconds(12) else { return nil }
 
         if result.decision == .wait {
-            channels[event.source.id]?.pending = (text, arrived, event.speaker)
+            channels[event.source.id]?.pending = (text, arrived, event.speaker, transcriptIDs)
             return nil
         }
         let normalized = result.normalizedQuestion.trimmingCharacters(in: .whitespacesAndNewlines)
@@ -130,9 +159,10 @@ public actor QuestionDetector {
         let question = AcceptedQuestion(original: text, normalized: normalized, parts: result.parts,
                                         previousQuestionID: result.isFollowUp || result.isIntentionalRepeat
                                             ? matched ?? context.last?.id : nil)
-        recent.append(question)
+        let detection = Detection(question: question, transcriptIDs: transcriptIDs)
+        recent.append(detection)
         if recent.count > 8 { recent.removeFirst() }
-        return question
+        return detection
     }
 
     private static func role(of event: TranscriptEvent, channel: Channel) -> SourceRole {

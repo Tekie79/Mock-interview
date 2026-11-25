@@ -61,7 +61,8 @@ public struct SavedInterview: Identifiable, Equatable, Codable, Sendable {
         }
         if !suggestions.isEmpty {
             sections.append("Suggested answers\n" + suggestions.map {
-                "Question: \($0.question.original)\nSuggestion (\($0.state.rawValue)): \($0.text)"
+                let label = $0.originLabel ?? "Suggestion"
+                return "Question: \($0.question.original)\n\(label) (\($0.state.rawValue)): \($0.text)"
             }.joined(separator: "\n\n"))
         }
         if !missedQuestions.isEmpty {
