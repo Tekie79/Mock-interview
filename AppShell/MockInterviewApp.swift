@@ -88,6 +88,7 @@ private enum Keychain {
 }
 
 private enum SpeechProvider: String, CaseIterable, Identifiable {
+    case apple = "Apple Speech"
     case openai = "OpenAI"
     case deepgram = "Deepgram"
     var id: String { rawValue }
@@ -116,6 +117,12 @@ private struct SessionProviders {
         }
 
         switch speech {
+        case .apple:
+            let locale = defaults.string(forKey: "appleSpeechLocale") ?? "en-US"
+            let mode = AppleRecognitionMode(rawValue: defaults.string(forKey: "appleSpeechMode") ?? "") ?? .onDevice
+            let vocabulary = (defaults.string(forKey: "speechVocabulary") ?? "").split(separator: ",")
+                .map { $0.trimmingCharacters(in: .whitespacesAndNewlines) }
+            transcriber = { AppleSpeechTranscriber(locale: locale, mode: mode, vocabulary: vocabulary) }
         case .openai:
             let credential = try key("openai")
             let model = defaults.string(forKey: "sttModel") ?? "gpt-live-transcribe"
@@ -345,7 +352,7 @@ final class WorkspaceModel: ObservableObject {
             } catch CaptureFailure.sourceUnavailable {
                 error = "Select each required audio source before starting."
             } catch {
-                self.error = "The interview could not start. Check the selected source and provider settings."
+                self.error = publicErrorMessage(error)
             }
         }
     }
@@ -877,6 +884,9 @@ private struct WindowLevel: NSViewRepresentable {
 private struct ProviderSettingsView: View {
     @ObservedObject var model: WorkspaceModel
     @AppStorage("speechProvider") private var speech = SpeechProvider.openai
+    @AppStorage("appleSpeechLocale") private var appleLocale = "en-US"
+    @AppStorage("appleSpeechMode") private var appleMode = AppleRecognitionMode.onDevice
+    @AppStorage("speechVocabulary") private var speechVocabulary = ""
     @AppStorage("classificationProvider") private var classification = TextProvider.openai
     @AppStorage("answerProvider") private var answer = TextProvider.openai
     @AppStorage("deepgramModel") private var deepgramModel = "nova-3"
@@ -909,7 +919,22 @@ private struct ProviderSettingsView: View {
                 Picker("Transcription provider", selection: $speech) {
                     ForEach(SpeechProvider.allCases) { Text($0.rawValue).tag($0) }
                 }
-                TextField("Transcription model", text: speech == .openai ? $sttModel : $deepgramModel)
+                if speech == .apple {
+                    Picker("Apple recognition language", selection: $appleLocale) {
+                        ForEach(AppleSpeechTranscriber.languages(), id: \.self) { locale in
+                            Text(Locale.current.localizedString(forIdentifier: locale) ?? locale).tag(locale)
+                        }
+                    }
+                    Picker("Processing", selection: $appleMode) {
+                        ForEach(AppleRecognitionMode.allCases) { Text($0.rawValue).tag($0) }
+                    }
+                    if appleMode == .onDevice, !AppleSpeechTranscriber.hasOnDeviceRecognition(locale: appleLocale) {
+                        Text("This locale has no on-device recognizer. Choose another locale or explicitly enable network processing.")
+                    }
+                    TextField("Vocabulary hints (comma separated)", text: $speechVocabulary)
+                } else {
+                    TextField("Transcription model", text: speech == .openai ? $sttModel : $deepgramModel)
+                }
                 Picker("Classification provider", selection: $classification) {
                     ForEach(TextProvider.allCases) { Text($0.rawValue).tag($0) }
                 }

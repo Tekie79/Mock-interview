@@ -17,6 +17,12 @@ public func publicErrorMessage(_ error: Error) -> String {
         "The provider rejected the request or returned an unsupported response. Check the configured model."
     case ProviderFailure.unavailable, ProviderFailure.disconnected:
         "The provider connection was interrupted."
+    case AppleRecognitionFailure.speechPermissionDenied:
+        "Allow Speech Recognition in macOS Privacy & Security, then retry."
+    case AppleRecognitionFailure.unsupportedLanguage:
+        "Apple Speech does not support the selected recognition language."
+    case AppleRecognitionFailure.onDeviceUnavailable:
+        "Strict on-device recognition is unavailable for this language on this Mac."
     case CaptureFailure.permissionDenied:
         "Allow access in macOS System Settings → Privacy & Security, then restart capture."
     case CaptureFailure.routeChanged:

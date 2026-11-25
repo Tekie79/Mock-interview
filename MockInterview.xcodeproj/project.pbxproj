@@ -118,6 +118,7 @@
             buildSettings = {
                 GENERATE_INFOPLIST_FILE = YES;
                 INFOPLIST_KEY_NSAudioCaptureUsageDescription = "Transcribe audio from the application you select for a mock interview.";
+                INFOPLIST_KEY_NSSpeechRecognitionUsageDescription = "Transcribe selected practice audio using Apple Speech.";
                 INFOPLIST_KEY_NSMicrophoneUsageDescription = "Transcribe your selected microphone during a mock interview.";
                 PRODUCT_BUNDLE_IDENTIFIER = com.mockinterview.desktop;
                 PRODUCT_NAME = "$(TARGET_NAME)";
@@ -130,6 +131,7 @@
             buildSettings = {
                 GENERATE_INFOPLIST_FILE = YES;
                 INFOPLIST_KEY_NSAudioCaptureUsageDescription = "Transcribe audio from the application you select for a mock interview.";
+                INFOPLIST_KEY_NSSpeechRecognitionUsageDescription = "Transcribe selected practice audio using Apple Speech.";
                 INFOPLIST_KEY_NSMicrophoneUsageDescription = "Transcribe your selected microphone during a mock interview.";
                 PRODUCT_BUNDLE_IDENTIFIER = com.mockinterview.desktop;
                 PRODUCT_NAME = "$(TARGET_NAME)";
