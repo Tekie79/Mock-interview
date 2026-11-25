@@ -13,6 +13,8 @@ Requires Apple Silicon, macOS 14.2 or later, and Xcode with a macOS SDK that sup
 5. In **Settings → Answer generation**, choose an answer format and enter an optional word limit from 1 to 400. Use **0** for the format default. The answer card’s **Format** menu regenerates the selected answer in another style.
 6. Start the interview. Use the native workspace or compact window to review suggestions and control the session. Transcript and answers are kept in memory by default. Select local retention or save an individual session from **Review and History**.
 
+For an interview running on a second device, turn on **Interview on another device**, choose the Mac’s **Room microphone**, and play the call through the other device’s speakers. Select ElevenLabs Scribe v3 Live or a supported Deepgram Nova model for transcription. After **Start**, match the detected speakers in **Transcript** and assign **Interviewer** and **Candidate**. Confirm labels again after a reconnect or speaker merge.
+
 The app accepts raw mono signed PCM16 little-endian replay at 24 kHz. Live replay uses the selected transcription provider. The deterministic developer replay test uses synthetic audio and test transports.
 
 ## Develop

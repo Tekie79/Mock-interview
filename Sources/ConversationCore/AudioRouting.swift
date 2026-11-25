@@ -28,6 +28,7 @@ public struct AudioRoutePreference: Codable, Equatable, Sendable {
     public var interviewerMicrophoneUID: String?
     public var candidateMicrophoneUID: String?
     public var candidateEnabled: Bool
+    private var previousQuestionAudio: QuestionAudioKind?
 
     public init(question: QuestionAudioKind = .application, outputUID: String? = nil,
                 applicationID: String? = nil, interviewerMicrophoneUID: String? = nil,
@@ -38,6 +39,15 @@ public struct AudioRoutePreference: Codable, Equatable, Sendable {
         self.interviewerMicrophoneUID = interviewerMicrophoneUID
         self.candidateMicrophoneUID = candidateMicrophoneUID
         self.candidateEnabled = candidateEnabled
+    }
+
+    public mutating func setOtherDeviceInterview(_ enabled: Bool) {
+        if enabled, question != .sharedMicrophone {
+            previousQuestionAudio = question
+            question = .sharedMicrophone
+        } else if !enabled, question == .sharedMicrophone {
+            question = previousQuestionAudio ?? .application
+        }
     }
 
     public func validateConcurrentMicrophones() throws {

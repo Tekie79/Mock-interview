@@ -2,6 +2,23 @@ import XCTest
 @testable import ConversationCore
 
 final class AudioRouteTests: XCTestCase {
+    func testOtherDeviceToggleRestoresRouteAndPreservesSelections() throws {
+        var route = AudioRoutePreference(question: .outputDevice, outputUID: "output",
+                                         interviewerMicrophoneUID: "room")
+        route.setOtherDeviceInterview(true)
+        XCTAssertEqual(route.question, .sharedMicrophone)
+        XCTAssertEqual(route.interviewerMicrophoneUID, "room")
+        route = try JSONDecoder().decode(AudioRoutePreference.self, from: JSONEncoder().encode(route))
+        route.setOtherDeviceInterview(false)
+        XCTAssertEqual(route.question, .outputDevice)
+        XCTAssertEqual(route.outputUID, "output")
+
+        var legacy = try JSONDecoder().decode(AudioRoutePreference.self, from: Data(
+            #"{"question":"Shared microphone","interviewerMicrophoneUID":"room","candidateEnabled":false}"#.utf8))
+        legacy.setOtherDeviceInterview(false)
+        XCTAssertEqual(legacy.question, .application)
+    }
+
     func testExplicitRouteNeverFallsBackAndDefaultFollowsUID() throws {
         let devices: [AudioEndpointChoice] = [
             .init(id: "builtin", name: "Internal Speakers"),

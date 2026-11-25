@@ -93,7 +93,7 @@ public struct ProviderCapabilities: Equatable, Sendable {
             let semantic = model == "scribe_v3_live"
             return .init(provider: provider, services: [.transcription], authentication: .apiKey,
                          billing: .separatelyBilledAPI, models: ["scribe_v3_live", "scribe_v2_realtime"],
-                         streams: true, designatedLanguage: true, detectsLanguage: true, wordTimestamps: true,
+                         streams: true, designatedLanguage: true, detectsLanguage: true, wordTimestamps: true, diarization: semantic,
                          commits: semantic ? [.manual, .voiceActivity, .semanticTurn] : [.manual, .voiceActivity],
                          vocabularyHints: true)
         case .deepgram:

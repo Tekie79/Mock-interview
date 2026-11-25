@@ -316,6 +316,42 @@ public actor InterviewSession {
         publish()
     }
 
+    private func mergeSpeakers(from: Int, to: Int, source: CaptureSource, epoch: UUID) async {
+        guard source.role == .unknown, from >= 0, to >= 0, from != to else { return }
+        let retired = DiarizedSpeaker.ID(sourceID: source.id, epoch: epoch, number: from)
+        let survivor = DiarizedSpeaker.ID(sourceID: source.id, epoch: epoch, number: to)
+        let ids = [retired, survivor]
+        let known = snapshot.speakers.filter { ids.contains($0.id) }
+        snapshot.speakers.removeAll { ids.contains($0.id) }
+        for id in ids where known.contains(where: { $0.id == id }) { roleBarriers[id] = ingressSequence }
+
+        let prefix = epoch.uuidString + "/" + source.id + "/"
+        var affected: Set<String> = []
+        for index in snapshot.transcript.indices where snapshot.transcript[index].id.hasPrefix(prefix) {
+            guard let speaker = snapshot.transcript[index].speaker, speaker == from || speaker == to else { continue }
+            snapshot.transcript[index].speaker = to
+            affected.insert(snapshot.transcript[index].id)
+        }
+        for answer in snapshot.answers {
+            if let origin = answer.automaticProvenance, origin.sourceID == source.id, origin.captureEpoch == epoch,
+               origin.speaker == from || origin.speaker == to {
+                affected.formUnion(origin.contributingTranscriptIDs)
+            }
+        }
+
+        invalidateAttribution(affected, correctedRole: .unknown)
+        updateRunningState()
+        publish()
+        await detector.revokeAttribution(affected)
+        for id in ids where known.contains(where: { $0.id == id }) {
+            await detector.assignSpeaker(id.number, role: .unknown, sourceID: source.id, epoch: epoch)
+        }
+        if !known.isEmpty, captureID != nil, epochs[source.id] == epoch {
+            snapshot.speakers.append(.init(id: survivor, role: .unknown))
+            publish()
+        }
+    }
+
     public func cancelAnswer() {
         invalidateAnswer(.cancelled)
         publish()
@@ -437,6 +473,10 @@ public actor InterviewSession {
             snapshot.levels[source.id] = value
         case .transcript(let event):
             guard epochs[event.source.id] == event.epoch else { return }
+            if case .speakerMerge(let from, let to) = event.state {
+                await mergeSpeakers(from: from, to: to, source: event.source, epoch: event.epoch)
+                return
+            }
             let id = event.transcriptID
             let transcriptIndex = snapshot.transcript.firstIndex(where: { $0.id == id })
             if let transcriptIndex, snapshot.transcript[transcriptIndex].isFinal { return }

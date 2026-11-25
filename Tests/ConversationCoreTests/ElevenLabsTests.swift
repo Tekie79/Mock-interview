@@ -61,6 +61,82 @@ private let scribeReady = #"{"message_type":"session_started","session_id":"synt
 final class ElevenLabsTests: XCTestCase {
     private let source = CaptureSource(id: "replay", role: .interviewer)
 
+    func testDiarizationIsOptInAndLimitedToScribeV3Live() throws {
+        let request = try ElevenLabsSpeechConfiguration(diarize: true).request(key: "synthetic")
+        let items = try XCTUnwrap(URLComponents(url: try XCTUnwrap(request.url), resolvingAgainstBaseURL: false)?.queryItems)
+        XCTAssertTrue(items.contains(.init(name: "diarize", value: "true")))
+        XCTAssertTrue(items.contains(.init(name: "include_timestamps", value: "false")))
+        XCTAssertThrowsError(try ElevenLabsSpeechConfiguration(model: "scribe_v2_realtime", strategy: .manual,
+                                                                 diarize: true).request(key: "synthetic"))
+        XCTAssertFalse(try ElevenLabsSpeechConfiguration().request(key: "synthetic").url?.query?.contains("diarize=") ?? true)
+    }
+
+    func testIndexedDiarizationPreservesRepeatedTurnsAndWithholdsUnknownAndMixedWords() async throws {
+        let (provider, socket, stream) = try await connect(diarize: true)
+        var cursor = stream.makeAsyncIterator()
+        try await provider.append(audio(at: 0))
+        try await provider.append(audio(at: 2_400))
+        try await provider.append(audio(at: 4_800))
+        await socket.enqueue(#"{"message_type":"committed_transcript","segment_index":0,"text":"Explain retries."}"#)
+        await socket.enqueue(#"{"message_type":"diarized_transcript","segment_index":9,"text":"Explain retries.","words":[{"text":"Explain retries.","start":0,"end":0.1,"speaker_id":"speaker_9"}]}"#)
+        let firstPending = try await cursor.next()
+        XCTAssertEqual(firstPending?.state, .partial)
+        await socket.enqueue(#"{"message_type":"diarized_transcript","segment_index":0,"text":"Explain retries.","words":[{"text":"Explain","start":0,"end":0.05,"speaker_id":"speaker_1"},{"text":" ","type":"spacing"},{"text":"retries.","start":0.05,"end":0.1,"speaker_id":"speaker_1"}]}"#)
+        let first = try await cursor.next()
+        XCTAssertEqual(first?.speaker, 1)
+        XCTAssertEqual(first?.itemID, firstPending?.itemID)
+        await socket.enqueue(#"{"message_type":"committed_transcript","segment_index":0,"text":"Explain retries."}"#)
+        await socket.enqueue(#"{"message_type":"committed_transcript","segment_index":1,"text":"Explain retries."}"#)
+        await socket.enqueue(#"{"message_type":"diarized_transcript","segment_index":1,"text":"Explain retries.","words":[{"text":"Explain","start":0.1,"end":0.15,"speaker_id":"speaker_1"},{"text":"retries.","start":0.15,"end":0.2,"speaker_id":"speaker_2"}]}"#)
+        let secondPending = try await cursor.next()
+        let second = try await cursor.next()
+        XCTAssertEqual(secondPending?.state, .partial)
+        XCTAssertEqual(second?.state, .final)
+        XCTAssertEqual(second?.text, first?.text)
+        XCTAssertNotEqual(second?.itemID, first?.itemID)
+        XCTAssertNil(second?.speaker)
+
+        await socket.enqueue(#"{"message_type":"committed_transcript","segment_index":2,"text":"Explain timeouts."}"#)
+        await socket.enqueue(#"{"message_type":"diarized_transcript","segment_index":2,"text":"Explain timeouts.","words":[{"text":"Explain","start":0.2,"end":0.25,"speaker_id":"speaker_1"},{"text":"timeouts.","start":0.25,"end":0.3,"speaker_id":null}]}"#)
+        _ = try await cursor.next()
+        let unknown = try await cursor.next()
+        XCTAssertNil(unknown?.speaker)
+        XCTAssertEqual(unknown?.text, "Explain timeouts.")
+        try await provider.finishInput()
+        let end = try await cursor.next()
+        XCTAssertNil(end)
+        await provider.close()
+    }
+
+    func testSpeakerMergeRepairsLaterIDsAndMissingDiarizationRetainsOriginalText() async throws {
+        let (provider, socket, stream) = try await connect(diarize: true)
+        var cursor = stream.makeAsyncIterator()
+        try await provider.append(audio(at: 0))
+        await socket.enqueue(#"{"message_type":"speakers_merged","from_speaker_id":"speaker_1","to_speaker_id":"speaker_3"}"#)
+        let merge = try await cursor.next()
+        XCTAssertEqual(merge?.state, .speakerMerge(from: 1, to: 3))
+        await socket.enqueue(#"{"message_type":"committed_transcript","segment_index":0,"text":"Explain retries."}"#)
+        await socket.enqueue(#"{"message_type":"diarized_transcript","segment_index":0,"text":"Explain retries.","words":[{"text":"Explain retries.","start":0,"end":0.1,"speaker_id":"speaker_1"}]}"#)
+        _ = try await cursor.next()
+        let associated = try await cursor.next()
+        XCTAssertEqual(associated?.speaker, 3)
+        await socket.enqueue(#"{"message_type":"committed_transcript","segment_index":1,"text":"Original text."}"#)
+        let pending = try await cursor.next()
+        await socket.fail(.disconnected)
+        let retained = try await cursor.next()
+        XCTAssertEqual(retained?.state, .final)
+        XCTAssertEqual(retained?.itemID, pending?.itemID)
+        XCTAssertEqual(retained?.text, "Original text.")
+        XCTAssertNil(retained?.speaker)
+        do {
+            _ = try await cursor.next()
+            XCTFail("Expected a disconnected transport to surface its failure")
+        } catch {
+            XCTAssertEqual(error as? ProviderFailure, .disconnected)
+        }
+        await provider.close()
+    }
+
     func testWireConfigurationGuardsUnsupportedStrategyAndKeepsCredentialInHeader() throws {
         let language = ElevenLabsSpeechConfiguration(language: "en", vocabulary: ["A & B", "C++"])
         let request = try language.request(key: "synthetic")
@@ -450,10 +526,10 @@ final class ElevenLabsTests: XCTestCase {
         }
     }
 
-    private func connect(strategy: TranscriptionCommitStrategy = .semanticTurn) async throws
+    private func connect(strategy: TranscriptionCommitStrategy = .semanticTurn, diarize: Bool = false) async throws
         -> (ElevenLabsTranscriber, ScriptedSocket, AsyncThrowingStream<TranscriptEvent, Error>) {
         let socket = ScriptedSocket()
-        let provider = ElevenLabsTranscriber(apiKey: "fake", configuration: .init(strategy: strategy), socket: { _ in socket })
+        let provider = ElevenLabsTranscriber(apiKey: "fake", configuration: .init(strategy: strategy, diarize: diarize), socket: { _ in socket })
         await socket.enqueue(scribeReady)
         return (provider, socket, try await provider.connect(source: source, epoch: UUID()))
     }

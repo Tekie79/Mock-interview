@@ -199,6 +199,10 @@ public struct TranscriptionChannel: Sendable {
                 for try await transcript in transcripts {
                     try Task.checkCancellation()
                     guard transcript.source == source, transcript.epoch == epoch else { continue }
+                    if case .speakerMerge = transcript.state {
+                        await events(.transcript(transcript))
+                        continue
+                    }
                     guard let tagged = await progress.tag(transcript) else { continue }
                     await events(.transcript(tagged))
                     await progress.delivered(tagged)

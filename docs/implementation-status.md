@@ -133,3 +133,5 @@ See `docs/verification/baseline.md` for the initial build/test run. No native Ma
 - The initial held-out text run measured 85.96% precision and 98.00% recall. Subsequent checks distinguish text classification, audio replay and physical capture. The release remains subject to independently measured visible-answer latency, long-session stability and the open scenarios in the [acceptance record](verification/m11-final-acceptance.md).
 
 - The owner-requested answer layouts now use the selected format to render short paragraphs, Talking points, STAR headings, and technical sections and code. The native Word limit accepts exact counts and the generation regression verifies that a custom limit replaces the format default. [M11 native verification](verification/m11-final-acceptance.md)
+
+- **Interview on another device** exposes the shared-microphone workflow with confirmed speaker roles. The ElevenLabs Scribe v3 Live path pairs indexed speech commits and speaker labels. The Deepgram Nova path remains available. Physical room tests and live shared-mic account qualification remain open.

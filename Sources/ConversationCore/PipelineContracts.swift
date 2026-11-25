@@ -61,6 +61,7 @@ public struct TranscriptEvent: Equatable, Sendable {
     public enum State: Equatable, Sendable {
         case partial
         case final
+        case speakerMerge(from: Int, to: Int)
     }
 
     public let source: CaptureSource

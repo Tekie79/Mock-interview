@@ -205,7 +205,8 @@ private struct SessionProviders {
             let config = ElevenLabsSpeechConfiguration(
                 model: model, language: language, detectLanguage: defaults.object(forKey: "elevenDetectLanguage") as? Bool ?? true,
                 strategy: strategy, silenceSeconds: defaults.object(forKey: "sttEndpoint") as? Double ?? 0.65,
-                vocabulary: vocabulary, localActivityThreshold: activityThreshold ?? audioActivityThreshold(defaults: defaults))
+                vocabulary: vocabulary, localActivityThreshold: activityThreshold ?? audioActivityThreshold(defaults: defaults),
+                diarize: diarize && ProviderCapabilities.describe(.elevenLabs, model: model).diarization)
             return { ElevenLabsTranscriber(apiKey: credential, configuration: config) }
         case .openai:
             let credential = try key("openai")
@@ -785,6 +786,16 @@ private struct WorkspaceView: View {
     @State private var manualText = ""
     @AppStorage("answerFontSize") private var fontSize = 16.0
     @AppStorage("speechProvider") private var speechProvider = SpeechProvider.openai
+    @AppStorage("elevenModel") private var elevenModel = "scribe_v3_live"
+    @AppStorage("deepgramModel") private var deepgramModel = "nova-3"
+
+    private var supportsSpeakerLabels: Bool {
+        switch speechProvider {
+        case .eleven: ProviderCapabilities.describe(.elevenLabs, model: elevenModel).diarization
+        case .deepgram: ProviderCapabilities.describe(.deepgram, model: deepgramModel).diarization
+        default: false
+        }
+    }
 
     var body: some View {
         VStack(alignment: .leading, spacing: 12) {
@@ -886,11 +897,17 @@ private struct WorkspaceView: View {
                     Text("General practice").tag(UUID?.none)
                     ForEach(model.profiles) { Text($0.name).tag(Optional($0.id)) }
                 }
-                Picker("Question audio", selection: $model.route.question) {
-                    ForEach(QuestionAudioKind.allCases) { Text($0.rawValue).tag($0) }
+                if model.route.question != .sharedMicrophone {
+                    Picker("Question audio", selection: $model.route.question) {
+                        ForEach(QuestionAudioKind.allCases.filter { $0 != .sharedMicrophone }) { Text($0.rawValue).tag($0) }
+                    }
                 }
                 Button("Refresh Sources", action: model.reloadDevices)
             }
+            Toggle("Interview on another device", isOn: Binding(
+                get: { model.route.question == .sharedMicrophone },
+                set: { model.route.setOtherDeviceInterview($0) }
+            ))
             HStack {
                 switch model.route.question {
                 case .defaultOutput:
@@ -900,7 +917,8 @@ private struct WorkspaceView: View {
                 case .application:
                     sourcePicker("Application", choices: model.processes, selection: $model.route.applicationID)
                 case .interviewerMicrophone, .sharedMicrophone:
-                    sourcePicker("Question microphone", choices: model.microphones,
+                    sourcePicker(model.route.question == .sharedMicrophone ? "Room microphone" : "Question microphone",
+                                 choices: model.microphones,
                                  selection: $model.route.interviewerMicrophoneUID)
                 case .replay:
                     Button(model.replayURL?.lastPathComponent ?? "Choose 24 kHz mono PCM16 file") {
@@ -921,9 +939,18 @@ private struct WorkspaceView: View {
                     Toggle("Save a local copy when this session stops", isOn: $model.retainNextSession)
                 }
             }
-            if model.route.question == .sharedMicrophone && speechProvider != .deepgram {
-                Text("Shared audio stays unknown unless the transcription provider supplies speaker labels. Select Deepgram to assign roles.")
-                    .font(.caption).foregroundStyle(.secondary)
+            if model.route.question == .sharedMicrophone {
+                if supportsSpeakerLabels {
+                    Text("Play the interview through the other device’s speakers. After Start, label each voice in Transcript.")
+                        .font(.caption).foregroundStyle(.secondary)
+                } else {
+                    Text("Automatic answers from one microphone require ElevenLabs Scribe v3 Live or a supported Deepgram Nova model.")
+                        .font(.caption).foregroundStyle(.secondary)
+                    Button("Select ElevenLabs Scribe v3 Live") {
+                        elevenModel = "scribe_v3_live"
+                        speechProvider = .eleven
+                    }.disabled(model.busy)
+                }
             }
             if model.route.question == .application {
                 Text("A browser process may include audio from multiple tabs.").font(.caption).foregroundStyle(.secondary)
@@ -960,6 +987,12 @@ private struct WorkspaceView: View {
                     ProgressView(value: Double(snapshot.levels[source] ?? 0)) {
                         Text(source + " · " + (snapshot.sources[source]?.rawValue.capitalized ?? "Idle"))
                     }
+                }
+                if model.route.question == .sharedMicrophone, model.state.isRunning, supportsSpeakerLabels {
+                    Text(snapshot.speakers.contains(where: { $0.role == .interviewer })
+                         ? "Confirmed interviewer questions can trigger answers."
+                         : "Automatic answers wait until you label an interviewer. Match voices to the transcript below.")
+                        .font(.caption).foregroundStyle(.secondary)
                 }
                 ForEach(snapshot.speakers) { speaker in
                     Picker("Speaker \(speaker.id.number)", selection: Binding(
@@ -1372,7 +1405,7 @@ private struct ProviderSettingsView: View {
                 TextField("Vocabulary hints (comma separated)", text: $speechVocabulary)
             }
             if speechCapabilities.diarization {
-                Text("Select Shared microphone in Audio Sources to assign detected speakers.")
+                Text("Turn on Interview on another device to assign roles to voices heard by one microphone.")
                     .font(.caption).foregroundStyle(.secondary)
             }
             connectionButton(.transcription)

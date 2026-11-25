@@ -11,10 +11,11 @@ public struct ElevenLabsSpeechConfiguration: Equatable, Sendable {
     public var silenceSeconds: Double
     public var vocabulary: [String]
     public var localActivityThreshold: Float
+    public var diarize: Bool
 
     public init(model: String = "scribe_v3_live", language: String? = nil, detectLanguage: Bool = true,
                 strategy: TranscriptionCommitStrategy = .semanticTurn, silenceSeconds: Double = 0.65,
-                vocabulary: [String] = [], localActivityThreshold: Float = 0.015) {
+                vocabulary: [String] = [], localActivityThreshold: Float = 0.015, diarize: Bool = false) {
         self.model = model
         self.language = language
         self.detectLanguage = detectLanguage
@@ -22,12 +23,13 @@ public struct ElevenLabsSpeechConfiguration: Equatable, Sendable {
         self.silenceSeconds = silenceSeconds
         self.vocabulary = vocabulary
         self.localActivityThreshold = localActivityThreshold
+        self.diarize = diarize
     }
 
     func request(key: String) throws -> URLRequest {
         guard !key.isEmpty else { throw ProviderFailure.missingCredentials }
         let capabilities = ProviderCapabilities.describe(.elevenLabs, model: model)
-        guard capabilities.models.contains(model), capabilities.commits.contains(strategy),
+        guard capabilities.models.contains(model), capabilities.commits.contains(strategy), !diarize || capabilities.diarization,
               silenceSeconds.isFinite, (0.192...3).contains(silenceSeconds), (0.005...0.08).contains(localActivityThreshold) else {
             throw ProviderFailure.unsupportedCapability
         }
@@ -48,11 +50,12 @@ public struct ElevenLabsSpeechConfiguration: Equatable, Sendable {
         parts.queryItems = [
             .init(name: "model_id", value: model), .init(name: "audio_format", value: "pcm_24000"),
             .init(name: "commit_strategy", value: strategyWire),
-            .init(name: "include_timestamps", value: "true"),
+            .init(name: "include_timestamps", value: diarize ? "false" : "true"),
             .init(name: "include_language_detection", value: detectLanguage ? "true" : "false"),
             .init(name: "vad_silence_threshold_secs", value: String(silenceSeconds)),
             .init(name: "enable_logging", value: "false")
         ]
+        if diarize { parts.queryItems?.append(.init(name: "diarize", value: "true")) }
         if let language, !language.isEmpty { parts.queryItems?.append(.init(name: "language_code", value: language)) }
         for word in vocabulary.prefix(25) where !word.isEmpty {
             parts.queryItems?.append(.init(name: "keyterms", value: String(word.prefix(32))))
@@ -77,6 +80,7 @@ struct ElevenLabsWire: Decodable, Sendable {
         let start: Double?
         let end: Double?
         let type: String?
+        let speaker_id: String?
     }
 
     let message_type: String
@@ -86,6 +90,9 @@ struct ElevenLabsWire: Decodable, Sendable {
     let language_code: String?
     let turn_probability: Double?
     let words: [Word]?
+    let segment_index: Int?
+    let from_speaker_id: String?
+    let to_speaker_id: String?
 
     static func decode(_ bytes: Data) throws -> Self {
         guard let value = try? JSONDecoder().decode(Self.self, from: bytes) else {
@@ -136,6 +143,11 @@ public actor ElevenLabsTranscriber: StreamingSTT {
         let samples: Range<Int64>
     }
 
+    private struct DiarizedCommit {
+        let text: String
+        let partial: Partial
+    }
+
     private struct CommitRequest {
         let samples: Range<Int64>
         var receivedFinal = false
@@ -162,6 +174,9 @@ public actor ElevenLabsTranscriber: StreamingSTT {
     private var nextItem = 0
     private var partial: Partial?
     private var companions: [Companion] = []
+    private var diarizedCommits: [Int: DiarizedCommit] = [:]
+    private var lastSegmentIndex = -1
+    private var speakerAliases: [Int: Int] = [:]
     private var lastFinalID: Int?
     private var finalRanges: [Range<Int64>] = []
     private var furthestFinalSample: Int64 = 0
@@ -217,7 +232,7 @@ public actor ElevenLabsTranscriber: StreamingSTT {
                 }
             } catch {
                 if !Task.isCancelled {
-                    await self?.fail(error, connection: id)
+                    await self?.fail(error, source: source, epoch: epoch, connection: id)
                 }
             }
         }
@@ -290,6 +305,9 @@ public actor ElevenLabsTranscriber: StreamingSTT {
         nextItem = 0
         partial = nil
         companions.removeAll()
+        diarizedCommits.removeAll()
+        lastSegmentIndex = -1
+        speakerAliases.removeAll()
         lastFinalID = nil
         finalRanges.removeAll()
         furthestFinalSample = 0
@@ -321,15 +339,20 @@ public actor ElevenLabsTranscriber: StreamingSTT {
 
     private func finishDrainIfReady() -> Bool {
         guard inputState == .draining, voice.isEmpty, commitRequests.isEmpty,
-              partial == nil, companions.isEmpty else { return false }
+              partial == nil, companions.isEmpty, diarizedCommits.isEmpty else { return false }
         inputState = .drained
         output?.finish()
         output = nil
         return true
     }
 
-    private func fail(_ error: any Error, connection: UUID) {
+    private func fail(_ error: any Error, source: CaptureSource, epoch: UUID, connection: UUID) {
         guard connectionID == connection, let output else { return }
+        for index in diarizedCommits.keys.sorted() {
+            guard let commit = diarizedCommits[index] else { continue }
+            try? emit(text: commit.text, partial: commit.partial, source: source, epoch: epoch, output: output)
+        }
+        diarizedCommits.removeAll()
         self.output = nil
         if let failure = error as? CaptureFailure { output.finish(throwing: failure) }
         else { output.finish(throwing: (error as? ProviderFailure) ?? .disconnected) }
@@ -337,6 +360,10 @@ public actor ElevenLabsTranscriber: StreamingSTT {
 
     private func receive(_ wire: ElevenLabsWire, source: CaptureSource, epoch: UUID, connection: UUID) throws -> Bool {
         guard !Task.isCancelled, connectionID == connection, let output else { return false }
+        if config.diarize, wire.message_type != "partial_transcript" {
+            try receiveDiarized(wire, source: source, epoch: epoch, output: output)
+            return !finishDrainIfReady()
+        }
         guard ["partial_transcript", "committed_transcript", "committed_transcript_with_timestamps"]
             .contains(wire.message_type) else { return true }
         guard let text = wire.text, text.utf8.count <= 32_768 else { throw ProviderFailure.malformedEvent }
@@ -369,20 +396,8 @@ public actor ElevenLabsTranscriber: StreamingSTT {
             partial = nil
             return true
         }
-        let words = (wire.words ?? []).prefix(1_024).filter { $0.type == nil || $0.type == "word" }.map {
-            TranscriptWord(text: $0.text, startSeconds: $0.start, endSeconds: $0.end)
-        }
-        // No request ID or end-of-input acknowledgment is exposed. Never discharge pending audio
-        // on an unpositioned/empty final or on a timestamp beyond sent audio.
-        guard let start = words.first?.startSeconds, let end = words.last?.endSeconds,
-              start.isFinite, end.isFinite, start >= 0, end > start,
-              end <= Double(sentSamples) / 24_000,
-              let first = Int64(exactly: (start * 24_000).rounded()),
-              let last = Int64(exactly: (end * 24_000).rounded()),
-              first < last else { return true }
-        let detail = Detail(text: text, words: words, language: wire.language_code,
-                            range: .init(startSeconds: start, endSeconds: end), samples: first..<last)
-        guard accepts(detail) else { return true }
+        let words = (wire.words ?? []).prefix(1_024).filter { $0.type == nil || $0.type == "word" }
+        guard let detail = timingDetail(text, language: wire.language_code, words: words), accepts(detail) else { return true }
 
         if let match = companions.firstIndex(where: { $0.text == text }) {
             // A different segment's detailed result can wait behind the earlier plain boundary.
@@ -406,6 +421,70 @@ public actor ElevenLabsTranscriber: StreamingSTT {
         return !finishDrainIfReady()
     }
 
+    private func receiveDiarized(_ wire: ElevenLabsWire, source: CaptureSource, epoch: UUID,
+                                 output: AsyncThrowingStream<TranscriptEvent, Error>.Continuation) throws {
+        switch wire.message_type {
+        case "committed_transcript":
+            guard let index = wire.segment_index, index >= 0,
+                  let text = wire.text, text.utf8.count <= 32_768 else { throw ProviderFailure.malformedEvent }
+            guard index > lastSegmentIndex else { return }
+            lastSegmentIndex = index
+            guard !text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else { return }
+            guard diarizedCommits.count < 64 else { throw CaptureFailure.bufferOverrun }
+            let boundary = partial ?? Partial(id: allocateItem(), observedFrame: lastVoicedFrameStart, text: text)
+            partial = nil
+            diarizedCommits[index] = .init(text: text, partial: boundary)
+            // Show the stable text while waiting for its indexed speaker evidence.
+            if case .dropped = output.yield(.init(source: source, epoch: epoch, itemID: "scribe-\(boundary.id)",
+                                                text: text, state: .partial)) { throw CaptureFailure.bufferOverrun }
+        case "diarized_transcript":
+            guard let index = wire.segment_index, let commit = diarizedCommits.removeValue(forKey: index) else { return }
+            if wire.text == commit.text, let words = wire.words, words.count <= 1_024 {
+                let lexical = words.filter { $0.type == "word" || ($0.type == nil && !$0.text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty) }
+                if let detail = timingDetail(commit.text, language: wire.language_code, words: lexical), accepts(detail) {
+                    let speaker = canonicalSpeaker(lexical.first?.speaker_id)
+                    let labeledText = lexical.map(\.text).joined()
+                    let oneSpeaker = speaker != nil && lexical.allSatisfy { canonicalSpeaker($0.speaker_id) == speaker }
+                        && labeledText.filter { $0.isLetter || $0.isNumber } == commit.text.filter { $0.isLetter || $0.isNumber }
+                    try finalize(detail, partial: commit.partial, source: source, epoch: epoch, output: output,
+                                 speaker: oneSpeaker ? speaker : nil)
+                    return
+                }
+            }
+            try emit(text: commit.text, partial: commit.partial, source: source, epoch: epoch, output: output)
+        case "speakers_merged":
+            guard let from = canonicalSpeaker(wire.from_speaker_id), let to = canonicalSpeaker(wire.to_speaker_id) else {
+                throw ProviderFailure.malformedEvent
+            }
+            guard from != to else { return }
+            guard speakerAliases.count < 256 else { throw CaptureFailure.bufferOverrun }
+            speakerAliases[from] = to
+            if case .dropped = output.yield(.init(source: source, epoch: epoch, itemID: "scribe-merge-\(from)-\(to)",
+                                                text: "", state: .speakerMerge(from: from, to: to))) {
+                throw CaptureFailure.bufferOverrun
+            }
+        default: break
+        }
+    }
+
+    private func canonicalSpeaker(_ id: String?) -> Int? {
+        guard let id, id.hasPrefix("speaker_"), let number = Int(id.dropFirst(8)), number >= 0 else { return nil }
+        var current = number
+        while let next = speakerAliases[current] { current = next }
+        return current
+    }
+
+    private func timingDetail(_ text: String, language: String?, words: some BidirectionalCollection<ElevenLabsWire.Word>) -> Detail? {
+        // Unpositioned or empty results cannot resolve submitted audio or pending commits.
+        guard let start = words.first?.start, let end = words.last?.end,
+              start.isFinite, end.isFinite, start >= 0, end > start, end <= Double(sentSamples) / 24_000,
+              let first = Int64(exactly: (start * 24_000).rounded()),
+              let last = Int64(exactly: (end * 24_000).rounded()), first < last else { return nil }
+        let normalized = words.map { TranscriptWord(text: $0.text, startSeconds: $0.start, endSeconds: $0.end) }
+        return Detail(text: text, words: normalized, language: language,
+                      range: .init(startSeconds: start, endSeconds: end), samples: first..<last)
+    }
+
     private func accepts(_ detail: Detail) -> Bool {
         let range = detail.samples
         guard !finalRanges.contains(range) else { return false }
@@ -426,7 +505,7 @@ public actor ElevenLabsTranscriber: StreamingSTT {
     }
 
     private func finalize(_ detail: Detail, partial: Partial?, source: CaptureSource, epoch: UUID,
-                          output: AsyncThrowingStream<TranscriptEvent, Error>.Continuation) throws {
+                          output: AsyncThrowingStream<TranscriptEvent, Error>.Continuation, speaker: Int? = nil) throws {
         let range = detail.samples
         voice = voice.flatMap { Self.subtract(range, from: $0) }
         guard voice.count <= 4_096 else { throw CaptureFailure.bufferOverrun }
@@ -437,17 +516,24 @@ public actor ElevenLabsTranscriber: StreamingSTT {
             request.receivedFinal && !voice.contains(where: { $0.overlaps(request.samples) })
         }
 
-        let item = partial?.id ?? allocateItem()
-        let event = TranscriptEvent(source: source, epoch: epoch, itemID: "scribe-\(item)",
-                                    previousItemID: lastFinalID.map { "scribe-\($0)" },
-                                    text: detail.text, state: .final, words: detail.words,
-                                    language: detail.language, turnProbability: partial?.prediction, audioRange: detail.range)
-        lastFinalID = item
         furthestFinalSample = max(furthestFinalSample, range.upperBound)
         if finalRanges.count == 256 { finalRanges.removeFirst() }
         finalRanges.append(range)
         if recentFinalTexts.count == 32 { recentFinalTexts.removeFirst() }
         recentFinalTexts.append(detail.text)
+        try emit(text: detail.text, partial: partial, source: source, epoch: epoch, output: output, detail: detail,
+                 speaker: speaker)
+    }
+
+    private func emit(text: String, partial: Partial?, source: CaptureSource, epoch: UUID,
+                      output: AsyncThrowingStream<TranscriptEvent, Error>.Continuation,
+                      detail: Detail? = nil, speaker: Int? = nil) throws {
+        let item = partial?.id ?? allocateItem()
+        let event = TranscriptEvent(source: source, epoch: epoch, itemID: "scribe-\(item)",
+                                    previousItemID: lastFinalID.map { "scribe-\($0)" }, text: text, state: .final,
+                                    speaker: speaker, words: detail?.words ?? [], language: detail?.language,
+                                    turnProbability: partial?.prediction, audioRange: detail?.range)
+        lastFinalID = item
         if case .dropped = output.yield(event) { throw CaptureFailure.bufferOverrun }
     }
 

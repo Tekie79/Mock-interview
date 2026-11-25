@@ -1,6 +1,6 @@
 # Audio routing and compatibility
 
-The question route and candidate microphone are independent. The candidate microphone always has the candidate role, even when the transcription provider returns speaker metadata. A shared microphone starts with unknown speakers. Deepgram supplies word-level diarization for user assignment, and assignments clear on source replacement or reconnect. Choose separate devices when using two microphones. Headphones reduce acoustic leakage.
+The question route and candidate microphone are independent. The candidate microphone always has the candidate role, even when the transcription provider returns speaker metadata. Turn on **Interview on another device** to select a shared room microphone. ElevenLabs Scribe v3 Live and supported Deepgram Nova models supply word-level speaker labels for user assignment. Shared speech starts unknown. Only fresh finals from a confirmed interviewer enter question detection. Candidate turns remain available as context. Unresolved and mixed turns remain in the transcript. A source replacement, reconnect or pause clears assignments. An ElevenLabs speaker merge clears the affected labels and withdraws affected automatic answers until the speaker is confirmed again. Choose separate devices when using two microphones. Headphones reduce acoustic leakage.
 
 | Route | Implementation | Compatibility still to verify on hardware |
 |---|---|---|
