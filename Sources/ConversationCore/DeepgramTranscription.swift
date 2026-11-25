@@ -7,11 +7,18 @@ public struct DeepgramTranscriptAssembler {
     private struct Result: Decodable {
         struct Channel: Decodable {
             struct Alternative: Decodable {
-                struct Word: Decodable { let speaker: Int? }
+                struct Word: Decodable {
+                    let speaker: Int?
+                    let word: String?
+                    let punctuated_word: String?
+                    let start: Double?
+                    let end: Double?
+                }
                 let transcript: String
                 let words: [Word]?
             }
             let alternatives: [Alternative]
+            let detected_language: String?
         }
         let type: String
         let start: Double?
@@ -27,6 +34,7 @@ public struct DeepgramTranscriptAssembler {
     private struct Segment {
         let text: String
         let speaker: Int?
+        let words: [TranscriptWord]
     }
 
     private var finalized: [Double: Segment] = [:]
@@ -58,48 +66,78 @@ public struct DeepgramTranscriptAssembler {
         } else {
             speaker = nil
         }
-        let segment = Segment(text: text, speaker: speaker)
-        let boundary = result.speech_final == true || result.from_finalize == true
+        let words = (alternative.words ?? []).prefix(1_024).compactMap { word -> TranscriptWord? in
+            guard let text = word.punctuated_word ?? word.word else { return nil }
+            return .init(text: text, startSeconds: word.start, endSeconds: word.end, speaker: word.speaker)
+        }
+        let segment = Segment(text: text, speaker: speaker, words: words)
+        let boundary = result.is_final == true && (result.speech_final == true || result.from_finalize == true)
         if result.is_final == true, !text.isEmpty {
             finalized[start] = segment
         }
         guard finalized.count <= 64 else { throw ProviderFailure.disconnected }
         var accumulated = finalized
         if result.is_final != true, !text.isEmpty { accumulated[start] = segment }
-        let ordered = accumulated.sorted(by: { $0.key < $1.key }).map(\.value)
-        let combined = ordered.map(\.text).joined(separator: " ")
-        let soleSpeaker = ordered.first?.speaker
-        let resolved = ordered.allSatisfy { $0.speaker == soleSpeaker } ? soleSpeaker : nil
-        let id = "deepgram-\(utterance)"
+        let event = combined(accumulated, final: boundary, language: result.channel?.detected_language)
         if boundary {
             completedThrough = start + duration
             utterance += 1
             finalized.removeAll(keepingCapacity: true)
         }
-        guard !combined.isEmpty else { return nil }
-        return TranscriptEvent(source: source, epoch: epoch, itemID: id, text: combined,
-                               state: boundary ? .final : .partial, speaker: boundary ? resolved : nil)
+        return event
     }
+    mutating func drain() -> TranscriptEvent? {
+        let event = combined(finalized, final: true, language: nil)
+        finalized.removeAll()
+        return event
+    }
+
+    private func combined(_ segments: [Double: Segment], final: Bool, language: String?) -> TranscriptEvent? {
+        let ordered = segments.sorted(by: { $0.key < $1.key }).map(\.value)
+        let text = ordered.map(\.text).joined(separator: " ")
+        guard !text.isEmpty else { return nil }
+        let soleSpeaker = ordered.first?.speaker
+        let speaker = final && ordered.allSatisfy { $0.speaker == soleSpeaker } ? soleSpeaker : nil
+        return TranscriptEvent(source: source, epoch: epoch, itemID: "deepgram-\(utterance)", text: text,
+                               state: final ? .final : .partial, speaker: speaker,
+                               words: Array(ordered.flatMap(\.words).prefix(1_024)), language: language)
+    }
+
+    static func isStreamSummary(_ bytes: Data) -> Bool {
+        (try? JSONDecoder().decode(Result.self, from: bytes))?.type == "Metadata"
+    }
+
 }
 
 public actor DeepgramTranscriber: StreamingSTT {
+    public nonisolated let behavior = TranscriptionBehavior(delivery: .providerCommit, streamsSilence: true)
     private let apiKey: String
     private let model: String
     private let language: String?
     private let diarize: Bool
+    private let endpointMilliseconds: Int
+    private let vocabulary: [String]
     private var socket: URLSessionWebSocketTask?
     private var reader: Task<Void, Never>?
     private var keepAlive: Task<Void, Never>?
 
-    public init(apiKey: String, model: String = "nova-3", language: String? = nil, diarize: Bool = false) {
+    public init(apiKey: String, model: String = "nova-3", language: String? = nil, diarize: Bool = false,
+                endpointMilliseconds: Int = 300, vocabulary: [String] = []) {
         self.apiKey = apiKey
         self.model = model
         self.language = language
         self.diarize = diarize
+        self.endpointMilliseconds = endpointMilliseconds
+        self.vocabulary = vocabulary
     }
 
-    static func request(apiKey: String, model: String, language: String?, diarize: Bool = false) throws -> URLRequest {
+    static func request(apiKey: String, model: String, language: String?, diarize: Bool = false,
+                        endpointMilliseconds: Int = 300, vocabulary: [String] = []) throws -> URLRequest {
         guard !apiKey.isEmpty else { throw ProviderFailure.missingCredentials }
+        guard (100...3_000).contains(endpointMilliseconds),
+              !diarize || ProviderCapabilities.describe(.deepgram, model: model).diarization else {
+            throw ProviderFailure.unsupportedCapability
+        }
         var components = URLComponents()
         components.scheme = "wss"
         components.host = "api.deepgram.com"
@@ -110,10 +148,17 @@ public actor DeepgramTranscriber: StreamingSTT {
             URLQueryItem(name: "sample_rate", value: "24000"),
             URLQueryItem(name: "channels", value: "1"),
             URLQueryItem(name: "interim_results", value: "true"),
-            URLQueryItem(name: "endpointing", value: "300"),
+            URLQueryItem(name: "endpointing", value: String(endpointMilliseconds)),
             URLQueryItem(name: "punctuate", value: "true")
         ]
         if diarize { components.queryItems?.append(.init(name: "diarize_model", value: "v1")) }
+        for term in vocabulary.prefix(25) where !term.isEmpty {
+            if model.hasPrefix("nova-3") {
+                components.queryItems?.append(.init(name: "keyterm", value: String(term.prefix(32))))
+            } else if model.hasPrefix("nova-2") {
+                components.queryItems?.append(.init(name: "keywords", value: String(term.prefix(32))))
+            }
+        }
         if let language, !language.isEmpty { components.queryItems?.append(.init(name: "language", value: language)) }
         guard !model.isEmpty, let url = components.url else { throw ProviderFailure.requestRejected }
         var request = URLRequest(url: url, timeoutInterval: 12)
@@ -124,7 +169,8 @@ public actor DeepgramTranscriber: StreamingSTT {
     public func connect(source: CaptureSource, epoch: UUID) async throws
         -> AsyncThrowingStream<TranscriptEvent, Error> {
         guard socket == nil else { throw CaptureFailure.alreadyRunning }
-        let request = try Self.request(apiKey: apiKey, model: model, language: language, diarize: diarize)
+        let request = try Self.request(apiKey: apiKey, model: model, language: language, diarize: diarize,
+                                       endpointMilliseconds: endpointMilliseconds, vocabulary: vocabulary)
         let socket = URLSession.shared.webSocketTask(with: request)
         self.socket = socket
         socket.resume()
@@ -162,6 +208,13 @@ public actor DeepgramTranscriber: StreamingSTT {
                     case .string(let text): bytes = Data(text.utf8)
                     @unknown default: throw ProviderFailure.malformedEvent
                     }
+                    if DeepgramTranscriptAssembler.isStreamSummary(bytes) {
+                        if let event = assembler.drain(), case .dropped = output.yield(event) {
+                            throw CaptureFailure.bufferOverrun
+                        }
+                        output.finish()
+                        return
+                    }
                     if let event = try assembler.receive(bytes), case .dropped = output.yield(event) {
                         throw CaptureFailure.bufferOverrun
                     }
@@ -169,6 +222,7 @@ public actor DeepgramTranscriber: StreamingSTT {
                 output.finish()
             } catch {
                 if Task.isCancelled { output.finish() }
+                else if let error = error as? CaptureFailure { output.finish(throwing: error) }
                 else { output.finish(throwing: (error as? ProviderFailure) ?? .disconnected) }
             }
         }
@@ -195,6 +249,11 @@ public actor DeepgramTranscriber: StreamingSTT {
 
     public func commit() async throws {
         try await send(.string(#"{"type":"Finalize"}"#))
+    }
+
+    public func finishInput() async throws {
+        keepAlive?.cancel()
+        try await send(.string(#"{"type":"CloseStream"}"#))
     }
 
     public func close() async {

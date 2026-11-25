@@ -39,7 +39,9 @@ final class FoundationRealtimeSocket: RealtimeSocket, @unchecked Sendable {
             return try await withTaskCancellationHandler(operation: body, onCancel: { self.close() })
         } catch {
             try Task.checkCancellation()
-            if let response = task.response { try OpenAIResponsesClient.validate(response) }
+            if let response = task.response as? HTTPURLResponse, response.statusCode >= 400 {
+                try OpenAIResponsesClient.validate(response)
+            }
             if let error = error as? ProviderFailure { throw error }
             if (error as? URLError)?.code == .timedOut { throw ProviderFailure.timeout }
             throw ProviderFailure.disconnected

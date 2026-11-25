@@ -5,7 +5,7 @@ import FoundationNetworking
 import XCTest
 @testable import ConversationCore
 
-private actor ScriptedSocket: RealtimeSocket {
+actor ScriptedSocket: RealtimeSocket {
     private var unread: [Data] = []
     private(set) var sent: [String] = []
 
