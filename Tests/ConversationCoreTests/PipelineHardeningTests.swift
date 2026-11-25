@@ -214,3 +214,91 @@ extension PipelineHardeningTests {
         await session.stop()
     }
 }
+
+private struct HangingGenerator: TextGenerator {
+    func stream(_ request: AnswerRequest) async throws -> AsyncThrowingStream<GenerationEvent, Error> {
+        try await Task.sleep(for: .seconds(30))
+        return AsyncThrowingStream { $0.finish() }
+    }
+}
+
+extension PipelineHardeningTests {
+    func testMultipartConnectorWaitsAndPauseCancelsClassifier() async throws {
+        let stt = InjectedSTT()
+        let classifier = HeldClassifier()
+        let source = CaptureSource(id: "question", role: .interviewer)
+        let session = InterviewSession(channels: [.init(source: source, audio: HeldAudio(), makeSTT: { stt })],
+                                       detector: .init(classifier: classifier), generator: FixedAnswer())
+        await session.start()
+        try await eventually { await session.current().state == .listening }
+        await stt.send("Explain your approach and", item: "one")
+        try await eventually { await session.current().transcript.count == 1 }
+        let inputCount = await classifier.inputs.count
+        XCTAssertEqual(inputCount, 0)
+        await stt.send("how you measured success.", item: "two")
+        try await eventually { await classifier.inputs.count == 1 }
+        let merged = await classifier.inputs.first?.turn.text
+        XCTAssertEqual(merged, "Explain your approach and how you measured success.")
+        await session.pause()
+        let paused = await session.current()
+        XCTAssertEqual(paused.state, .paused)
+        XCTAssertTrue(paused.answers.isEmpty)
+        await session.start()
+        try await eventually { await session.current().state == .listening }
+        await session.stop()
+    }
+
+    func testGenerationDeadlineDoesNotChangeCaptureLifecycle() async throws {
+        let session = InterviewSession(channels: [], detector: .init(classifier: HeldClassifier(slow: false)),
+                                       generator: HangingGenerator(), generationTimeout: .milliseconds(20))
+        await session.start()
+        await session.manualQuestion("Explain deadlines.")
+        try await eventually { await session.current().answers.last?.state == .failed }
+        let failed = await session.current()
+        XCTAssertEqual(failed.state, .degraded)
+        XCTAssertTrue(failed.answers.last?.failure?.contains("timed out") == true)
+        await session.stop()
+    }
+}
+
+private actor UnreadySTT: StreamingSTT {
+    private(set) var attempted = false
+    func connect(source: CaptureSource, epoch: UUID) async throws -> AsyncThrowingStream<TranscriptEvent, Error> {
+        attempted = true
+        try await Task.sleep(for: .seconds(30))
+        throw ProviderFailure.authentication
+    }
+    func append(_ frame: AudioFrame) {}
+    func commit() {}
+    func close() {}
+}
+
+private actor ObservedAudio: AudioSource {
+    private(set) var started = false
+    func start() -> AsyncThrowingStream<AudioFrame, Error> {
+        started = true
+        return AsyncThrowingStream { $0.finish() }
+    }
+    func stop() {}
+}
+
+extension PipelineHardeningTests {
+    func testCaptureNeverStartsBeforeProviderReadinessAndStopCancelsStartup() async throws {
+        let audio = ObservedAudio()
+        let stt = UnreadySTT()
+        let session = InterviewSession(channels: [
+            .init(source: .init(id: "question", role: .interviewer), audio: audio, makeSTT: { stt })
+        ], detector: .init(classifier: HeldClassifier()), generator: FixedAnswer())
+        await session.start()
+        try await eventually { await stt.attempted }
+        let starting = await session.current()
+        XCTAssertEqual(starting.state, .connecting)
+        let launched = await audio.started
+        XCTAssertFalse(launched)
+        await session.stop()
+        let stopped = await session.current()
+        XCTAssertEqual(stopped.state, .stopped)
+        let launchedAfterStop = await audio.started
+        XCTAssertFalse(launchedAfterStop)
+    }
+}

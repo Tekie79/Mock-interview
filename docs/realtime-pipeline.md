@@ -1,0 +1,16 @@
+# Real-time processing and latency
+
+| Stage | Queue or owner | Failure behavior |
+|---|---|---|
+| Native audio | Preallocated callback slots, a bounded native stream and a bounded normalized PCM stream | Overrun terminates that activation and records a minimum dropped-chunk count |
+| Recognition | One transport per selected source, opened before capture starts | Authentication and unsupported configurations fail immediately. Network/rate-limit recovery makes at most two retries and never replays old captured audio |
+| Transcript ingestion | Session actor stores up to 2,000 current display rows and consumes provider-ordered events | Late source epochs and repeated final IDs are discarded. Partial updates replace the displayed item |
+| Classification | FIFO, 32 waiting final interviewer turns by default, independent of ingestion | Overflow retains the transcript and surfaces a manual action. Queued turns expire; reassignments and source changes cancel affected work |
+| Retrieval and answer | One active answer revision; keyword context and optional embeddings run asynchronously | Manual actions supersede older classifier results. New questions supersede older generations. Timeout preserves the partial response and permits retry |
+| UI | Latest-value snapshot with throttled level publication | Pinned and unrendered answers have no first-visible measurement until displayed |
+
+Actual candidate speech is a distinct role-labelled, bounded context. It can resolve interviewer follow-ups and never supplies verified experience. Target role/job requirements and locally approved evidence go to providers in separate fields. Suggested answers never enter actual conversation context. Untrusted text remains data. The settings expose turn counts and conservative UTF-8 context budgets for classification and generation.
+
+For graceful replay, the transport stops accepting input, flushes any active commit and waits for expected final events or provider stream completion. The drain has a deadline. An unconfirmed final is surfaced as incomplete. Normal EOF allows queued classification and answer work to finish. User stop instead cancels uploads, transport consumers, queued classification, and the active answer revision, then acknowledges release. A source failure revokes its epoch. A candidate-only connection is degraded.
+
+Durations use `ContinuousClock`. The native callback records capture time. Speech start and endpoint use local voice-level observations. The manual-commit path associates a completed segment with its commit; provider-owned segmentation may omit audio timestamps when a local observation cannot be associated. Diagnostics can include capture-to-speech, speech duration, endpoint-to-commit, speech-to-partial, commit-to-final, classifier queue, classification, retrieval, request-to-token, endpoint-to-visible and endpoint-to-terminal. The visible boundary uses a SwiftUI display callback rather than the first transport fragment. Local speech boundaries and display callbacks are engineering approximations. No latency target has been established from these development tests.

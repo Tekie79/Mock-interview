@@ -7,6 +7,7 @@ import UniformTypeIdentifiers
 @main
 struct MockInterviewApp: App {
     @StateObject private var model = WorkspaceModel()
+    @NSApplicationDelegateAdaptor(InterviewAppDelegate.self) private var appDelegate
     @Environment(\.openWindow) private var openWindow
     @AppStorage("pauseShortcut") private var pauseShortcut = "p"
     @AppStorage("compactShortcut") private var compactShortcut = "k"
@@ -14,6 +15,7 @@ struct MockInterviewApp: App {
     var body: some Scene {
         WindowGroup("Mock Interview", id: "workspace") {
             WorkspaceView(model: model)
+                .onAppear { appDelegate.model = model }
                 .frame(minWidth: 850, minHeight: 600)
         }
         .defaultSize(width: 1080, height: 720)
@@ -45,6 +47,20 @@ struct MockInterviewApp: App {
             ProviderSettingsView(model: model)
                 .frame(width: 530, height: 665)
         }
+    }
+}
+
+@MainActor
+private final class InterviewAppDelegate: NSObject, NSApplicationDelegate {
+    weak var model: WorkspaceModel?
+
+    func applicationShouldTerminate(_ sender: NSApplication) -> NSApplication.TerminateReply {
+        guard let model else { return .terminateNow }
+        Task {
+            await model.shutdownForTermination()
+            sender.reply(toApplicationShouldTerminate: true)
+        }
+        return .terminateLater
     }
 }
 
@@ -136,7 +152,7 @@ private struct SessionProviders {
         case .apple:
             let locale = defaults.string(forKey: "appleSpeechLocale") ?? "en-US"
             let mode = AppleRecognitionMode(rawValue: defaults.string(forKey: "appleSpeechMode") ?? "") ?? .onDevice
-            return { AppleSpeechTranscriber(locale: locale, mode: mode, vocabulary: vocabulary) }
+            return { AppleSpeechRouter(locale: locale, mode: mode, vocabulary: vocabulary) }
         case .eleven:
             let credential = try key("elevenlabs")
             let model = defaults.string(forKey: "elevenModel") ?? "scribe_v3_live"
@@ -244,7 +260,11 @@ final class WorkspaceModel: ObservableObject {
                     .appendingPathComponent("MockInterview", isDirectory: true)
                 try FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true,
                                                         attributes: [.posixPermissions: 0o700])
-                store = try KnowledgeStore(url: dir.appendingPathComponent("interviews.sqlite"))
+                let database = dir.appendingPathComponent("interviews.sqlite")
+                try FileManager.default.setAttributes([.posixPermissions: 0o700], ofItemAtPath: dir.path)
+                let opened = try KnowledgeStore(url: database)
+                try FileManager.default.setAttributes([.posixPermissions: 0o600], ofItemAtPath: database.path)
+                store = opened
             } catch {
                 self.error = "Local profile storage could not open."
             }
@@ -322,7 +342,7 @@ final class WorkspaceModel: ObservableObject {
     }
 
     func startOrResume() {
-        guard !busy, !testing, !state.isRunning else { return }
+        guard !busy, !testing, !state.isRunning, state != .failed else { return }
         busy = true
         error = nil
         Task {
@@ -354,8 +374,10 @@ final class WorkspaceModel: ObservableObject {
                                                          tokenBudget: options.object(forKey: "classifierContextBudget") as? Int ?? 3_000)
                 let answerBudget = ContextBudget(turns: options.object(forKey: "answerContextTurns") as? Int ?? 12,
                                                  tokenBudget: options.object(forKey: "answerContextBudget") as? Int ?? 3_000)
-                let timeout = options.object(forKey: "generationTimeout") as? Double ?? 45
-                let grace = options.object(forKey: "completionGrace") as? Double ?? 3
+                let seconds = options.object(forKey: "generationTimeout") as? Double ?? 45
+                let timeout = seconds.isFinite ? min(45, max(5, seconds)) : 45
+                let continuation = options.object(forKey: "completionGrace") as? Double ?? 3
+                let grace = continuation.isFinite ? min(6, max(0.5, continuation)) : 3
                 var context: [String] = []
                 if let profile {
                     let role = [profile.role, profile.seniority, profile.industry].filter { !$0.isEmpty }
@@ -423,23 +445,35 @@ final class WorkspaceModel: ObservableObject {
     }
 
     func stop() {
-        guard let session, active, !busy else { return }
+        guard active, !busy else { return }
         busy = true
         Task {
-            await session.stop()
-            snapshot = await session.current()
-            endedAt = .now
-            if retainNextSession, let record = finishedRecord() {
-                do {
-                    guard let store else { throw StorageFailure.invalidRecord }
-                    try await store.saveInterview(record)
-                } catch {
-                    self.error = "The session could not be saved. Review it before clearing the workspace."
-                }
-            }
-            retainNextSession = false
+            await stopSession()
             busy = false
         }
+    }
+
+    func shutdownForTermination() async {
+        captureTest?.cancel()
+        await captureTest?.value
+        await stopSession()
+    }
+
+    private func stopSession() async {
+        guard let session, endedAt == nil else { return }
+        await session.stop()
+        guard endedAt == nil else { return }
+        snapshot = await session.current()
+        endedAt = .now
+        if retainNextSession, let record = finishedRecord() {
+            do {
+                guard let store else { throw StorageFailure.invalidRecord }
+                try await store.saveInterview(record)
+            } catch {
+                self.error = "The session could not be saved. Review it before clearing the workspace."
+            }
+        }
+        retainNextSession = false
     }
 
     func finishedRecord() -> SavedInterview? {
@@ -717,7 +751,7 @@ private struct WorkspaceView: View {
             }
             if model.state.isRunning {
                 Button("Pause", action: model.pause)
-            } else {
+            } else if model.state != .failed {
                 Button(model.state == .paused ? "Resume" : "Start", action: model.startOrResume)
                     .buttonStyle(.borderedProminent).disabled(model.busy || model.testing)
             }

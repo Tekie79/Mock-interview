@@ -36,13 +36,22 @@ public actor AppleSpeechTranscriber: StreamingSTT {
         SFSpeechRecognizer(locale: Locale(identifier: locale))?.supportsOnDeviceRecognition == true
     }
 
+    static func requestRecognitionPermission() async -> Bool {
+        let permissions = AsyncStream<SFSpeechRecognizerAuthorizationStatus> { output in
+            SFSpeechRecognizer.requestAuthorization {
+                output.yield($0)
+                output.finish()
+            }
+        }
+        var responses = permissions.makeAsyncIterator()
+        return await responses.next() == .authorized
+    }
+
     public func connect(source: CaptureSource, epoch: UUID) async throws -> AsyncThrowingStream<TranscriptEvent, Error> {
         guard identity == nil else { throw CaptureFailure.alreadyRunning }
-        let authorization = await withCheckedContinuation { continuation in
-            SFSpeechRecognizer.requestAuthorization { continuation.resume(returning: $0) }
-        }
+        let authorized = await Self.requestRecognitionPermission()
         try Task.checkCancellation()
-        guard authorization == .authorized else { throw AppleRecognitionFailure.speechPermissionDenied }
+        guard authorized else { throw AppleRecognitionFailure.speechPermissionDenied }
         let available = Self.hasOnDeviceRecognition(locale: locale)
         try AppleRecognitionPolicy.validate(language: locale, supported: Set(Self.languages()),
                                             mode: mode, onDeviceAvailable: available)
@@ -150,7 +159,7 @@ public actor AppleSpeechTranscriber: StreamingSTT {
         if final {
             if active == index {
                 // A system recognition limit interrupted still-open audio. Start a fresh epoch.
-                output?.finish(throwing: ProviderFailure.incompleteTranscription)
+                output?.finish(throwing: ProviderFailure.unavailable)
                 return
             }
             requests.removeValue(forKey: index)

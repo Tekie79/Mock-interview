@@ -86,7 +86,7 @@ public struct TranscriptEvent: Equatable, Sendable {
 }
 
 public protocol StreamingSTT: Sendable {
-    var behavior: TranscriptionBehavior { get }
+    var behavior: TranscriptionBehavior { get async }
     func connect(source: CaptureSource, epoch: UUID) async throws
         -> AsyncThrowingStream<TranscriptEvent, Error>
     func append(_ frame: AudioFrame) async throws

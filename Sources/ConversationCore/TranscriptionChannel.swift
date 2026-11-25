@@ -6,6 +6,7 @@ public enum ChannelEvent: Sendable {
     case level(source: CaptureSource, value: Float)
     case gap(source: CaptureSource)
     case dropped(source: CaptureSource, chunks: Int)
+    case sentAudio(source: CaptureSource, samples: Int)
 }
 
 /// One transport and one capture activation per source. Reconnect never replays audio.
@@ -69,7 +70,7 @@ public struct TranscriptionChannel: Sendable {
                          transcripts: AsyncThrowingStream<TranscriptEvent, Error>,
                          stt: any StreamingSTT,
                          events: @escaping @Sendable (ChannelEvent) async -> Void) async throws {
-        let behavior = stt.behavior
+        let behavior = await stt.behavior
         guard behavior.sampleRate == 24_000 else { throw CaptureFailure.invalidFormat }
         let providerCommits = behavior.delivery == .providerCommit
         let progress = CommitProgress(requiresStreamEnd: providerCommits)
@@ -80,10 +81,22 @@ public struct TranscriptionChannel: Sendable {
                 var span: PipelineTiming?
                 var lastSampleEnd: Int64?
                 var latest: AudioFrame?
+                var latestVoicedAt: ContinuousClock.Instant?
+                var sampleUsage = 0
+
+                func send(_ frame: AudioFrame) async throws {
+                    try await stt.append(frame)
+                    sampleUsage += frame.pcm.count / 2
+                    if sampleUsage >= 24_000 {
+                        await events(.sentAudio(source: source, samples: sampleUsage))
+                        sampleUsage = 0
+                    }
+                }
                 for try await frame in frames {
                     try Task.checkCancellation()
                     guard frame.source == source, frame.sampleRate == 24_000, !frame.pcm.isEmpty,
-                          frame.pcm.count.isMultiple(of: 2), frame.startSample >= 0 else {
+                          frame.pcm.count.isMultiple(of: 2), frame.startSample >= 0,
+                          frame.startSample <= Int64.max - Int64(frame.pcm.count / 2) else {
                         throw CaptureFailure.invalidFormat
                     }
                     if let lastSampleEnd, frame.startSample != lastSampleEnd {
@@ -92,27 +105,28 @@ public struct TranscriptionChannel: Sendable {
                     lastSampleEnd = frame.startSample + Int64(frame.pcm.count / 2)
                     latest = frame
                     let activity = endpoint.observe(frame)
+                    if activity.level >= threshold { latestVoicedAt = frame.capturedAt }
                     await events(.level(source: source, value: activity.level))
                     if span != nil {
-                        try await stt.append(frame)
+                        try await send(frame)
                     } else if activity.level >= threshold {
                         var began = PipelineTiming()
                         began.capture = preRoll.first?.capturedAt ?? frame.capturedAt
                         began.speechStart = frame.capturedAt
                         span = began
                         if !behavior.streamsSilence {
-                            for leading in preRoll { try await stt.append(leading) }
+                            for leading in preRoll { try await send(leading) }
                         }
                         preRoll.removeAll(keepingCapacity: true)
-                        try await stt.append(frame)
+                        try await send(frame)
                     } else if behavior.streamsSilence {
-                        try await stt.append(frame)
+                        try await send(frame)
                     } else {
                         preRoll.append(frame)
                         if preRoll.count > 12 { preRoll.removeFirst() }
                     }
                     if activity.shouldCommit, var closing = span {
-                        closing.endpoint = frame.capturedAt
+                        closing.endpoint = latestVoicedAt ?? frame.capturedAt
                         closing.commit = .now
                         if providerCommits {
                             await progress.observedSpeech(closing)
@@ -125,7 +139,7 @@ public struct TranscriptionChannel: Sendable {
                 }
                 try Task.checkCancellation()
                 if var closing = span {
-                    closing.endpoint = latest?.capturedAt
+                    closing.endpoint = latestVoicedAt ?? latest?.capturedAt
                     closing.commit = .now
                     if providerCommits {
                         await progress.observedSpeech(closing)
@@ -134,6 +148,7 @@ public struct TranscriptionChannel: Sendable {
                         try await stt.commit()
                     }
                 }
+                if sampleUsage > 0 { await events(.sentAudio(source: source, samples: sampleUsage)) }
                 await progress.requestFinish()
                 try await stt.finishInput()
                 try await drain(progress)
@@ -147,6 +162,15 @@ public struct TranscriptionChannel: Sendable {
                     await progress.delivered(tagged)
                 }
                 guard await progress.streamEnded() else { throw ProviderFailure.disconnected }
+            }
+            if !providerCommits {
+                group.addTask {
+                    while !Task.isCancelled {
+                        try await Task.sleep(for: .seconds(1))
+                        if await progress.hasExpiredCommit { throw ProviderFailure.timeout }
+                    }
+                    throw CancellationError()
+                }
             }
             defer { group.cancelAll() }
             _ = try await group.next()
@@ -191,6 +215,11 @@ private actor CommitProgress {
     }
 
     var isFinished: Bool { finishing && pending.isEmpty && (!requiresStreamEnd || ended) }
+
+    var hasExpiredCommit: Bool {
+        guard !finishing, let oldest = pending.first?.commit else { return false }
+        return oldest.duration(to: .now) > .seconds(15)
+    }
 
     func streamEnded() -> Bool {
         ended = true

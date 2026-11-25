@@ -604,3 +604,13 @@ Reviewed November 24, 2026. These are starting points for implementation; verify
 ---
 
 **Definition of done:** a working macOS application, not a simulated UI, with actual selected-source audio capture, continuous live transcription, question-only automatic response generation, grounded profile-aware answers, independent capture and generation lifecycles, and reproducible evidence from the acceptance matrix. Document remaining blockers explicitly. No claim of implementation or real hardware qualification is made by this specification.
+
+## 16. M10.1 requirements overlay
+
+M10.1 extends V1 while retaining the macOS 14.2 minimum and the existing candidate suppression and no-save defaults.
+
+- Separately configure question audio and the optional candidate microphone. Question routes include the default digital output, an explicitly identified digital device, an application/process group, dedicated interviewer input, shared input and replay. Use supported Core Audio routes and visible, actionable source status.
+- Decouple audio, recognition and ingestion from bounded question classification, retrieval and answer generation. Preserve source/role/epoch/answer revisions during source failure, retry and replacement. Bound replay draining and differentiate normal EOF from Stop.
+- Use actual role-labelled dialogue, approved evidence and target job context without treating suggestions or job requirements as candidate experience. Expose context limits and stage timing without asserting acceptance targets.
+- Configure recognition, classification, answers and embeddings independently. Support Apple Speech, ElevenLabs and the existing API providers according to model capabilities. ChatGPT plan use requires officially authorized eligibility and has its own credential and billing boundary.
+- Maintain explicit implementation and development coverage for FR-01–21 and the M10.1 additions in the [traceability matrix](requirements-traceability.md). Reserve physical devices, paid-provider qualification and acceptance targets for M11.

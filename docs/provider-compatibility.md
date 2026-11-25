@@ -1,21 +1,26 @@
-# Provider and platform qualification
+# Provider capabilities and authority
 
-Source of truth: requirements §5–6, §9 and §15. Provider payloads and model availability can change. All live integration status starts unverified.
+| Provider | Transcription | Classification / text | Authentication and billing |
+|---|---|---|---|
+| Apple Speech | Common PCM from any route, local discovery, explicit strict or network-permitted mode, partials, per-segment rollover, vocabulary hints | Unavailable | macOS Speech Recognition permission |
+| OpenAI API | GA Realtime transcription WebSocket, 24 kHz PCM, acknowledged configuration, manual commit, ordered provider finals. Vocabulary prompt only on compatible models | Responses structured decisions, SSE text, optional independent embeddings | Keychain API key; separately billed API |
+| ElevenLabs | Scribe v3 Live and v2 Realtime, 24 kHz PCM, replacement partials, committed timestamps, locale/detection and keyterms. Manual/VAD, with turn prediction on v3 only | Unavailable | Keychain API key; separately billed usage which can include silence |
+| Deepgram | Nova streaming, timestamp metadata, configurable endpointing, scoped speaker labels, KeepAlive and CloseStream | Unavailable | Keychain API key; separately billed API |
+| Anthropic Claude | Unavailable | Messages structured output and streaming text on supported models | Keychain API key; separately billed API |
+| ChatGPT subscription | Unavailable under the documented plan preview | Public Responses contract implemented behind an inactive eligibility boundary; account-specific stream/schema support requires live confirmation | Separate OAuth token and Keychain domain; eligibility unresolved |
 
-| Role | Baseline | Adapter policy |
-|---|---|---|
-| STT P0 | OpenAI Realtime transcription (`gpt-live-transcribe` proposed) | Verify current model, endpoint, auth, session update, audio format, delta/completed events and explicit commit requirements. Per-source streams. |
-| LLM P0 | OpenAI Responses API | Streaming text, structured question decisions, configured model IDs, validate schema, handle errors and cancellation. |
-| STT P1 | Deepgram | Verify chosen model and endpointing, normalize into domain events. |
-| LLM P1 | Anthropic Claude | Stream text; structured decision capability must be tested, no silent fallback to unsupported model. |
-| Audio | Core Audio taps / AVAudioEngine / optional ScreenCaptureKit | Verify minimum OS, permission strings, route/termination, fallback scope and cleanup with Apple SDK. |
+Transcription, classifier, answer and embeddings selections are independent. Connection tests are per service and can send synthetic requests. Provider model lists are documented possibilities, with account availability validated on connection. Diagnostic messages expose typed states and counters and omit response bodies, credentials and dialogue.
 
-No live credentials in CI; fixtures represent protocol events and must be labeled synthetic or sanitized. Tests must cover unknown/additional fields, malformed data, provider item ordering, cancellation, timeout, authentication, rate limits and stream disconnect. Do not claim model availability until verified; document observed errors and adapter contract revisions in decisions.
+## Apple Speech
 
-References (also in requirements §15):
-- https://developers.openai.com/api/docs/guides/realtime-transcription
-- https://developers.openai.com/api/docs/guides/streaming-responses
-- https://developers.openai.com/api/docs/guides/structured-outputs
-- https://developers.deepgram.com/docs/understand-endpointing-interim-results
-- https://docs.anthropic.com/
-- https://developer.apple.com/documentation/CoreAudio/capturing-system-audio-with-core-audio-taps
+On macOS 26 and later, strict recognition selects the on-device SpeechAnalyzer path when compatible assets are already installed and no custom vocabulary is requested. It negotiates the analyzer's PCM format, handles volatile and final ranges, and drains after input ends. Earlier systems, network-permitted mode and custom vocabulary use the classic `SFSpeechAudioBufferRecognitionRequest` path. It discovers installed recognizer capabilities for the selected locale, applies `requiresOnDeviceRecognition` on every strict request and never automatically switches to network recognition. It uses bounded overlapping tasks for completed segments and publishes finals in request order. Speech permission, actual recognizer availability, language accuracy and resource behavior need a physical Mac. [Apple Speech](https://developer.apple.com/documentation/speech)
+
+## ElevenLabs
+
+The native WebSocket waits for `session_started`; 24 kHz mono PCM is batched and sent in authenticated `input_audio_chunk` messages. The adapter selects the timestamped final to avoid double-delivering the companion commit. Scribe v3 Live turn probability is passed to the classifier as completion evidence. Audio segmentation alone never authorizes an answer. Audio usage is separately billed. An authoritative account balance is not available through these realtime events. ElevenLabs speaker merges are not wired to live role assignment. [Realtime wire](https://elevenlabs.io/docs/api-reference/speech-to-text/v-1-speech-to-text-realtime) · [Commit strategies](https://elevenlabs.io/docs/eleven-api/guides/how-to/speech-to-text/realtime/transcripts-and-commit-strategies)
+
+## ChatGPT plan authorization
+
+OpenAI documents dynamic registration for its open-source/local preview and an approval path for commercial integrations. This public repository has no selected distribution license or documented partner approval. The application keeps live sign-in disabled until its eligibility is confirmed. Account linking requires a browser and loopback listener, followed by an authorized end-to-end check. Neither is presented as a working sign-in. The portable contract validates callback state, bound client identity, ID-token issuer/audience/expiry/nonce, account identity and plan scopes. The macOS components provide secure PKCE generation, signed-JWKS validation, per-client Keychain timestamps and credentials, refresh rotation and revocation. The dedicated inference boundary uses only plan tokens on the public Responses surface and requires model capability verification. No API-key fallback is possible. No plan allowance is displayed without an official result. [Eligibility](https://developers.openai.com/siwc/token-sharing-open-source) · [Registration and sign-in](https://developers.openai.com/siwc/token-sharing-open-source/sign-in) · [Models and inference](https://developers.openai.com/siwc/token-sharing-open-source/models-and-inference) · [Preview limits](https://developers.openai.com/siwc/token-sharing-open-source/preview-limitations)
+
+OpenAI and Deepgram wire schemas were checked against their official guides. Synthetic fixtures qualify implementation behavior only. [OpenAI Realtime transcription](https://developers.openai.com/api/docs/guides/realtime-transcription) · [Deepgram streaming](https://developers.deepgram.com/reference/speech-to-text/listen-streaming) · [Deepgram finalization](https://developers.deepgram.com/docs/finalize)

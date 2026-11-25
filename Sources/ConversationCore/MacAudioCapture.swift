@@ -145,7 +145,16 @@ public actor MacAudioSource: AudioSource {
         do {
             switch input {
             case .microphone(let uid):
-                guard await AVCaptureDevice.requestAccess(for: .audio) else { throw CaptureFailure.permissionDenied }
+                let permission = AsyncStream<Bool> { status in
+                    AVCaptureDevice.requestAccess(for: .audio) {
+                        status.yield($0)
+                        status.finish()
+                    }
+                }
+                var responses = permission.makeAsyncIterator()
+                let granted = await responses.next()
+                try Task.checkCancellation()
+                guard granted == true else { throw CaptureFailure.permissionDenied }
                 guard runID == id else { throw CancellationError() }
                 guard let device = try MacAudioDevices.devices(scope: kAudioDevicePropertyScopeInput)
                     .first(where: { $0.choice.id == uid })?.object else { throw CaptureFailure.sourceUnavailable }

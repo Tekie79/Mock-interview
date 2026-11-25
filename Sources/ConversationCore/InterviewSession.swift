@@ -88,6 +88,7 @@ public struct InterviewSnapshot: Sendable {
     public internal(set) var sources: [String: LiveState] = [:]
     public internal(set) var discardedQuestions = 0
     public internal(set) var droppedAudioChunks = 0
+    public internal(set) var submittedAudioSamples: [String: Int] = [:]
 
     public internal(set) var state: State = .idle
     public internal(set) var transcript: [InterviewTranscript] = []
@@ -346,6 +347,8 @@ public actor InterviewSession {
             recordIssue("Audio gap on " + source.id + ". Reconnecting.")
             invalidateSourceWork(source)
             await detector.invalidate(source)
+        case .sentAudio(let source, let samples):
+            snapshot.submittedAudioSamples[source.id, default: 0] += samples
         case .dropped(_, let chunks):
             snapshot.droppedAudioChunks += chunks
         case .level(let source, let value):
@@ -427,6 +430,12 @@ public actor InterviewSession {
 
     private func classify(_ work: QuestionWork, activation: UUID) async {
         guard eligible(work, activation: activation) else { return }
+        if let ingested = work.event.timing.final, ingested.duration(to: .now) > .seconds(12) {
+            snapshot.discardedQuestions += 1
+            recordIssue("A question expired in the classifier queue. Use the transcript to ask manually.")
+            publish()
+            return
+        }
         var timing = work.event.timing
         timing.classificationStarted = .now
         let job = Task { [detector, classificationBudget, classificationEvidence, interviewContext] in
@@ -465,6 +474,9 @@ public actor InterviewSession {
         snapshot.sources[source.id] = failure == nil ? .stopped : .failed
         snapshot.connected.remove(source.id)
         snapshot.levels.removeValue(forKey: source.id)
+        if failure == nil, source.id == "Replay" {
+            recordIssue("Replay audio finished. Pending questions can finish from the retained transcript.")
+        }
         if let failure {
             snapshot.speakers.removeAll { $0.id.sourceID == source.id }
             roleBarriers = roleBarriers.filter { $0.key.sourceID != source.id }

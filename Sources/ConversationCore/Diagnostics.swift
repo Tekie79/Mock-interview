@@ -58,6 +58,7 @@ public extension InterviewSnapshot {
             "Session state: \(state.rawValue)",
             "Connected source count: \(connected.count)",
             "STT reconnects: \(reconnects)",
+            "PCM seconds submitted locally: \(submittedAudioSamples.values.reduce(0, +) / 24_000)",
             "Minimum dropped audio chunks: \(droppedAudioChunks)",
             "Question queue overflows: \(discardedQuestions)",
             "Final transcript segments: \(transcript.filter(\.isFinal).count)",

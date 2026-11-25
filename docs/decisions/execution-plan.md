@@ -16,3 +16,7 @@ Base is `feature/v1-cloud-implementation` at `ea24dc780aeca50358ba452446f3c5b99a
 | J | Trace FR-01–21 and M10.1, fix verified regressions, run development checks and open PR |
 
 Use the portable build and test scripts at each checkpoint. Hosted macOS CI owns Xcode compilation and the unsigned package check. Report runtime, provider-account and physical-device gaps separately. Confirm external authorization eligibility before enabling subscription features.
+
+## Review handoff
+
+The A–J code commits and linked traceability table are the development review baseline. Follow the documented live eligibility gate for ChatGPT. Review unresolved coverage, then plan a separate M11 run on supported Apple Silicon hardware with representative devices, synthetic recordings and approved provider test accounts.

@@ -116,7 +116,7 @@ public actor ElevenLabsTranscriber: StreamingSTT {
     private var nextItem = 0
     private var partial = ""
     private var prediction: Double?
-    private var lastRange: ClosedRange<Double>?
+    private var lastCommit: (range: ClosedRange<Double>, text: String)?
     private var finishing = false
     private var speechSeen = false
     private var endpoint = AudioEndpoint()
@@ -208,7 +208,7 @@ public actor ElevenLabsTranscriber: StreamingSTT {
         nextItem = 0
         partial = ""
         prediction = nil
-        lastRange = nil
+        lastCommit = nil
         finishing = false
         speechSeen = false
         endpoint = AudioEndpoint()
@@ -258,8 +258,10 @@ public actor ElevenLabsTranscriber: StreamingSTT {
         }
         if let start = words.first?.startSeconds, let end = words.last?.endSeconds, start <= end {
             let range = start...end
-            if range == lastRange { return true }
-            lastRange = range
+            if let previous = lastCommit, range == previous.range, text == previous.text, partial.isEmpty {
+                return true
+            }
+            lastCommit = (range, text)
         }
         let event = TranscriptEvent(source: source, epoch: epoch, itemID: item,
                                     previousItemID: nextItem > 0 ? "scribe-\(nextItem - 1)" : nil,

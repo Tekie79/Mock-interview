@@ -15,6 +15,7 @@ Canonical roadmap: `docs/requirements.md` §13. Milestone status lives in `docs/
 | M08 | Deepgram and Anthropic adapters | Independent model/provider settings and contract/smoke tests | feature/m08-providers |
 | M09 | Review, exports, solo practice, rubric | Actual vs. suggestion separation, training workflow | feature/m09-training |
 | M10 | DOCX, optional embeddings, mixed-mic role resolution | Separate role quality and retrieval tests | feature/m10-retrieval-roles |
+| M10.1 | Real-time pipeline, output routes, independent providers and audit | [Traceability](docs/requirements-traceability.md), regression suite and macOS package build | feature/m10-1-pipeline-hardening |
 | M11 | Final qualification | Real-Mac regression, latency, 90-min sessions, packaging | feature/m11-qualification |
 
 P2 local AI and Windows require owner approval. A cloud workstream can implement multiple dependent milestones on one feature branch with separate checkpoints; do not wait for final hardware acceptance before writing the remaining portable code. Mark each platform/provider blocker accurately. Avoid concurrent branches that modify the same contracts.
