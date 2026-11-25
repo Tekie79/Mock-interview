@@ -15,6 +15,7 @@ The original bootstrap is documented in the baseline evidence below. Status voca
 | M08 | IMPLEMENTED (qualification pending) | Deepgram PCM WebSocket, Anthropic classifier and answer streams, configurable independent provider/model settings. |
 | M09 | IMPLEMENTED (qualification pending) | Opt-in saved history with SQLite search, review and missed questions, text export, and solo practice with AI-estimate coaching. |
 | M10 | IMPLEMENTED (qualification pending) | DOCX text extraction, opt-in hybrid retrieval, and explicit epoch-scoped roles for diarized mixed microphone speech. |
+| M10.2 | IN PROGRESS | Development hardening and cross-platform verification. Live ChatGPT authorization depends on official eligibility. |
 | M11 | NOT STARTED | Final qualification |
 
 ## Verification log

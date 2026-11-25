@@ -122,19 +122,38 @@ private enum SpeechProvider: String, CaseIterable, Identifiable {
 private enum TextProvider: String, CaseIterable, Identifiable {
     case openai = "OpenAI"
     case anthropic = "Anthropic"
+    case chatGPT = "ChatGPT plan"
     var id: String { rawValue }
-    var provider: ProviderID { self == .openai ? .openai : .anthropic }
+    var provider: ProviderID {
+        switch self {
+        case .openai: .openai
+        case .anthropic: .anthropic
+        case .chatGPT: .chatGPTSubscription
+        }
+    }
+
+    static var available: [Self] {
+        ChatGPTPlanEligibility.desktopAvailable ? allCases : [.openai, .anthropic]
+    }
 }
 
+@MainActor
 private struct SessionProviders {
+    static let chatGPT = ChatGPTPlanAccounts.makeDesktop()
+    static let usageURL = URL(string: "https://chatgpt.com/settings/usage")
     let transcriber: @Sendable () -> any StreamingSTT
     let classifier: any QuestionClassifier
     let generator: any TextGenerator
+    let usesChatGPT: Bool
 
-    init(defaults: UserDefaults, diarize: Bool = false) throws {
-        transcriber = try Self.transcriptionFactory(defaults: defaults, diarize: diarize)
-        classifier = try Self.questionClassifier(defaults: defaults)
-        generator = try Self.answerGenerator(defaults: defaults)
+    init(defaults: UserDefaults, diarize: Bool = false) async throws {
+        let classification = try ProviderSelection.decode(defaults.string(forKey: "classificationProvider"), default: TextProvider.openai)
+        let answer = try ProviderSelection.decode(defaults.string(forKey: "answerProvider"), default: TextProvider.openai)
+        let transcriber = try Self.transcriptionFactory(defaults: defaults, diarize: diarize)
+        self.classifier = try await Self.questionClassifier(defaults: defaults, provider: classification)
+        self.generator = try await Self.answerGenerator(defaults: defaults, provider: answer)
+        self.transcriber = transcriber
+        self.usesChatGPT = classification == .chatGPT || answer == .chatGPT
     }
 
     private static func key(_ account: String) throws -> String {
@@ -178,8 +197,7 @@ private struct SessionProviders {
         }
     }
 
-    static func questionClassifier(defaults: UserDefaults) throws -> any QuestionClassifier {
-        let provider = try ProviderSelection.decode(defaults.string(forKey: "classificationProvider"), default: TextProvider.openai)
+    private static func questionClassifier(defaults: UserDefaults, provider: TextProvider) async throws -> any QuestionClassifier {
         let instructions = defaults.string(forKey: "classificationInstructions") ?? ""
         switch provider {
         case .openai:
@@ -188,6 +206,9 @@ private struct SessionProviders {
         case .anthropic:
             return AnthropicQuestionClassifier(apiKey: try key("anthropic"),
                 model: defaults.string(forKey: "anthropicQuestionModel") ?? "claude-haiku-4-5", guidance: instructions)
+        case .chatGPT:
+            guard let chatGPT else { throw PlanAuthorizationFailure.unavailable }
+            return try await chatGPT.classifier(model: defaults.string(forKey: "chatGPTQuestionModel") ?? "", guidance: instructions)
         }
     }
 
@@ -197,8 +218,8 @@ private struct SessionProviders {
                                model: defaults.string(forKey: "embeddingModel") ?? "text-embedding-3-small")
     }
 
-    static func answerGenerator(defaults: UserDefaults) throws -> any TextGenerator {
-        let answer = try ProviderSelection.decode(defaults.string(forKey: "answerProvider"), default: TextProvider.openai)
+    static func answerGenerator(defaults: UserDefaults, provider: TextProvider? = nil) async throws -> any TextGenerator {
+        let answer = try provider ?? ProviderSelection.decode(defaults.string(forKey: "answerProvider"), default: TextProvider.openai)
         switch answer {
         case .openai:
             return OpenAITextGenerator(apiKey: try key("openai"),
@@ -206,6 +227,30 @@ private struct SessionProviders {
         case .anthropic:
             return AnthropicTextGenerator(apiKey: try key("anthropic"),
                 model: defaults.string(forKey: "anthropicAnswerModel") ?? "claude-haiku-4-5")
+        case .chatGPT:
+            guard let chatGPT else { throw PlanAuthorizationFailure.unavailable }
+            return try await chatGPT.generator(model: defaults.string(forKey: "chatGPTAnswerModel") ?? "")
+        }
+    }
+
+    static func testTextProvider(_ service: ProviderService, defaults: UserDefaults, question: String) async throws {
+        let classification = service == .classification
+        let provider = try ProviderSelection.decode(defaults.string(forKey: classification ? "classificationProvider" : "answerProvider"),
+                                                    default: TextProvider.openai)
+        if provider == .chatGPT {
+            guard let chatGPT else { throw PlanAuthorizationFailure.unavailable }
+            try await chatGPT.checkModel(defaults.string(forKey: classification ? "chatGPTQuestionModel" : "chatGPTAnswerModel") ?? "",
+                service: service, guidance: defaults.string(forKey: "classificationInstructions") ?? "")
+        } else if classification {
+            let classifier = try await questionClassifier(defaults: defaults, provider: provider)
+            let source = CaptureSource(id: "Connection test", role: .interviewer)
+            let result = try await classifier.classify(QuestionInput(
+                turn: TranscriptEvent(source: source, epoch: UUID(), itemID: "test", text: question, state: .final),
+                previousQuestions: []))
+            guard result.decision == .accept, !result.parts.isEmpty else { throw ProviderFailure.unsupportedCapability }
+        } else {
+            let generator = try await answerGenerator(defaults: defaults, provider: provider)
+            for try await _ in try await generator.stream(.init(question: question, instructions: "One sentence.", evidence: [])) {}
         }
     }
 }
@@ -237,12 +282,18 @@ final class WorkspaceModel: ObservableObject {
     @Published var providerTest: String?
     @Published var checkingProvider = false
     @Published var configuredKeys = Set(["openai", "deepgram", "anthropic", "elevenlabs"].filter { Keychain.load($0) != nil })
+    @Published private(set) var chatGPTSnapshot: ChatGPTPlanAccounts.Snapshot?
+    @Published private(set) var chatGPTStatus: String?
+    @Published private(set) var chatGPTBusy = false
+    @Published private(set) var chatGPTCanCancel = false
+    @Published private(set) var sessionUsesChatGPT = false
 
     private(set) var store: KnowledgeStore?
     private var session: InterviewSession?
     private var recordID = UUID()
     private var observations: Task<Void, Never>?
     private var captureTest: Task<Void, Never>?
+    private var chatGPTTask: Task<Void, Never>?
 
     var state: InterviewSnapshot.State { snapshot?.state ?? .idle }
     var active: Bool { state.isRunning || [.pausing, .paused, .stopping, .failed].contains(state) }
@@ -304,7 +355,7 @@ final class WorkspaceModel: ObservableObject {
     }
 
     func checkProvider(_ service: ProviderService) {
-        guard !checkingProvider, !active else { return }
+        guard !checkingProvider, !active, !chatGPTBusy else { return }
         checkingProvider = true
         providerTest = "Checking \(service.rawValue)…"
         Task {
@@ -319,16 +370,10 @@ final class WorkspaceModel: ObservableObject {
                     try await factory().testConnection()
                     providerTest = "Transcription provider acknowledged the connection."
                 case .classification:
-                    let classifier = try SessionProviders.questionClassifier(defaults: defaults)
-                    let source = CaptureSource(id: "Connection test", role: .interviewer)
-                    let result = try await classifier.classify(QuestionInput(
-                        turn: TranscriptEvent(source: source, epoch: UUID(), itemID: "test",
-                                              text: question, state: .final), previousQuestions: []))
-                    guard result.decision == .accept, !result.parts.isEmpty else { throw ProviderFailure.unsupportedCapability }
+                    try await SessionProviders.testTextProvider(service, defaults: defaults, question: question)
                     providerTest = "The classifier returned a structured answerable-question decision."
                 case .answer:
-                    let generator = try SessionProviders.answerGenerator(defaults: defaults)
-                    for try await _ in try await generator.stream(.init(question: question, instructions: "One sentence.", evidence: [])) {}
+                    try await SessionProviders.testTextProvider(service, defaults: defaults, question: question)
                     providerTest = "The selected answer model completed a text stream."
                 case .embeddings:
                     guard let embeddings = try SessionProviders.embeddings(defaults: defaults),
@@ -337,12 +382,54 @@ final class WorkspaceModel: ObservableObject {
                     }
                     providerTest = "The embedding model returned a vector."
                 }
-            } catch { providerTest = publicErrorMessage(error) }
+            } catch { providerTest = (error as? PlanAuthorizationFailure)?.errorDescription ?? publicErrorMessage(error) }
+        }
+    }
+
+    func loadChatGPT() {
+        guard chatGPTSnapshot == nil else { return }
+        updateChatGPT { _ in }
+    }
+
+    func signInToChatGPT(_ id: UUID? = nil, requestConsent: Bool = false) {
+        updateChatGPT(cancellable: true) { try await $0.signIn(account: id, requestConsent: requestConsent) }
+    }
+
+    func signOutOfChatGPT(_ id: UUID) {
+        updateChatGPT { try await $0.signOut(account: id) }
+    }
+
+    func cancelChatGPTSignIn() { chatGPTTask?.cancel() }
+
+    func refreshChatGPTModels() { updateChatGPT { _ in } }
+
+    private func updateChatGPT(cancellable: Bool = false,
+                              operation: @escaping (ChatGPTPlanAccounts) async throws -> Void) {
+        guard let accounts = SessionProviders.chatGPT, !chatGPTBusy, !active, !busy, !checkingProvider else { return }
+        chatGPTStatus = nil
+        chatGPTBusy = true
+        chatGPTCanCancel = cancellable
+        chatGPTTask = Task {
+            defer { chatGPTBusy = false; chatGPTCanCancel = false; chatGPTTask = nil }
+            do {
+                try await operation(accounts)
+                let snapshot = try await accounts.snapshot()
+                chatGPTSnapshot = snapshot
+                if snapshot.accounts.first(where: { $0.id == snapshot.active })?.planEnabled == true {
+                    try await accounts.refreshCatalog()
+                    chatGPTSnapshot = try await accounts.snapshot()
+                }
+            } catch {
+                chatGPTSnapshot = try? await accounts.snapshot()
+                if !Task.isCancelled {
+                    chatGPTStatus = (error as? PlanAuthorizationFailure)?.errorDescription ?? publicErrorMessage(error)
+                }
+            }
         }
     }
 
     func startOrResume() {
-        guard !busy, !testing, !state.isRunning, state != .failed else { return }
+        guard !busy, !testing, !chatGPTBusy, !state.isRunning, state != .failed else { return }
         busy = true
         error = nil
         Task {
@@ -354,7 +441,7 @@ final class WorkspaceModel: ObservableObject {
             do {
                 let options = UserDefaults.standard
                 let diarize = route.question == .sharedMicrophone
-                let providers = try SessionProviders(defaults: options, diarize: diarize)
+                let providers = try await SessionProviders(defaults: options, diarize: diarize)
                 let embedding = try? SessionProviders.embeddings(defaults: options)
                 let format = AnswerFormat(rawValue: options.string(forKey: "answerFormat") ?? "") ?? .brief
                 let threshold = options.object(forKey: "questionThreshold") as? Double ?? 0.8
@@ -407,6 +494,7 @@ final class WorkspaceModel: ObservableObject {
                 }
                 observations?.cancel()
                 session = next
+                sessionUsesChatGPT = providers.usesChatGPT
                 selectedAnswer = nil
                 pinned = false
                 recordID = UUID()
@@ -425,7 +513,7 @@ final class WorkspaceModel: ObservableObject {
             } catch CaptureFailure.sourceUnavailable {
                 error = "Select each required audio source before starting."
             } catch {
-                self.error = publicErrorMessage(error)
+                self.error = (error as? PlanAuthorizationFailure)?.errorDescription ?? publicErrorMessage(error)
             }
         }
     }
@@ -454,6 +542,8 @@ final class WorkspaceModel: ObservableObject {
     }
 
     func shutdownForTermination() async {
+        chatGPTTask?.cancel()
+        await chatGPTTask?.value
         captureTest?.cancel()
         await captureTest?.value
         await stopSession()
@@ -483,7 +573,7 @@ final class WorkspaceModel: ObservableObject {
     }
 
     func coaching(_ input: CoachingInput) async throws -> String {
-        let provider = try SessionProviders.answerGenerator(defaults: .standard)
+        let provider = try await SessionProviders.answerGenerator(defaults: .standard)
         var text = ""
         for try await event in try await provider.stream(input.request()) {
             if case .text(let fragment) = event {
@@ -888,6 +978,12 @@ private struct AnswerPanel: View {
                 Button(model.pinned ? "Unpin" : "Pin", action: model.togglePin)
                     .disabled(model.displayedAnswer == nil)
             }
+            if model.active, model.sessionUsesChatGPT, let url = SessionProviders.usageURL {
+                HStack {
+                    Text("Using ChatGPT plan")
+                    Link("Manage usage", destination: url)
+                }.font(.caption)
+            }
             if let answer = model.displayedAnswer {
                 Text(answer.question.original).font(.title3.weight(.medium))
                 ScrollView {
@@ -981,6 +1077,8 @@ private struct ProviderSettingsView: View {
     @AppStorage("deepgramModel") private var deepgramModel = "nova-3"
     @AppStorage("anthropicQuestionModel") private var anthropicQuestionModel = "claude-haiku-4-5"
     @AppStorage("anthropicAnswerModel") private var anthropicAnswerModel = "claude-haiku-4-5"
+    @AppStorage("chatGPTQuestionModel") private var chatGPTQuestionModel = ""
+    @AppStorage("chatGPTAnswerModel") private var chatGPTAnswerModel = ""
     @AppStorage("sttModel") private var sttModel = "gpt-live-transcribe"
     @AppStorage("questionModel") private var questionModel = "gpt-4.1-mini"
     @AppStorage("answerModel") private var answerModel = "gpt-4.1-mini"
@@ -1042,6 +1140,7 @@ private struct ProviderSettingsView: View {
         .onAppear {
             presets = (try? JSONDecoder().decode([ProviderPreset].self, from: storedPresets)) ?? ProviderPreset.defaults()
             persistPresets()
+            model.loadChatGPT()
         }
     }
 
@@ -1052,9 +1151,54 @@ private struct ProviderSettingsView: View {
             ProviderKeyField(model: model, provider: "ElevenLabs", account: "elevenlabs")
             ProviderKeyField(model: model, provider: "Deepgram", account: "deepgram")
             ProviderKeyField(model: model, provider: "Anthropic", account: "anthropic")
-            LabeledContent("ChatGPT subscription") { Text("Authorization unavailable") }
-            Text(ChatGPTPlanEligibility.requirement + " " + ChatGPTPlanEligibility.audioAvailability)
-                .font(.caption).foregroundStyle(.secondary)
+            if ChatGPTPlanEligibility.desktopAvailable {
+                chatGPTAccounts
+            } else {
+                LabeledContent("ChatGPT subscription") { Text("Authorization unavailable") }
+                Text(ChatGPTPlanEligibility.requirement)
+                    .font(.caption).foregroundStyle(.secondary)
+            }
+            Text(ChatGPTPlanEligibility.audioAvailability).font(.caption).foregroundStyle(.secondary)
+        }
+    }
+
+    private var chatGPTAccounts: some View {
+        Group {
+            Text("Eligible text requests can use your ChatGPT plan. This is separate from API billing.")
+            if let snapshot = model.chatGPTSnapshot {
+                ForEach(snapshot.accounts) { account in
+                    VStack(alignment: .leading, spacing: 4) {
+                        Text(account.label)
+                        Text(!account.signedIn ? "Signed out" : !account.planEnabled ? "Plan usage not enabled"
+                             : account.id == snapshot.active ? "Active account" : "Saved account")
+                            .font(.caption).foregroundStyle(.secondary)
+                        HStack {
+                            if account.signedIn, !account.planEnabled {
+                                Button("Enable plan usage") { model.signInToChatGPT(account.id, requestConsent: true) }
+                            }
+                            Button(account.id == snapshot.active ? "Sign in again" : "Continue with this account") {
+                                model.signInToChatGPT(account.id)
+                            }
+                            if account.signedIn {
+                                Button("Sign out", role: .destructive) { model.signOutOfChatGPT(account.id) }
+                            }
+                        }
+                    }.disabled(model.chatGPTBusy || model.checkingProvider)
+                }
+            }
+            HStack {
+                Button("Continue with ChatGPT") { model.signInToChatGPT() }
+                    .help("Add another ChatGPT account or workspace.")
+                if model.chatGPTSnapshot?.active != nil {
+                    Button("Refresh models") { model.refreshChatGPTModels() }
+                }
+            }.disabled(model.chatGPTBusy || model.checkingProvider)
+            if model.chatGPTCanCancel {
+                Button("Cancel sign-in") { model.cancelChatGPTSignIn() }
+            }
+            if model.chatGPTBusy { ProgressView().controlSize(.small).accessibilityLabel("ChatGPT account operation") }
+            if let status = model.chatGPTStatus { Text(status).font(.caption).foregroundStyle(.secondary) }
+            if let url = SessionProviders.usageURL { Link("Manage ChatGPT usage", destination: url) }
         }
     }
 
@@ -1113,9 +1257,16 @@ private struct ProviderSettingsView: View {
     private var classificationSettings: some View {
         Section("Question classification") {
             Picker("Provider", selection: $classification) {
-                ForEach(TextProvider.allCases) { Text($0.rawValue).tag($0) }
+                ForEach(TextProvider.available) { Text($0.rawValue).tag($0) }
+                if classification == .chatGPT, !ChatGPTPlanEligibility.desktopAvailable {
+                    Text("ChatGPT plan (unavailable)").tag(TextProvider.chatGPT)
+                }
             }
-            TextField("Model", text: classification == .openai ? $questionModel : $anthropicQuestionModel)
+            if classification == .chatGPT {
+                chatGPTModelPicker($chatGPTQuestionModel)
+            } else {
+                TextField("Model", text: classification == .openai ? $questionModel : $anthropicQuestionModel)
+            }
             Slider(value: $confidence, in: 0.5...1) { Text("Question confidence") }
             Slider(value: $completionGrace, in: 0.5...6, step: 0.5) { Text("Continuation window") }
             Stepper("Context turns: \(classifierTurns)", value: $classifierTurns, in: 0...32)
@@ -1128,9 +1279,16 @@ private struct ProviderSettingsView: View {
     private var generationSettings: some View {
         Section("Answer generation") {
             Picker("Provider", selection: $answer) {
-                ForEach(TextProvider.allCases) { Text($0.rawValue).tag($0) }
+                ForEach(TextProvider.available) { Text($0.rawValue).tag($0) }
+                if answer == .chatGPT, !ChatGPTPlanEligibility.desktopAvailable {
+                    Text("ChatGPT plan (unavailable)").tag(TextProvider.chatGPT)
+                }
             }
-            TextField("Model", text: answer == .openai ? $answerModel : $anthropicAnswerModel)
+            if answer == .chatGPT {
+                chatGPTModelPicker($chatGPTAnswerModel)
+            } else {
+                TextField("Model", text: answer == .openai ? $answerModel : $anthropicAnswerModel)
+            }
             Picker("Format", selection: $format) {
                 ForEach(AnswerFormat.allCases) { Text($0.rawValue).tag($0) }
             }
@@ -1144,6 +1302,17 @@ private struct ProviderSettingsView: View {
             Slider(value: $fontSize, in: 12...30, step: 1) { Text("Answer text size") }
             connectionButton(.answer)
         }
+    }
+
+    private func chatGPTModelPicker(_ selection: Binding<String>) -> some View {
+        let models = model.chatGPTSnapshot?.models ?? []
+        return Picker("ChatGPT plan model", selection: selection) {
+            Text("Select a model").tag("")
+            if !selection.wrappedValue.isEmpty, !models.contains(where: { $0.slug == selection.wrappedValue }) {
+                Text("Selected model unavailable").tag(selection.wrappedValue)
+            }
+            ForEach(models) { Text($0.displayName).tag($0.slug) }
+        }.disabled(models.isEmpty)
     }
 
     private var knowledgeSettings: some View {
@@ -1171,7 +1340,7 @@ private struct ProviderSettingsView: View {
 
     private func connectionButton(_ service: ProviderService) -> some View {
         Button("Test " + service.rawValue.capitalized) { model.checkProvider(service) }
-            .disabled(model.checkingProvider)
+            .disabled(model.checkingProvider || model.chatGPTBusy)
             .help("May send a synthetic request using the selected provider.")
     }
 
@@ -1232,10 +1401,13 @@ private struct ProviderSettingsView: View {
         }
         return ProviderPreset(id: id, name: String(name.trimmingCharacters(in: .whitespacesAndNewlines).prefix(80)),
             transcription: speech.provider, transcriptionModel: selected, classifier: classification.provider,
-            classificationModel: classification == .openai ? questionModel : anthropicQuestionModel,
-            answer: answer.provider, answerModel: answer == .openai ? answerModel : anthropicAnswerModel,
+            classificationModel: classification == .chatGPT ? chatGPTQuestionModel
+                : classification == .openai ? questionModel : anthropicQuestionModel,
+            answer: answer.provider, answerModel: answer == .chatGPT ? chatGPTAnswerModel
+                : answer == .openai ? answerModel : anthropicAnswerModel,
             language: speech == .apple ? appleLocale : sttLanguage, appleRecognitionMode: appleMode,
-            commit: elevenCommit, embeddingsModel: semanticRetrieval ? embeddingModel : nil)
+            commit: speech == .eleven ? elevenCommit : speech == .deepgram ? .voiceActivity : .manual,
+            embeddingsModel: semanticRetrieval ? embeddingModel : nil)
     }
 
     private func apply(_ preset: ProviderPreset) {
@@ -1257,10 +1429,16 @@ private struct ProviderSettingsView: View {
         case .deepgram: deepgramModel = preset.transcriptionModel
         }
         if speech != .apple { sttLanguage = preset.language }
-        if classification == .openai { questionModel = preset.classificationModel }
-        else { anthropicQuestionModel = preset.classificationModel }
-        if answer == .openai { answerModel = preset.answerModel }
-        else { anthropicAnswerModel = preset.answerModel }
+        switch classification {
+        case .openai: questionModel = preset.classificationModel
+        case .anthropic: anthropicQuestionModel = preset.classificationModel
+        case .chatGPT: chatGPTQuestionModel = preset.classificationModel
+        }
+        switch answer {
+        case .openai: answerModel = preset.answerModel
+        case .anthropic: anthropicAnswerModel = preset.answerModel
+        case .chatGPT: chatGPTAnswerModel = preset.answerModel
+        }
         semanticRetrieval = preset.embeddingsModel != nil
         if let value = preset.embeddingsModel { embeddingModel = value }
     }

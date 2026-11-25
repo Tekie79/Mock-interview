@@ -15,10 +15,10 @@ public struct DeepgramTranscriptAssembler {
                     let end: Double?
                 }
                 let transcript: String
+                let languages: [String]?
                 let words: [Word]?
             }
             let alternatives: [Alternative]
-            let detected_language: String?
         }
         let type: String
         let start: Double?
@@ -34,6 +34,7 @@ public struct DeepgramTranscriptAssembler {
     private struct Segment {
         let text: String
         let speaker: Int?
+        let language: String?
         let words: [TranscriptWord]
     }
 
@@ -53,6 +54,7 @@ public struct DeepgramTranscriptAssembler {
         if result.type == "Error" { throw ProviderFailure.requestRejected }
         guard result.type == "Results" else { return nil }
         guard let start = result.start, let duration = result.duration, start >= 0, duration >= 0,
+              (start + duration).isFinite,
               let alternative = result.channel?.alternatives.first,
               alternative.transcript.utf8.count <= 32_768 else {
             throw ProviderFailure.malformedEvent
@@ -70,15 +72,16 @@ public struct DeepgramTranscriptAssembler {
             guard let text = word.punctuated_word ?? word.word else { return nil }
             return .init(text: text, startSeconds: word.start, endSeconds: word.end, speaker: word.speaker)
         }
-        let segment = Segment(text: text, speaker: speaker, words: words)
+        let language = alternative.languages.flatMap { $0.count == 1 ? $0.first : nil }
+        let segment = Segment(text: text, speaker: speaker, language: language, words: words)
         let boundary = result.is_final == true && (result.speech_final == true || result.from_finalize == true)
         if result.is_final == true, !text.isEmpty {
             finalized[start] = segment
         }
         guard finalized.count <= 64 else { throw ProviderFailure.disconnected }
         var accumulated = finalized
-        if result.is_final != true, !text.isEmpty { accumulated[start] = segment }
-        let event = combined(accumulated, final: boundary, language: result.channel?.detected_language)
+        if result.is_final != true, !text.isEmpty, accumulated[start] == nil { accumulated[start] = segment }
+        let event = combined(accumulated, final: boundary)
         if boundary {
             completedThrough = start + duration
             utterance += 1
@@ -87,17 +90,19 @@ public struct DeepgramTranscriptAssembler {
         return event
     }
     mutating func drain() -> TranscriptEvent? {
-        let event = combined(finalized, final: true, language: nil)
+        let event = combined(finalized, final: true)
         finalized.removeAll()
         return event
     }
 
-    private func combined(_ segments: [Double: Segment], final: Bool, language: String?) -> TranscriptEvent? {
+    private func combined(_ segments: [Double: Segment], final: Bool) -> TranscriptEvent? {
         let ordered = segments.sorted(by: { $0.key < $1.key }).map(\.value)
         let text = ordered.map(\.text).joined(separator: " ")
         guard !text.isEmpty else { return nil }
         let soleSpeaker = ordered.first?.speaker
         let speaker = final && ordered.allSatisfy { $0.speaker == soleSpeaker } ? soleSpeaker : nil
+        let soleLanguage = ordered.first?.language
+        let language = ordered.allSatisfy { $0.language == soleLanguage } ? soleLanguage : nil
         let words = ordered.flatMap(\.words)
         let range: TranscriptAudioRange?
         if let start = words.first?.startSeconds, let end = words.last?.endSeconds {
@@ -140,9 +145,11 @@ public actor DeepgramTranscriber: StreamingSTT {
 
     static func request(apiKey: String, model: String, language: String?, diarize: Bool = false,
                         endpointMilliseconds: Int = 300, vocabulary: [String] = []) throws -> URLRequest {
-        guard !apiKey.isEmpty else { throw ProviderFailure.missingCredentials }
-        guard (100...3_000).contains(endpointMilliseconds),
-              !diarize || ProviderCapabilities.describe(.deepgram, model: model).diarization else {
+        guard !apiKey.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else { throw ProviderFailure.missingCredentials }
+        let capabilities = ProviderCapabilities.describe(.deepgram, model: model)
+        let language = language?.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard capabilities.supports(.transcription), (100...3_000).contains(endpointMilliseconds),
+               !diarize || capabilities.diarization, language != "multi" || capabilities.detectsLanguage else {
             throw ProviderFailure.unsupportedCapability
         }
         var components = URLComponents()
@@ -156,18 +163,22 @@ public actor DeepgramTranscriber: StreamingSTT {
             URLQueryItem(name: "channels", value: "1"),
             URLQueryItem(name: "interim_results", value: "true"),
             URLQueryItem(name: "endpointing", value: String(endpointMilliseconds)),
-            URLQueryItem(name: "punctuate", value: "true")
+            URLQueryItem(name: "punctuate", value: "true"),
+            URLQueryItem(name: "redact_usage", value: "true")
         ]
         if diarize { components.queryItems?.append(.init(name: "diarize_model", value: "v1")) }
-        for term in vocabulary.prefix(25) where !term.isEmpty {
-            if model.hasPrefix("nova-3") {
-                components.queryItems?.append(.init(name: "keyterm", value: String(term.prefix(32))))
-            } else if model.hasPrefix("nova-2") {
-                components.queryItems?.append(.init(name: "keywords", value: String(term.prefix(32))))
+        if capabilities.vocabularyHints {
+            let parameter = model.hasPrefix("nova-3") ? "keyterm" : "keywords"
+            let terms = vocabulary.lazy.map { $0.trimmingCharacters(in: .whitespacesAndNewlines) }
+                .filter { !$0.isEmpty }.prefix(25)
+            for term in terms {
+                components.queryItems?.append(.init(name: parameter, value: String(term.prefix(32))))
             }
         }
         if let language, !language.isEmpty { components.queryItems?.append(.init(name: "language", value: language)) }
-        guard !model.isEmpty, let url = components.url else { throw ProviderFailure.requestRejected }
+        // A literal plus in a keyterm (such as C++) must survive form-style query decoding.
+        components.percentEncodedQuery = components.percentEncodedQuery?.replacingOccurrences(of: "+", with: "%2B")
+        guard let url = components.url else { throw ProviderFailure.requestRejected }
         var request = URLRequest(url: url, timeoutInterval: 12)
         request.setValue("Token " + apiKey, forHTTPHeaderField: "Authorization")
         return request
@@ -179,13 +190,15 @@ public actor DeepgramTranscriber: StreamingSTT {
         let request = try Self.request(apiKey: apiKey, model: model, language: language, diarize: diarize,
                                        endpointMilliseconds: endpointMilliseconds, vocabulary: vocabulary)
         let socket = URLSession.shared.webSocketTask(with: request)
+        socket.maximumMessageSize = 1_048_576
         self.socket = socket
         socket.resume()
         let timeout = Task {
             do {
                 try await Task.sleep(for: .seconds(12))
                 socket.cancel(with: .goingAway, reason: nil)
-            } catch {}
+                return true
+            } catch { return false }
         }
         defer { timeout.cancel() }
         do {
@@ -196,10 +209,14 @@ public actor DeepgramTranscriber: StreamingSTT {
             }
             guard self.socket === socket else { throw CancellationError() }
         } catch {
+            timeout.cancel()
             if self.socket === socket { self.socket = nil }
             socket.cancel(with: .goingAway, reason: nil)
             if Task.isCancelled || error is CancellationError { throw CancellationError() }
-            if let response = socket.response { try OpenAIResponsesClient.validate(response) }
+            if let response = socket.response as? HTTPURLResponse, response.statusCode >= 400 {
+                try OpenAIResponsesClient.validate(response)
+            }
+            if await timeout.value || (error as? URLError)?.code == .timedOut { throw ProviderFailure.timeout }
             throw ProviderFailure.disconnected
         }
 
@@ -247,8 +264,13 @@ public actor DeepgramTranscriber: StreamingSTT {
         return events
     }
 
+    public func checkConnection() async throws {
+        guard let socket else { throw ProviderFailure.disconnected }
+        try await socket.ping()
+    }
+
     public func append(_ frame: AudioFrame) async throws {
-        guard frame.sampleRate == 24_000, frame.pcm.count.isMultiple(of: 2) else {
+        guard frame.sampleRate == 24_000, !frame.pcm.isEmpty, frame.pcm.count.isMultiple(of: 2) else {
             throw CaptureFailure.invalidFormat
         }
         try await send(.data(frame.pcm))
@@ -291,4 +313,27 @@ public actor DeepgramTranscriber: StreamingSTT {
     }
 
     private static let keepAliveMessage = #"{"type":"KeepAlive"}"#
+}
+
+private extension URLSessionWebSocketTask {
+    func ping() async throws {
+        try await withThrowingTaskGroup(of: Void.self) { group in
+            group.addTask { [self] in
+                let (responses, pong) = AsyncThrowingStream<Void, Error>.makeStream(bufferingPolicy: .bufferingNewest(1))
+                sendPing { error in
+                    if error != nil { pong.finish(throwing: ProviderFailure.disconnected) }
+                    else { pong.yield(()); pong.finish() }
+                }
+                for try await _ in responses { return }
+                try Task.checkCancellation()
+                throw ProviderFailure.disconnected
+            }
+            group.addTask {
+                try await Task.sleep(for: .seconds(5))
+                throw ProviderFailure.timeout
+            }
+            defer { group.cancelAll() }
+            _ = try await group.next()
+        }
+    }
 }

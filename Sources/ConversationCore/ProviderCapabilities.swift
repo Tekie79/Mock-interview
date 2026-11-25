@@ -51,6 +51,20 @@ public struct ProviderCapabilities: Equatable, Sendable {
     public var requiresNetwork = true
     public var unavailableReason: String?
 
+    static let openAIKeywordModels: Set<String> = ["gpt-live-transcribe", "gpt-transcribe"]
+    static let openAIPromptModels: Set<String> = ["gpt-4o-transcribe", "gpt-4o-mini-transcribe", "whisper-1",
+                                                  "gpt-4o-mini-transcribe-2025-03-20", "gpt-4o-mini-transcribe-2025-12-15"]
+    private static let deepgramModels: Set<String> = [
+        "nova-3", "nova-3-general", "nova-3-medical", "nova-2", "nova-2-general", "nova-2-meeting",
+        "nova-2-finance", "nova-2-conversationalai", "nova-2-voicemail", "nova-2-video", "nova-2-medical",
+        "nova-2-drivethru", "nova-2-automotive", "nova", "nova-general", "nova-phonecall", "nova-medical",
+        "enhanced", "enhanced-general", "enhanced-meeting", "enhanced-phonecall", "enhanced-finance",
+        "base", "meeting", "phonecall", "finance", "conversationalai", "voicemail", "video", "custom"
+    ]
+    private static let deepgramMultilingualModels: Set<String> = [
+        "nova-3", "nova-3-general", "nova-3-medical", "nova-2", "nova-2-general"
+    ]
+
     public static func describe(_ provider: ProviderID, model: String? = nil,
                                 appleOnDevice: Bool = false) -> Self {
         switch provider {
@@ -60,15 +74,21 @@ public struct ProviderCapabilities: Equatable, Sendable {
                          commits: [.manual], vocabularyHints: true, canRunOnDevice: appleOnDevice,
                          requiresNetwork: !appleOnDevice)
         case .openai:
-            let realtime = model == nil || ["gpt-live-transcribe", "gpt-4o-transcribe",
-                                            "gpt-4o-mini-transcribe", "whisper-1"].contains(model)
-            let alternate = model == "gpt-4o-transcribe" || model == "gpt-4o-mini-transcribe" || model == "whisper-1"
-            return .init(provider: provider, services: [.transcription, .classification, .answer, .embeddings],
+            let selected = model ?? "gpt-live-transcribe"
+            let hints = openAIKeywordModels.contains(selected) || openAIPromptModels.contains(selected)
+            let realtime = hints || selected == "gpt-realtime-whisper"
+            let services: Set<ProviderService>
+            if model == nil { services = [.transcription, .classification, .answer, .embeddings] }
+            else if realtime { services = [.transcription] }
+            else if selected.hasPrefix("text-embedding-") { services = [.embeddings] }
+            else { services = [.classification, .answer] }
+            return .init(provider: provider, services: services,
                          authentication: .apiKey, billing: .separatelyBilledAPI,
-                         models: ["gpt-live-transcribe", "gpt-4o-transcribe", "gpt-4o-mini-transcribe"],
-                         streams: true, designatedLanguage: realtime,
-                         commits: alternate ? [.manual, .voiceActivity] : [.manual],
-                         structuredOutput: true, usage: true, vocabularyHints: alternate)
+                          models: ["gpt-live-transcribe", "gpt-transcribe", "gpt-realtime-whisper"],
+                          streams: services != [.embeddings], designatedLanguage: realtime,
+                          detectsLanguage: selected == "gpt-transcribe", commits: realtime ? [.manual] : [],
+                          structuredOutput: services.contains(.classification),
+                          usage: model == nil || services.contains(.answer), vocabularyHints: hints)
         case .elevenLabs:
             let semantic = model == "scribe_v3_live"
             return .init(provider: provider, services: [.transcription], authentication: .apiKey,
@@ -77,12 +97,16 @@ public struct ProviderCapabilities: Equatable, Sendable {
                          commits: semantic ? [.manual, .voiceActivity, .semanticTurn] : [.manual, .voiceActivity],
                          vocabularyHints: true)
         case .deepgram:
-            let nova = (model ?? "nova-3").hasPrefix("nova-")
-            return .init(provider: provider, services: [.transcription], authentication: .apiKey,
+            let selected = model ?? "nova-3"
+            let streaming = deepgramModels.contains(selected)
+            let nova = selected == "nova" || selected.hasPrefix("nova-")
+            let hints = nova || selected == "enhanced" || selected.hasPrefix("enhanced-") || selected == "base"
+            return .init(provider: provider, services: streaming ? [.transcription] : [], authentication: .apiKey,
                          billing: .separatelyBilledAPI, models: ["nova-3", "nova-3-general", "nova-2"],
-                         streams: true, designatedLanguage: true, detectsLanguage: model == "nova-3",
-                         wordTimestamps: true, diarization: nova, commits: [.manual, .voiceActivity],
-                         vocabularyHints: nova)
+                         streams: streaming, designatedLanguage: streaming,
+                         detectsLanguage: deepgramMultilingualModels.contains(selected),
+                         wordTimestamps: streaming, diarization: streaming && nova,
+                         commits: streaming ? [.manual, .voiceActivity] : [], vocabularyHints: streaming && hints)
         case .anthropic:
             return .init(provider: provider, services: [.classification, .answer], authentication: .apiKey,
                          billing: .separatelyBilledAPI, streams: true, structuredOutput: true, usage: true)
@@ -108,10 +132,13 @@ public struct TranscriptionBehavior: Equatable, Sendable {
     public let sampleRate: Int
     public let delivery: Delivery
     public let streamsSilence: Bool
+    public let requiresStreamEnd: Bool
 
-    public init(sampleRate: Int = 24_000, delivery: Delivery = .clientCommit, streamsSilence: Bool = false) {
+    public init(sampleRate: Int = 24_000, delivery: Delivery = .clientCommit, streamsSilence: Bool = false,
+                requiresStreamEnd: Bool = false) {
         self.sampleRate = sampleRate
         self.delivery = delivery
         self.streamsSilence = streamsSilence
+        self.requiresStreamEnd = requiresStreamEnd
     }
 }

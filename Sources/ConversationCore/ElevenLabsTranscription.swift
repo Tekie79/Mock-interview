@@ -87,7 +87,8 @@ struct ElevenLabsWire: Decodable, Sendable {
         case "quota_exceeded": throw ProviderFailure.quotaExhausted
         case "invalid_request", "input_error", "chunk_size_exceeded", "unaccepted_terms":
             throw ProviderFailure.requestRejected
-        case "session_time_limit_exceeded", "resource_exhausted", "transcriber_error", "error":
+        case "session_time_limit_exceeded", "resource_exhausted", "transcriber_error", "error",
+             "insufficient_audio_activity":
             throw ProviderFailure.unavailable
         case "queue_overflow": throw CaptureFailure.bufferOverrun
         default: return value
@@ -104,6 +105,35 @@ struct ElevenLabsWire: Decodable, Sendable {
 }
 
 public actor ElevenLabsTranscriber: StreamingSTT {
+    private struct Partial {
+        let id: Int
+        let observedFrame: Int64?
+        var text: String
+        var prediction: Double?
+    }
+
+    private struct Companion {
+        let text: String
+        let partial: Partial?
+        var detail: Detail?
+    }
+
+    private struct Detail {
+        let text: String
+        let words: [TranscriptWord]
+        let language: String?
+        let range: TranscriptAudioRange
+        let samples: Range<Int64>
+    }
+
+    private struct VoiceSpan {
+        var start: Int64
+        var lastFrameStart: Int64
+        var end: Int64
+    }
+
+    private enum InputState { case open, flushing, draining, drained }
+
     public nonisolated let behavior: TranscriptionBehavior
     private let key: String
     private let config: ElevenLabsSpeechConfiguration
@@ -113,12 +143,17 @@ public actor ElevenLabsTranscriber: StreamingSTT {
     private var reader: Task<Void, Never>?
     private var output: AsyncThrowingStream<TranscriptEvent, Error>.Continuation?
     private var chunk = Data()
+    private var sentSamples: Int64 = 0
+    private var voice: [VoiceSpan] = []
+    private var commitRequests: [Range<Int64>] = []
+    private var lastCommitRequest: Int64 = 0
+    private var inputState = InputState.open
     private var nextItem = 0
-    private var partial = ""
-    private var prediction: Double?
-    private var lastCommit: (range: ClosedRange<Double>, text: String)?
-    private var finishing = false
-    private var speechSeen = false
+    private var partial: Partial?
+    private var companions: [Companion] = []
+    private var lastFinalID: Int?
+    private var lastFinalRange: TranscriptAudioRange?
+    private var recentFinalTexts: [String] = []
     private var endpoint = AudioEndpoint()
 
     public init(apiKey: String, configuration: ElevenLabsSpeechConfiguration = .init()) {
@@ -131,7 +166,7 @@ public actor ElevenLabsTranscriber: StreamingSTT {
         config = configuration
         makeSocket = socket
         behavior = .init(delivery: configuration.strategy == .manual ? .clientCommit : .providerCommit,
-                         streamsSilence: true)
+                         streamsSilence: true, requiresStreamEnd: true)
     }
 
     public func connect(source: CaptureSource, epoch: UUID) async throws -> AsyncThrowingStream<TranscriptEvent, Error> {
@@ -160,13 +195,13 @@ public actor ElevenLabsTranscriber: StreamingSTT {
             do {
                 while !Task.isCancelled {
                     let data = try await socket.read()
+                    try Task.checkCancellation()
                     let message = try ElevenLabsWire.decode(data)
                     if try await self?.receive(message, source: source, epoch: epoch, connection: id) != true { return }
                 }
             } catch {
                 if !Task.isCancelled {
-                    if let failure = error as? CaptureFailure { output.finish(throwing: failure) }
-                    else { output.finish(throwing: (error as? ProviderFailure) ?? .disconnected) }
+                    await self?.fail(error, connection: id)
                 }
             }
         }
@@ -174,25 +209,50 @@ public actor ElevenLabsTranscriber: StreamingSTT {
         return stream
     }
 
+    public func checkConnection() async throws {
+        guard let socket else { throw ProviderFailure.disconnected }
+        try await socket.ping()
+    }
+
     public func append(_ frame: AudioFrame) async throws {
-        guard !finishing, frame.sampleRate == behavior.sampleRate, !frame.pcm.isEmpty,
+        guard output != nil, inputState == .open else { throw ProviderFailure.disconnected }
+        guard frame.sampleRate == behavior.sampleRate, !frame.pcm.isEmpty,
               frame.pcm.count.isMultiple(of: 2), frame.pcm.count <= 24_000 else { throw CaptureFailure.invalidFormat }
-        if endpoint.observe(frame).level >= 0.015 { speechSeen = true }
+        if endpoint.observe(frame).level >= 0.015 {
+            let start = sentSamples + Int64(chunk.count / 2)
+            let end = start + Int64(frame.pcm.count / 2)
+            if let last = voice.last, last.end == start, start != lastCommitRequest {
+                voice[voice.count - 1].lastFrameStart = start
+                voice[voice.count - 1].end = end
+            } else {
+                guard voice.count < 4_096 else { throw CaptureFailure.bufferOverrun }
+                voice.append(.init(start: start, lastFrameStart: start, end: end))
+            }
+        }
         chunk.append(frame.pcm)
         if chunk.count >= 4_800 { try await flush(commit: false) }
     }
 
-    public func commit() async throws { try await flush(commit: true) }
+    public func commit() async throws {
+        guard output != nil, inputState == .open else { throw ProviderFailure.disconnected }
+        try await requestCommit()
+    }
 
     public func finishInput() async throws {
-        if config.strategy == .manual { return }
-        finishing = true
-        if speechSeen || !partial.isEmpty {
-            try await flush(commit: true)
-        } else {
-            if !chunk.isEmpty { try await flush(commit: false) }
-            output?.finish()
+        guard inputState == .open else { return }
+        guard let id = connectionID, output != nil else { throw ProviderFailure.disconnected }
+        inputState = .flushing
+        let hasUncommittedVoice = voice.last.map { $0.lastFrameStart >= lastCommitRequest } ?? false
+        if hasUncommittedVoice || (partial != nil && sentSamples + Int64(chunk.count / 2) > lastCommitRequest) {
+            try await requestCommit()
+        } else if !chunk.isEmpty {
+            try await flush(commit: false)
         }
+        try Task.checkCancellation()
+        guard connectionID == id else { throw CancellationError() }
+        guard output != nil else { return } // The transcript consumer receives any reader failure.
+        inputState = .draining
+        _ = finishDrainIfReady()
     }
 
     public func close() async {
@@ -202,79 +262,184 @@ public actor ElevenLabsTranscriber: StreamingSTT {
         previous?.cancel()
         socket?.close()
         socket = nil
-        output?.finish()
+        output?.finish(throwing: CancellationError())
         output = nil
         chunk.removeAll()
+        sentSamples = 0
+        voice.removeAll()
+        commitRequests.removeAll()
+        lastCommitRequest = 0
+        inputState = .open
         nextItem = 0
-        partial = ""
-        prediction = nil
-        lastCommit = nil
-        finishing = false
-        speechSeen = false
+        partial = nil
+        companions.removeAll()
+        lastFinalID = nil
+        lastFinalRange = nil
+        recentFinalTexts.removeAll()
         endpoint = AudioEndpoint()
         await previous?.value
     }
 
+    private func requestCommit() async throws {
+        let end = sentSamples + Int64(chunk.count / 2)
+        guard end > lastCommitRequest else { return }
+        guard commitRequests.count < 64 else { throw CaptureFailure.bufferOverrun }
+        commitRequests.append(lastCommitRequest..<end)
+        lastCommitRequest = end
+        try await flush(commit: true)
+    }
+
     private func flush(commit: Bool) async throws {
-        guard let socket else { throw ProviderFailure.disconnected }
+        try Task.checkCancellation()
+        guard let socket, let id = connectionID else { throw ProviderFailure.disconnected }
         let bytes = chunk
         chunk.removeAll(keepingCapacity: true)
+        // Register submitted samples before send suspends: the reader can receive a final first.
+        sentSamples += Int64(bytes.count / 2)
         try await socket.send(ElevenLabsWire.chunk(bytes, commit: commit))
+        try Task.checkCancellation()
+        guard connectionID == id else { throw CancellationError() }
+    }
+
+    private func finishDrainIfReady() -> Bool {
+        guard inputState == .draining, voice.isEmpty, commitRequests.isEmpty,
+              partial == nil, companions.isEmpty else { return false }
+        inputState = .drained
+        output?.finish()
+        output = nil
+        return true
+    }
+
+    private func fail(_ error: any Error, connection: UUID) {
+        guard connectionID == connection, let output else { return }
+        self.output = nil
+        if let failure = error as? CaptureFailure { output.finish(throwing: failure) }
+        else { output.finish(throwing: (error as? ProviderFailure) ?? .disconnected) }
     }
 
     private func receive(_ wire: ElevenLabsWire, source: CaptureSource, epoch: UUID, connection: UUID) throws -> Bool {
-        guard connectionID == connection, let output else { return false }
-        let item = "scribe-\(nextItem)"
+        guard !Task.isCancelled, connectionID == connection, let output else { return false }
+        guard ["partial_transcript", "committed_transcript", "committed_transcript_with_timestamps"]
+            .contains(wire.message_type) else { return true }
+        guard let text = wire.text, text.utf8.count <= 32_768 else { throw ProviderFailure.malformedEvent }
+        guard !text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else { return true }
         if wire.message_type == "partial_transcript" {
-            guard let text = wire.text else { throw ProviderFailure.malformedEvent }
-            guard text.utf8.count <= 32_768 else { throw ProviderFailure.malformedEvent }
-            if let score = wire.turn_probability, (0...1).contains(score) { prediction = score }
-            guard !text.isEmpty, text != partial else { return true }
-            partial = text
-            if case .dropped = output.yield(.init(source: source, epoch: epoch, itemID: item,
-                                                text: text, state: .partial, turnProbability: prediction)) {
+            let prediction = wire.turn_probability.flatMap { (0...1).contains($0) ? $0 : nil }
+            if partial?.text == text {
+                if let prediction { partial?.prediction = prediction }
+                return true
+            }
+            var current = partial ?? Partial(id: allocateItem(), observedFrame: voice.last?.lastFrameStart,
+                                              text: text, prediction: nil)
+            current.text = text
+            if let prediction { current.prediction = prediction }
+            partial = current
+            if case .dropped = output.yield(.init(source: source, epoch: epoch, itemID: "scribe-\(current.id)",
+                                                text: text, state: .partial, turnProbability: current.prediction)) {
                 throw CaptureFailure.bufferOverrun
             }
             return true
         }
-        if wire.message_type == "insufficient_audio_activity" {
-            if finishing { output.finish(); return false }
-            if config.strategy == .manual {
-                nextItem += 1
-                partial = ""
-                prediction = nil
-                if case .dropped = output.yield(.init(source: source, epoch: epoch, itemID: item,
-                                                       text: "", state: .final)) {
-                    throw CaptureFailure.bufferOverrun
-                }
+        if wire.message_type == "committed_transcript" {
+            // Plain and timestamped events describe the same segment, not two finals. Keep the
+            // provisional boundary so a newer partial can arrive before the detailed companion.
+            if recentFinalTexts.contains(text) || companions.contains(where: { $0.text == text }) {
+                guard matches(partial?.text, text) else { return true }
             }
+            guard companions.count < 64 else { throw CaptureFailure.bufferOverrun }
+            companions.append(.init(text: text, partial: partial, detail: nil))
+            partial = nil
             return true
         }
-        // With timestamps enabled the plain commit is superseded by its detailed companion event.
-        guard wire.message_type == "committed_transcript_with_timestamps" else { return true }
-        guard let text = wire.text, text.utf8.count <= 32_768 else { throw ProviderFailure.malformedEvent }
         let words = (wire.words ?? []).prefix(1_024).filter { $0.type == nil || $0.type == "word" }.map {
             TranscriptWord(text: $0.text, startSeconds: $0.start, endSeconds: $0.end)
         }
-        var audioRange: TranscriptAudioRange?
-        if let start = words.first?.startSeconds, let end = words.last?.endSeconds, start <= end {
-            let range = start...end
-            if let previous = lastCommit, range == previous.range, text == previous.text, partial.isEmpty {
-                return true
+        // No request ID or end-of-input acknowledgment is exposed. Never discharge pending audio
+        // on an unpositioned/empty final or on a timestamp that goes backwards or beyond sent audio.
+        guard let start = words.first?.startSeconds, let end = words.last?.endSeconds,
+              start.isFinite, end.isFinite, start >= 0, end > start,
+              end <= Double(sentSamples) / 24_000,
+              let first = Int64(exactly: (start * 24_000).rounded(.down)),
+              let last = Int64(exactly: (end * 24_000).rounded(.up)),
+              first < last else { return true }
+        let detail = Detail(text: text, words: words, language: wire.language_code,
+                            range: .init(startSeconds: start, endSeconds: end), samples: first..<last)
+        guard advances(detail) else { return true }
+
+        if let match = companions.firstIndex(where: { $0.text == text }) {
+            // A different segment's detailed result can wait behind the earlier plain boundary.
+            guard companions[match].detail == nil else { return true }
+            companions[match].detail = detail
+            while let next = companions.first?.detail {
+                guard advances(next) else {
+                    companions[0].detail = nil
+                    break
+                }
+                let candidate = companions.removeFirst().partial
+                var resolved = candidate
+                if let candidate, !matches(candidate.text, next.text), !canBelong(candidate, to: next) {
+                    // A plain boundary is tentative: a late older result cannot take a newer partial.
+                    if partial == nil { partial = candidate }
+                    resolved = nil
+                }
+                if resolved == nil { resolved = takeMatchingPartial(for: next) }
+                try finalize(next, partial: resolved, source: source, epoch: epoch, output: output)
             }
-            lastCommit = (range, text)
-            audioRange = .init(startSeconds: start, endSeconds: end)
+        } else if companions.isEmpty {
+            try finalize(detail, partial: takeMatchingPartial(for: detail), source: source, epoch: epoch, output: output)
         }
-        let event = TranscriptEvent(source: source, epoch: epoch, itemID: item,
-                                    previousItemID: nextItem > 0 ? "scribe-\(nextItem - 1)" : nil,
-                                    text: text, state: .final, words: words,
-                                    language: wire.language_code, turnProbability: prediction, audioRange: audioRange)
-        nextItem += 1
-        partial = ""
-        prediction = nil
-        speechSeen = false
+        return !finishDrainIfReady()
+    }
+
+    private func advances(_ detail: Detail) -> Bool {
+        guard let previous = lastFinalRange else { return true }
+        return detail.range.startSeconds >= previous.startSeconds && detail.range.endSeconds > previous.endSeconds
+    }
+
+    private func canBelong(_ partial: Partial, to detail: Detail) -> Bool {
+        partial.observedFrame.map { $0 < detail.samples.upperBound } ?? true
+    }
+
+    private func takeMatchingPartial(for detail: Detail) -> Partial? {
+        guard let current = partial, matches(current.text, detail.text), canBelong(current, to: detail) else { return nil }
+        partial = nil
+        return current
+    }
+
+    private func finalize(_ detail: Detail, partial: Partial?, source: CaptureSource, epoch: UUID,
+                          output: AsyncThrowingStream<TranscriptEvent, Error>.Continuation) throws {
+        let first = detail.samples.lowerBound
+        let last = detail.samples.upperBound
+        voice = voice.compactMap { span in
+            guard first < span.end, last > span.start else { return span }
+            guard last <= span.lastFrameStart else { return nil }
+            return .init(start: last, lastFrameStart: span.lastFrameStart, end: span.end)
+        }
+        if let request = commitRequests.first, detail.samples.overlaps(request),
+           !voice.contains(where: { $0.start < request.upperBound && $0.end > request.lowerBound }) {
+            commitRequests.removeFirst()
+        }
+
+        let item = partial?.id ?? allocateItem()
+        let event = TranscriptEvent(source: source, epoch: epoch, itemID: "scribe-\(item)",
+                                    previousItemID: lastFinalID.map { "scribe-\($0)" },
+                                    text: detail.text, state: .final, words: detail.words,
+                                    language: detail.language, turnProbability: partial?.prediction, audioRange: detail.range)
+        lastFinalID = item
+        lastFinalRange = detail.range
+        if recentFinalTexts.count == 32 { recentFinalTexts.removeFirst() }
+        recentFinalTexts.append(detail.text)
         if case .dropped = output.yield(event) { throw CaptureFailure.bufferOverrun }
-        if finishing { output.finish(); return false }
-        return true
+    }
+
+    private func allocateItem() -> Int {
+        defer { nextItem += 1 }
+        return nextItem
+    }
+
+    private func matches(_ partial: String?, _ final: String) -> Bool {
+        guard let partial else { return false }
+        let punctuation = CharacterSet.punctuationCharacters.union(.whitespacesAndNewlines)
+        return partial.trimmingCharacters(in: punctuation) == final.trimmingCharacters(in: punctuation)
     }
 }

@@ -8,8 +8,9 @@ struct AnthropicMessagesClient: Sendable {
     let model: String
 
     func request(system: String, input: String, fields: [String: Any], timeout: TimeInterval) throws -> URLRequest {
-        guard !apiKey.isEmpty else { throw ProviderFailure.missingCredentials }
-        guard !model.isEmpty, let url = URL(string: "https://api.anthropic.com/v1/messages") else {
+        guard !apiKey.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else { throw ProviderFailure.missingCredentials }
+        guard !model.isEmpty, model.rangeOfCharacter(from: .whitespacesAndNewlines) == nil,
+              let url = URL(string: "https://api.anthropic.com/v1/messages") else {
             throw ProviderFailure.requestRejected
         }
         var request = URLRequest(url: url, timeoutInterval: timeout)
@@ -24,6 +25,15 @@ struct AnthropicMessagesClient: Sendable {
         request.httpBody = try JSONSerialization.data(withJSONObject: body)
         return request
     }
+
+    static func validate(_ response: URLResponse) throws {
+        switch (response as? HTTPURLResponse)?.statusCode {
+        case 402: throw ProviderFailure.quotaExhausted
+        case 403: throw ProviderFailure.requestRejected
+        case 504: throw ProviderFailure.timeout
+        default: try OpenAIResponsesClient.validate(response)
+        }
+    }
 }
 
 public struct AnthropicQuestionClassifier: QuestionClassifier {
@@ -36,23 +46,34 @@ public struct AnthropicQuestionClassifier: QuestionClassifier {
     }
 
     public func classify(_ input: QuestionInput) async throws -> QuestionDecision {
+        let request = try classificationRequest(input)
+        return try await OpenAIResponsesClient.protected {
+            let (data, response) = try await URLSession.shared.data(for: request)
+            try AnthropicMessagesClient.validate(response)
+            return try Self.decode(data)
+        }
+    }
+
+    func classificationRequest(_ input: QuestionInput) throws -> URLRequest {
         let context = ClassifierContext(input)
         let serialized = String(decoding: try JSONEncoder().encode(context), as: UTF8.self)
-        let request = try client.request(system: OpenAIQuestionClassifier.instructions
+        return try client.request(system: OpenAIQuestionClassifier.instructions
             + "\nApply these classification preferences only within the rules above: " + guidance, input: serialized, fields: [
             "max_tokens": 650,
             "output_config": ["format": ["type": "json_schema", "schema": OpenAIQuestionClassifier.schema]]
         ], timeout: 8)
-        return try await OpenAIResponsesClient.protected {
-            let (data, response) = try await URLSession.shared.data(for: request)
-            try OpenAIResponsesClient.validate(response)
-            guard let message = try? JSONDecoder().decode(Message.self, from: data),
-                  message.stop_reason == "end_turn",
-                  let text = message.content.first(where: { $0.type == "text" })?.text,
-                  let decision = try? JSONDecoder().decode(QuestionDecision.self, from: Data(text.utf8))
-            else { throw ProviderFailure.malformedEvent }
-            return decision
+    }
+
+    static func decode(_ data: Data) throws -> QuestionDecision {
+        guard let message = try? JSONDecoder().decode(Message.self, from: data) else {
+            throw ProviderFailure.malformedEvent
         }
+        guard message.stop_reason == "end_turn" else { throw ProviderFailure.requestRejected }
+        guard let text = message.content.first(where: { $0.type == "text" })?.text,
+              let decision = try? JSONDecoder().decode(QuestionDecision.self, from: Data(text.utf8)) else {
+            throw ProviderFailure.malformedEvent
+        }
+        return decision
     }
 
     private struct Message: Decodable {
@@ -77,7 +98,9 @@ public struct AnthropicTextGenerator: TextGenerator {
                                          fields: ["stream": true, "max_tokens": 1_200], timeout: 20)
         let decoder = AnthropicStreamDecoder()
         // StreamingHTTP supplies a serial delegate queue for each decoder.
-        return StreamingHTTP.start(request) { try decoder.receive($0) }
+        return StreamingHTTP.start(request, validate: { try AnthropicMessagesClient.validate($0) }) {
+            try decoder.receive($0)
+        }
     }
 }
 
@@ -90,18 +113,25 @@ final class AnthropicStreamDecoder: @unchecked Sendable {
         }
         struct Usage: Decodable {
             let input_tokens: Int?
+            let cache_creation_input_tokens: Int?
+            let cache_read_input_tokens: Int?
             let output_tokens: Int?
         }
         struct Message: Decodable {
             let usage: Usage?
         }
+        struct ServiceError: Decodable { let type: String }
         let type: String
         let delta: Delta?
         let message: Message?
         let usage: Usage?
+        let error: ServiceError?
     }
 
+    private var started = false
     private var inputTokens: Int?
+    private var cacheCreationTokens: Int?
+    private var cacheReadTokens: Int?
     private var outputTokens: Int?
     private var stopReason: String?
 
@@ -111,26 +141,49 @@ final class AnthropicStreamDecoder: @unchecked Sendable {
         }
         switch event.type {
         case "message_start":
-            inputTokens = event.message?.usage?.input_tokens
-            outputTokens = event.message?.usage?.output_tokens
+            guard !started, let message = event.message else { throw ProviderFailure.malformedEvent }
+            started = true
+            updateUsage(message.usage)
         case "content_block_delta":
+            guard started else { throw ProviderFailure.malformedEvent }
             if event.delta?.type == "text_delta" {
                 guard let text = event.delta?.text else { throw ProviderFailure.malformedEvent }
                 return .text(text)
             }
         case "message_delta":
-            inputTokens = event.usage?.input_tokens ?? inputTokens
+            guard started else { throw ProviderFailure.malformedEvent }
+            updateUsage(event.usage)
+            // message_start counts are provisional; message_delta counts are cumulative.
             outputTokens = event.usage?.output_tokens ?? outputTokens
             stopReason = event.delta?.stop_reason ?? stopReason
         case "message_stop":
-            guard stopReason == "end_turn" || stopReason == "stop_sequence" else {
+            guard started, stopReason == "end_turn" || stopReason == "stop_sequence" else {
                 throw ProviderFailure.requestRejected
             }
-            let usage = inputTokens.flatMap { input in outputTokens.map { TokenUsage(input: input, output: $0) } }
-            return .complete(usage)
-        case "error": throw ProviderFailure.unavailable
+            guard let inputTokens, let outputTokens else { return .complete(nil) }
+            let (cached, cachedOverflow) = (cacheCreationTokens ?? 0).addingReportingOverflow(cacheReadTokens ?? 0)
+            let (totalInput, totalOverflow) = inputTokens.addingReportingOverflow(cached)
+            guard inputTokens >= 0, outputTokens >= 0, (cacheCreationTokens ?? 0) >= 0, (cacheReadTokens ?? 0) >= 0,
+                  !cachedOverflow, !totalOverflow else { throw ProviderFailure.malformedEvent }
+            return .complete(.init(input: totalInput, output: outputTokens))
+        case "error":
+            switch event.error?.type {
+            case "authentication_error": throw ProviderFailure.authentication
+            case "billing_error": throw ProviderFailure.quotaExhausted
+            case "rate_limit_error": throw ProviderFailure.rateLimited
+            case "timeout_error": throw ProviderFailure.timeout
+            case "invalid_request_error", "permission_error", "not_found_error", "request_too_large", "conflict_error":
+                throw ProviderFailure.requestRejected
+            default: throw ProviderFailure.unavailable
+            }
         default: break
         }
         return .ignore
+    }
+
+    private func updateUsage(_ usage: Event.Usage?) {
+        inputTokens = usage?.input_tokens ?? inputTokens
+        cacheCreationTokens = usage?.cache_creation_input_tokens ?? cacheCreationTokens
+        cacheReadTokens = usage?.cache_read_input_tokens ?? cacheReadTokens
     }
 }

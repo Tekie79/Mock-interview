@@ -44,7 +44,7 @@ public struct InterviewAnswer: Identifiable, Sendable, Codable, Equatable {
 
 public struct InterviewTranscript: Identifiable, Sendable, Codable, Equatable {
     public let id: String
-    public let role: SourceRole
+    public internal(set) var role: SourceRole
     public var text: String
     public var isFinal: Bool
     public var timestamp: Date?
@@ -89,6 +89,8 @@ public struct InterviewSnapshot: Sendable {
     public internal(set) var discardedQuestions = 0
     public internal(set) var droppedAudioChunks = 0
     public internal(set) var submittedAudioSamples: [String: Int] = [:]
+    public internal(set) var recognitionSeconds: [String: Double] = [:]
+    public internal(set) var recognitionTokens: [String: TokenUsage] = [:]
 
     public internal(set) var state: State = .idle
     public internal(set) var transcript: [InterviewTranscript] = []
@@ -107,6 +109,8 @@ public actor InterviewSession {
         let speaker: DiarizedSpeaker.ID?
         let sequence: UInt64
         let conversation: [ConversationTurn]
+        let transcriptID: String
+        let holdUntil: ContinuousClock.Instant?
     }
     private var channels: [TranscriptionChannel]
     private let detector: QuestionDetector
@@ -130,7 +134,10 @@ public actor InterviewSession {
     private var activeAnswerSource: QuestionWork?
     private var timeline: [UUID: PipelineTiming] = [:]
     private var conversation: [ConversationTurn] = []
-    private var recentCandidateAudio: [(String, ContinuousClock.Instant)] = []
+    private var recentCandidateAudio: [CrossSourceAttribution.Evidence] = []
+    private var candidateSpeech: [CrossSourceAttribution.SpeechWindow] = []
+    private var recentInterviewerAudio: [CrossSourceAttribution.Evidence] = []
+    private var ambiguousAudio: Set<String> = []
     private var roleBarriers: [DiarizedSpeaker.ID: UInt64] = [:]
     private var epochs: [String: UUID] = [:]
     private var lastMeterUpdate: [String: ContinuousClock.Instant] = [:]
@@ -270,6 +277,9 @@ public actor InterviewSession {
         lastMeterUpdate.removeAll()
         roleBarriers.removeAll()
         recentCandidateAudio.removeAll()
+        candidateSpeech.removeAll()
+        recentInterviewerAudio.removeAll()
+        ambiguousAudio.removeAll()
         let tasks = captureTasks
         captureTasks.removeAll()
         for task in tasks { task.cancel() }
@@ -346,9 +356,18 @@ public actor InterviewSession {
             snapshot.reconnects += 1
             recordIssue("Audio gap on " + source.id + ". Reconnecting.")
             invalidateSourceWork(source)
+            clearAttribution(source)
             await detector.invalidate(source)
         case .sentAudio(let source, let samples):
             snapshot.submittedAudioSamples[source.id, default: 0] += samples
+        case .candidateSpeech(let source, let epoch, let start, let end):
+            guard epochs[source.id] == epoch, source.role == .candidate, end > start else { return }
+            let now = ContinuousClock.now
+            candidateSpeech.removeAll { ($0.sourceID == source.id && $0.start == start) ||
+                $0.received.duration(to: now) > CrossSourceAttribution.retention }
+            candidateSpeech.append(.init(sourceID: source.id, start: start, end: end, received: now))
+            if candidateSpeech.count > 64 { candidateSpeech.removeFirst() }
+            return
         case .dropped(_, let chunks):
             snapshot.droppedAudioChunks += chunks
         case .level(let source, let value):
@@ -359,8 +378,21 @@ public actor InterviewSession {
         case .transcript(let event):
             guard epochs[event.source.id] == event.epoch else { return }
             let id = event.epoch.uuidString + "/" + event.source.id + "/" + event.itemID
+            let transcriptIndex = snapshot.transcript.firstIndex(where: { $0.id == id })
+            if let transcriptIndex, snapshot.transcript[transcriptIndex].isFinal { return }
+            if event.state == .final, let usage = event.recognitionUsage {
+                switch usage {
+                case .audioSeconds(let seconds) where seconds.isFinite && (0...86_400).contains(seconds):
+                    snapshot.recognitionSeconds[event.source.id, default: 0] += seconds
+                case .tokens(let tokens) where tokens.input <= 10_000_000 && tokens.output <= 10_000_000:
+                    let previous = snapshot.recognitionTokens[event.source.id] ?? .init(input: 0, output: 0)
+                    snapshot.recognitionTokens[event.source.id] = .init(input: previous.input + tokens.input,
+                                                                       output: previous.output + tokens.output)
+                default: break
+                }
+            }
             if event.state == .final && event.text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
-                snapshot.transcript.removeAll { $0.id == id && !$0.isFinal }
+                if let transcriptIndex { snapshot.transcript.remove(at: transcriptIndex) }
                 publish()
                 return
             }
@@ -375,23 +407,48 @@ public actor InterviewSession {
                     snapshot.speakers.append(DiarizedSpeaker(id: speaker, role: .unknown))
                 }
             }
+            let received = ContinuousClock.now
+            let hasCandidateChannel = event.source.role == .interviewer && channels.contains { $0.source.role == .candidate }
+            if role == .candidate, event.source.role == .candidate {
+                let evidence = CrossSourceAttribution.Evidence(event, id: id, received: received)
+                recentCandidateAudio.removeAll { $0.id == id }
+                recentCandidateAudio.append(evidence)
+                recentCandidateAudio = Array(recentCandidateAudio.filter {
+                    $0.received.duration(to: received) <= CrossSourceAttribution.retention
+                }.suffix(64))
+                for remote in recentInterviewerAudio where remote.received.duration(to: received) <= CrossSourceAttribution.retention
+                    && CrossSourceAttribution.ambiguous(remote, evidence) {
+                    vetoAttribution(remote.id)
+                }
+            }
+            if hasCandidateChannel, event.state == .final {
+                let remote = CrossSourceAttribution.Evidence(event, id: id, received: received)
+                recentInterviewerAudio.append(remote)
+                recentInterviewerAudio = Array(recentInterviewerAudio.filter {
+                    $0.received.duration(to: received) <= CrossSourceAttribution.retention
+                }.suffix(64))
+                ambiguousAudio.formIntersection(Set(recentInterviewerAudio.map(\.id)))
+                if recentCandidateAudio.contains(where: {
+                    $0.received.duration(to: received) <= CrossSourceAttribution.retention
+                        && CrossSourceAttribution.ambiguous(remote, $0)
+                }) {
+                    role = .unknown
+                    vetoAttribution(id)
+                }
+            }
             let item = InterviewTranscript(id: id, role: role, text: event.text, isFinal: event.state == .final,
                                            speaker: speakerID?.number)
-            if let existing = snapshot.transcript.firstIndex(where: { $0.id == id }) {
-                if snapshot.transcript[existing].isFinal { return }
+            if let existing = transcriptIndex {
                 snapshot.transcript[existing] = item
             } else {
                 snapshot.transcript.append(item)
                 if snapshot.transcript.count > 2_000 { snapshot.transcript.removeFirst() }
             }
-            if event.state == .final, role == .candidate {
-                if let normalized = Self.echoFingerprint(event.text) { recentCandidateAudio.append((normalized, .now)) }
-                if recentCandidateAudio.count > 12 { recentCandidateAudio.removeFirst() }
-            }
-            if event.state == .final, role == .interviewer, !isCandidateEcho(event.text) {
+            if event.state == .final, role == .interviewer {
                 ingressSequence += 1
                 let work = QuestionWork(event: event, speaker: speakerID, sequence: ingressSequence,
-                                        conversation: classificationBudget.recent(conversation))
+                                        conversation: classificationBudget.recent(conversation), transcriptID: id,
+                                        holdUntil: hasCandidateChannel ? received.advanced(by: CrossSourceAttribution.hold) : nil)
                 if case .dropped = questionQueue?.yield(work) {
                     snapshot.discardedQuestions += 1
                     recordIssue("Question queue full. Transcript retained. Use the transcript to ask manually.")
@@ -408,20 +465,25 @@ public actor InterviewSession {
         }
     }
 
-    private static func echoFingerprint(_ text: String) -> String? {
-        let tokens = text.lowercased().split { !$0.isLetter && !$0.isNumber }
-        return tokens.count >= 4 ? tokens.joined(separator: " ") : nil
+    private func vetoAttribution(_ id: String) {
+        guard ambiguousAudio.insert(id).inserted else { return }
+        if let index = snapshot.transcript.firstIndex(where: { $0.id == id }) {
+            snapshot.transcript[index].role = .unknown
+        }
+        conversation.removeAll { $0.id == id }
+        if classification?.work.transcriptID == id { classification?.task.cancel() }
+        if activeAnswerSource?.transcriptID == id { invalidateAnswer(.cancelled) }
     }
 
-    private func isCandidateEcho(_ text: String) -> Bool {
-        guard let fingerprint = Self.echoFingerprint(text) else { return false }
-        return recentCandidateAudio.contains { observed, time in
-            observed == fingerprint && time.duration(to: .now) <= .seconds(3)
-        }
+    private func clearAttribution(_ source: CaptureSource) {
+        recentCandidateAudio.removeAll { $0.sourceID == source.id }
+        candidateSpeech.removeAll { $0.sourceID == source.id }
+        recentInterviewerAudio.removeAll { $0.sourceID == source.id }
     }
 
     private func eligible(_ work: QuestionWork, activation: UUID) -> Bool {
-        guard captureID == activation, work.sequence > manualBarrier, !isCandidateEcho(work.event.text),
+        guard captureID == activation, work.sequence > manualBarrier, !ambiguousAudio.contains(work.transcriptID),
+              snapshot.transcript.contains(where: { $0.id == work.transcriptID && $0.role == .interviewer }),
               epochs[work.event.source.id] == work.event.epoch else { return false }
         guard let speaker = work.speaker else { return work.event.source.role == .interviewer }
         return work.sequence > (roleBarriers[speaker] ?? 0)
@@ -430,6 +492,16 @@ public actor InterviewSession {
 
     private func classify(_ work: QuestionWork, activation: UUID) async {
         guard eligible(work, activation: activation) else { return }
+        if let holdUntil = work.holdUntil, holdUntil > .now {
+            do { try await Task.sleep(until: holdUntil) } catch { return }
+            guard eligible(work, activation: activation) else { return }
+        }
+        if let remote = recentInterviewerAudio.first(where: { $0.id == work.transcriptID }),
+           candidateSpeech.contains(where: { $0.received.duration(to: .now) <= CrossSourceAttribution.retention && $0.makesAmbiguous(remote) }) {
+            vetoAttribution(work.transcriptID)
+            publish()
+            return
+        }
         if let ingested = work.event.timing.final, ingested.duration(to: .now) > .seconds(12) {
             snapshot.discardedQuestions += 1
             recordIssue("A question expired in the classifier queue. Use the transcript to ask manually.")
@@ -438,10 +510,13 @@ public actor InterviewSession {
         }
         var timing = work.event.timing
         timing.classificationStarted = .now
+        let context = work.conversation.filter { turn in
+            !ambiguousAudio.contains(turn.id) && !snapshot.transcript.contains { $0.id == turn.id && $0.role == .unknown }
+        }
         let job = Task { [detector, classificationBudget, classificationEvidence, interviewContext] in
             let facts = await classificationEvidence(work.event.text)
             try Task.checkCancellation()
-            return try await detector.receive(work.event, conversation: work.conversation,
+            return try await detector.receive(work.event, conversation: context,
                                               approvedEvidence: facts, interviewContext: interviewContext,
                                               budget: classificationBudget)
         }
@@ -455,7 +530,7 @@ public actor InterviewSession {
                     let turn = conversation[index]
                     conversation[index] = .init(id: turn.id, role: turn.role, text: turn.text, questionID: question.id)
                 }
-                generate(question, format: format, origin: work, timing: timing)
+                generate(question, format: format, origin: work, timing: timing, conversation: context)
             }
         } catch where !(error is CancellationError) && eligible(work, activation: activation) {
             recordIssue("Question classification failed. Select transcript text to ask manually.")
@@ -481,6 +556,7 @@ public actor InterviewSession {
             snapshot.speakers.removeAll { $0.id.sourceID == source.id }
             roleBarriers = roleBarriers.filter { $0.key.sourceID != source.id }
             invalidateSourceWork(source)
+            clearAttribution(source)
             recordIssue(source.id + ": " + failure)
             await detector.invalidate(source)
         }
@@ -491,7 +567,7 @@ public actor InterviewSession {
     }
 
     private func generate(_ question: AcceptedQuestion, format: AnswerFormat, origin: QuestionWork? = nil,
-                          timing: PipelineTiming = .init()) {
+                          timing: PipelineTiming = .init(), conversation contextOverride: [ConversationTurn]? = nil) {
         invalidateAnswer(.superseded)
         activeAnswerSource = origin
         let revision = UUID()
@@ -507,7 +583,7 @@ public actor InterviewSession {
         }
         publish()
         let began = ContinuousClock.now
-        var context = answerBudget.recent(origin?.conversation ?? conversation).reversed().map { turn in
+        var context = answerBudget.recent(contextOverride ?? conversation).reversed().map { turn in
             let speaker = turn.role == .candidate ? "Actual candidate speech (unverified)" : "Interviewer speech"
             return speaker + ": " + turn.text
         }
@@ -620,7 +696,8 @@ public actor InterviewSession {
     }
 
     public func responseVisible(_ revision: UUID) {
-        guard captureID != nil, timeline[revision]?.firstToken != nil else { return }
+        guard captureID != nil, timeline[revision]?.firstToken != nil,
+              snapshot.answers.first(where: { $0.revision == revision })?.text.contains(where: { !$0.isWhitespace }) == true else { return }
         mark(revision, \.firstVisible)
     }
 

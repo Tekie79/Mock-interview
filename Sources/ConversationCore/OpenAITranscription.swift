@@ -19,11 +19,28 @@ public enum ProviderFailure: Error, Equatable, Sendable {
 
 public enum OpenAIRealtimeWire {
     public static func session(model: String, language: String?, vocabulary: [String] = []) throws -> String {
-        var transcription = ["model": model]
-        if let language, !language.isEmpty { transcription["language"] = language }
+        guard ProviderCapabilities.describe(.openai, model: model).supports(.transcription) else {
+            throw ProviderFailure.unsupportedCapability
+        }
+        var transcription: [String: Any] = ["model": model]
+        let keywordModel = ProviderCapabilities.openAIKeywordModels.contains(model)
+        if let language = language?.trimmingCharacters(in: .whitespacesAndNewlines).lowercased(), !language.isEmpty {
+            let pattern = keywordModel ? #"\A(?:[a-z]{2,3}|zh-(?:cn|tw|hk))\z"# : #"\A[a-z]{2}\z"#
+            guard language.range(of: pattern, options: .regularExpression) != nil else {
+                throw ProviderFailure.unsupportedCapability
+            }
+            if keywordModel { transcription["languages"] = [language] }
+            else { transcription["language"] = language }
+        }
         if model == "gpt-live-transcribe" { transcription["delay"] = "low" }
-        if ["gpt-4o-transcribe", "gpt-4o-mini-transcribe", "whisper-1"].contains(model), !vocabulary.isEmpty {
-            transcription["prompt"] = vocabulary.prefix(25).map { String($0.prefix(48)) }.joined(separator: ", ")
+        let terms = vocabulary.lazy.filter { $0.rangeOfCharacter(from: .newlines.union(.init(charactersIn: "<>"))) == nil }
+            .map { $0.trimmingCharacters(in: .whitespaces) }.filter { !$0.isEmpty }
+            .prefix(25).map { String($0.prefix(48)) }
+        if !terms.isEmpty {
+            if keywordModel { transcription["keywords"] = Array(terms) }
+            else if ProviderCapabilities.openAIPromptModels.contains(model) {
+                transcription["prompt"] = terms.joined(separator: ", ")
+            }
         }
         return try encode([
             "type": "session.update",
@@ -48,12 +65,34 @@ public enum OpenAIRealtimeWire {
 
 public struct OpenAITranscriptAssembler {
     private struct Event: Decodable {
+        struct Language: Decodable { let code: String }
+        struct Usage: Decodable {
+            let type: String
+            let seconds: Double?
+            let input_tokens: Int?
+            let output_tokens: Int?
+
+            var normalized: RecognitionUsage? {
+                switch type {
+                case "duration":
+                    guard let seconds, seconds.isFinite, seconds >= 0 else { return nil }
+                    return .audioSeconds(seconds)
+                case "tokens":
+                    guard let input_tokens, let output_tokens, input_tokens >= 0, output_tokens >= 0 else { return nil }
+                    return .tokens(.init(input: input_tokens, output: output_tokens))
+                default: return nil
+                }
+            }
+        }
         let type: String
         let event_id: String?
         let item_id: String?
         let previous_item_id: String?
+        let content_index: Int?
         let delta: String?
         let transcript: String?
+        let languages: [Language]?
+        let usage: Usage?
         let error: ServiceError?
     }
 
@@ -67,6 +106,8 @@ public struct OpenAITranscriptAssembler {
         var committed = false
         var partial = ""
         var final: String?
+        var language: String?
+        var usage: RecognitionUsage?
     }
 
     private let source: CaptureSource
@@ -99,6 +140,8 @@ public struct OpenAITranscriptAssembler {
         }
         guard ["input_audio_buffer.committed", "conversation.item.input_audio_transcription.delta",
                "conversation.item.input_audio_transcription.completed"].contains(message.type) else { return [] }
+        // Each client commit creates exactly one audio content part.
+        if let index = message.content_index, index != 0 { return [] }
         guard let itemID = message.item_id, !itemID.isEmpty else { throw ProviderFailure.malformedEvent }
         guard !delivered.contains(itemID) else { return [] }
         if let eventID = message.event_id {
@@ -125,6 +168,10 @@ public struct OpenAITranscriptAssembler {
             }
             if item.final != nil { return [] }
             item.final = transcript
+            item.usage = message.usage?.normalized
+            if let languages = message.languages, languages.count == 1, let code = languages.first?.code, !code.isEmpty {
+                item.language = code
+            }
         }
         items[itemID] = item
         var output: [TranscriptEvent] = []
@@ -143,7 +190,7 @@ public struct OpenAITranscriptAssembler {
 
     private func normalize(_ id: String, _ item: Item, text: String, state: TranscriptEvent.State) -> TranscriptEvent {
         TranscriptEvent(source: source, epoch: epoch, itemID: id, previousItemID: item.previous,
-                        text: text, state: state)
+                        text: text, state: state, language: item.language, recognitionUsage: item.usage)
     }
 }
 
@@ -175,10 +222,11 @@ public actor OpenAIRealtimeTranscriber: StreamingSTT {
     public func connect(source: CaptureSource, epoch: UUID) async throws
         -> AsyncThrowingStream<TranscriptEvent, Error> {
         guard socket == nil else { throw CaptureFailure.alreadyRunning }
-        guard !apiKey.isEmpty else { throw ProviderFailure.missingCredentials }
-        guard !model.isEmpty, let url = URL(string: "wss://api.openai.com/v1/realtime?intent=transcription") else {
+        guard !apiKey.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else { throw ProviderFailure.missingCredentials }
+        guard let url = URL(string: "wss://api.openai.com/v1/realtime?intent=transcription") else {
             throw ProviderFailure.requestRejected
         }
+        let sessionUpdate = try OpenAIRealtimeWire.session(model: model, language: language, vocabulary: vocabulary)
         var request = URLRequest(url: url, timeoutInterval: 15)
         request.setValue("Bearer " + apiKey, forHTTPHeaderField: "Authorization")
         let socket = makeSocket(request)
@@ -186,12 +234,16 @@ public actor OpenAIRealtimeTranscriber: StreamingSTT {
         let id = UUID()
         connection = id
         do {
-            let sessionUpdate = try OpenAIRealtimeWire.session(model: model, language: language, vocabulary: vocabulary)
             try await socket.send(sessionUpdate)
             try await receiveReadiness(on: socket, timeout: .seconds(15)) { bytes in
                 guard let event = try? JSONSerialization.jsonObject(with: bytes) as? [String: Any],
                       let kind = event["type"] as? String else { throw ProviderFailure.malformedEvent }
-                if kind == "session.updated" { return true }
+                if kind == "session.updated" {
+                    guard (event["session"] as? [String: Any])?["type"] as? String == "transcription" else {
+                        throw ProviderFailure.malformedEvent
+                    }
+                    return true
+                }
                 if kind == "error" {
                     var assembler = OpenAITranscriptAssembler(source: source, epoch: epoch)
                     _ = try assembler.receive(bytes)
@@ -233,6 +285,11 @@ public actor OpenAIRealtimeTranscriber: StreamingSTT {
     }
 
     public func commit() async throws { try await send(OpenAIRealtimeWire.commit) }
+
+    public func checkConnection() async throws {
+        guard let socket else { throw ProviderFailure.disconnected }
+        try await socket.ping()
+    }
 
     public func close() async {
         let oldReader = reader

@@ -1,5 +1,10 @@
 import Foundation
 
+public enum AudioTimingBasis: String, Codable, Sendable {
+    case localSpeechEstimate = "Local speech estimate"
+    case providerRangeEstimate = "Provider range mapped to capture clock"
+}
+
 public struct PipelineTiming: Equatable, Sendable {
     public var capture: ContinuousClock.Instant?
     public var speechStart: ContinuousClock.Instant?
@@ -15,6 +20,7 @@ public struct PipelineTiming: Equatable, Sendable {
     public var firstToken: ContinuousClock.Instant?
     public var firstVisible: ContinuousClock.Instant?
     public var terminal: ContinuousClock.Instant?
+    public var audioTimingBasis: AudioTimingBasis?
     public init() {}
 
     public var durations: PipelineDurations {
@@ -28,7 +34,7 @@ public struct PipelineTiming: Equatable, Sendable {
               retrieval: Self.measure(retrievalStarted, retrievalFinished),
               requestToToken: Self.measure(requestStarted, firstToken),
               endpointToVisible: Self.measure(endpoint, firstVisible),
-              endpointToTerminal: Self.measure(endpoint, terminal))
+              endpointToTerminal: Self.measure(endpoint, terminal), audioTimingBasis: audioTimingBasis)
     }
 
     private static func measure(_ start: ContinuousClock.Instant?, _ end: ContinuousClock.Instant?) -> Int? {
@@ -50,15 +56,17 @@ public struct PipelineDurations: Codable, Equatable, Sendable {
     public let requestToToken: Int?
     public let endpointToVisible: Int?
     public let endpointToTerminal: Int?
+    public let audioTimingBasis: AudioTimingBasis?
 
     public var summary: String {
-        [("Capture to speech", captureToSpeech), ("Speech", speech), ("Endpoint to commit", endpointToCommit),
+        let values = [("Capture to speech", captureToSpeech), ("Speech", speech), ("Endpoint to commit", endpointToCommit),
          ("Speech to partial", speechToPartial), ("Commit to final", commitToFinal),
          ("Classifier queue", classificationQueue), ("Classification", classification), ("Retrieval", retrieval),
          ("Request to token", requestToToken), ("Endpoint to visible", endpointToVisible),
          ("Endpoint to terminal", endpointToTerminal)].compactMap { label, value in
             value.map { "\(label): \($0) ms" }
-        }.joined(separator: "\n")
+         }
+        return (["Audio timing: \(audioTimingBasis?.rawValue ?? "Unavailable")"] + values).joined(separator: "\n")
     }
 }
 
@@ -74,12 +82,15 @@ struct StreamAudioClock {
     private let capacity = 2_048
     private var anchors: [Anchor] = []
     private var head = 0
+    private var sampleOrigin: Int64?
     private var latestSample: Int64 = 0
 
     mutating func record(_ frame: AudioFrame) {
-        latestSample = frame.startSample + Int64(frame.pcm.count / 2)
-        if let last = lastAnchor, frame.startSample - last.sample < 2_400 { return }
-        let anchor = Anchor(sample: frame.startSample, instant: frame.capturedAt)
+        if sampleOrigin == nil { sampleOrigin = frame.startSample }
+        let sample = frame.startSample - (sampleOrigin ?? frame.startSample)
+        latestSample = sample + Int64(frame.pcm.count / 2)
+        if let last = lastAnchor, sample - last.sample < 2_400 { return }
+        let anchor = Anchor(sample: sample, instant: frame.capturedAt)
         if anchors.count < capacity { anchors.append(anchor) }
         else {
             anchors[head] = anchor
@@ -112,6 +123,8 @@ struct StreamAudioClock {
         }
         guard low > 0 else { return nil }
         let anchor = anchors[(head + low - 1) % anchors.count]
-        return anchor.instant.advanced(by: .seconds(Double(target - anchor.sample) / 24_000))
+        let samples = target - anchor.sample
+        let elapsed = Duration.seconds(samples / 24_000) + .nanoseconds(samples % 24_000 * 1_000_000_000 / 24_000)
+        return anchor.instant.advanced(by: elapsed)
     }
 }

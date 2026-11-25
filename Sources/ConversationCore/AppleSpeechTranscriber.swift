@@ -4,17 +4,30 @@ import Foundation
 import Speech
 
 public actor AppleSpeechTranscriber: StreamingSTT {
+    public nonisolated let behavior = TranscriptionBehavior(requiresStreamEnd: true)
+
     private struct Recognition {
         let request: SFSpeechAudioBufferRecognitionRequest
         let task: SFSpeechRecognitionTask
+    }
+
+    private struct Update: Sendable {
+        let index: Int
+        let text: String?
+        let words: [TranscriptWord]
+        let final: Bool
+        let failed: Bool
     }
 
     private let locale: String
     private let mode: AppleRecognitionMode
     private let vocabulary: [String]
     private var recognizer: SFSpeechRecognizer?
+    private var activation: UUID?
     private var identity: (source: CaptureSource, epoch: UUID)?
     private var output: AsyncThrowingStream<TranscriptEvent, Error>.Continuation?
+    private var callbacks: AsyncStream<Update>.Continuation?
+    private var reader: Task<Void, Never>?
     private var active: Int?
     private var requests: [Int: Recognition] = [:]
     private var finals: [Int: TranscriptEvent] = [:]
@@ -48,9 +61,17 @@ public actor AppleSpeechTranscriber: StreamingSTT {
     }
 
     public func connect(source: CaptureSource, epoch: UUID) async throws -> AsyncThrowingStream<TranscriptEvent, Error> {
-        guard identity == nil else { throw CaptureFailure.alreadyRunning }
+        try Task.checkCancellation()
+        guard activation == nil else { throw CaptureFailure.alreadyRunning }
+        let id = UUID()
+        activation = id
+        var connected = false
+        defer {
+            if !connected, activation == id { activation = nil }
+        }
         let authorized = await Self.requestRecognitionPermission()
         try Task.checkCancellation()
+        guard activation == id else { throw CancellationError() }
         guard authorized else { throw AppleRecognitionFailure.speechPermissionDenied }
         let available = Self.hasOnDeviceRecognition(locale: locale)
         try AppleRecognitionPolicy.validate(language: locale, supported: Set(Self.languages()),
@@ -61,14 +82,25 @@ public actor AppleSpeechTranscriber: StreamingSTT {
         self.recognizer = recognizer
         identity = (source, epoch)
         let (stream, output) = AsyncThrowingStream<TranscriptEvent, Error>.makeStream(bufferingPolicy: .bufferingOldest(256))
+        let (updates, callbacks) = AsyncStream<Update>.makeStream(bufferingPolicy: .bufferingOldest(64))
         self.output = output
-        output.onTermination = { [weak self] _ in Task { await self?.close(epoch: epoch) } }
+        self.callbacks = callbacks
+        output.onTermination = { [weak self] _ in Task { await self?.close(id) } }
+        reader = Task { [weak self] in
+            for await update in updates {
+                guard !Task.isCancelled else { return }
+                await self?.receive(update, activationID: id)
+            }
+        }
+        connected = true
         return stream
     }
 
     public func append(_ frame: AudioFrame) throws {
-        guard !finishing, let identity, frame.source == identity.source, frame.sampleRate == 24_000,
-              !frame.pcm.isEmpty, frame.pcm.count.isMultiple(of: 2),
+        try Task.checkCancellation()
+        guard !finishing, let identity else { throw ProviderFailure.disconnected }
+        guard frame.source == identity.source, frame.sampleRate == 24_000,
+              !frame.pcm.isEmpty, frame.pcm.count.isMultiple(of: 2), frame.pcm.count / 2 <= Int(UInt32.max),
               let format = AVAudioFormat(commonFormat: .pcmFormatInt16, sampleRate: Double(frame.sampleRate),
                                          channels: 1, interleaved: false),
               let buffer = AVAudioPCMBuffer(pcmFormat: format, frameCapacity: AVAudioFrameCount(frame.pcm.count / 2)),
@@ -89,14 +121,21 @@ public actor AppleSpeechTranscriber: StreamingSTT {
     }
 
     public func finishInput() {
+        guard identity != nil else { return }
         finishing = true
         commit()
         if requests.isEmpty { output?.finish() }
     }
 
-    public func close() {
+    public func close() async {
+        activation = nil
         identity = nil
         active = nil
+        let oldReader = reader
+        reader = nil
+        oldReader?.cancel()
+        callbacks?.finish()
+        callbacks = nil
         for recognition in requests.values { recognition.task.cancel() }
         requests.removeAll()
         finals.removeAll()
@@ -106,14 +145,15 @@ public actor AppleSpeechTranscriber: StreamingSTT {
         finishing = false
         nextSequence = 0
         publishing = 0
+        await oldReader?.value
     }
 
-    private func close(epoch: UUID) {
-        if identity?.epoch == epoch { close() }
+    private func close(_ id: UUID) async {
+        if activation == id { await close() }
     }
 
     private func startRequest() throws {
-        guard requests.count < 4, nextSequence - publishing < 8, let identity, let recognizer else {
+        guard requests.count < 4, nextSequence - publishing < 8, let recognizer, let callbacks, let output else {
             throw ProviderFailure.incompleteTranscription
         }
         if mode == .onDevice && !recognizer.supportsOnDeviceRecognition {
@@ -126,37 +166,38 @@ public actor AppleSpeechTranscriber: StreamingSTT {
         request.shouldReportPartialResults = true
         request.taskHint = .dictation
         request.contextualStrings = vocabulary
-        let task = recognizer.recognitionTask(with: request) { [weak self] result, error in
+        let handler: @Sendable (SFSpeechRecognitionResult?, Error?) -> Void = { result, error in
             let transcript = result?.bestTranscription
             let words = transcript?.segments.prefix(1_024).map { segment in
-                TranscriptWord(text: segment.substring, startSeconds: segment.timestamp,
+                TranscriptWord(text: String(segment.substring.prefix(256)), startSeconds: segment.timestamp,
                                endSeconds: segment.timestamp + segment.duration)
             } ?? []
-            let text = transcript?.formattedString
-            let final = result?.isFinal ?? false
-            let failed = error != nil
-            Task {
-                await self?.receive(index: index, epoch: identity.epoch, text: text, words: words,
-                                    final: final, failed: failed)
+            let update = Update(index: index, text: transcript.map { String($0.formattedString.prefix(8_000)) },
+                                words: words, final: result?.isFinal ?? false, failed: error != nil)
+            if case .dropped = callbacks.yield(update) {
+                output.finish(throwing: CaptureFailure.bufferOverrun)
+                callbacks.finish()
             }
         }
+        let task = recognizer.recognitionTask(with: request, resultHandler: handler)
         requests[index] = Recognition(request: request, task: task)
         active = index
     }
 
-    private func receive(index: Int, epoch: UUID, text: String?, words: [TranscriptWord], final: Bool, failed: Bool) {
-        guard let identity, identity.epoch == epoch, requests[index] != nil else { return }
-        if failed && !final {
+    private func receive(_ update: Update, activationID: UUID) {
+        let index = update.index
+        guard activation == activationID, let identity, requests[index] != nil else { return }
+        if update.failed && !update.final {
             output?.finish(throwing: ProviderFailure.unavailable)
             return
         }
-        guard let text else { return }
+        guard let text = update.text else { return }
         let id = "apple-\(index)"
-        let event = TranscriptEvent(source: identity.source, epoch: epoch, itemID: id,
+        let event = TranscriptEvent(source: identity.source, epoch: identity.epoch, itemID: id,
                                     previousItemID: index > 0 ? "apple-\(index - 1)" : nil,
-                                    text: String(text.prefix(8_000)), state: final ? .final : .partial,
-                                    words: words, language: locale)
-        if final {
+                                    text: text, state: update.final ? .final : .partial,
+                                    words: update.words, language: locale)
+        if update.final {
             if active == index {
                 // A system recognition limit interrupted still-open audio. Start a fresh epoch.
                 output?.finish(throwing: ProviderFailure.unavailable)

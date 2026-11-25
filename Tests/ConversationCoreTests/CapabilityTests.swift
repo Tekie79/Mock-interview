@@ -13,6 +13,23 @@ final class CapabilityTests: XCTestCase {
             XCTAssertFalse(ProviderCapabilities.describe(.chatGPTSubscription).supports(service))
         }
     }
+
+    func testRealtimeCapabilitiesReflectModelSpecificWireSupport() {
+        let live = ProviderCapabilities.describe(.openai, model: "gpt-live-transcribe")
+        XCTAssertEqual(live.services, [.transcription])
+        XCTAssertEqual(live.commits, [.manual])
+        XCTAssertTrue(live.vocabularyHints)
+        XCTAssertTrue(ProviderCapabilities.describe(.openai, model: "gpt-transcribe").detectsLanguage)
+        XCTAssertFalse(ProviderCapabilities.describe(.openai, model: "gpt-realtime-whisper").vocabularyHints)
+        XCTAssertFalse(ProviderCapabilities.describe(.openai, model: "gpt-4.1-mini").supports(.transcription))
+        XCTAssertEqual(ProviderCapabilities.describe(.openai, model: "text-embedding-3-small").services, [.embeddings])
+
+        let nova = ProviderCapabilities.describe(.deepgram, model: "nova-3-general")
+        XCTAssertTrue(nova.diarization)
+        XCTAssertTrue(nova.detectsLanguage)
+        XCTAssertFalse(ProviderCapabilities.describe(.deepgram, model: "base").detectsLanguage)
+        XCTAssertFalse(ProviderCapabilities.describe(.deepgram, model: "flux-general-en").supports(.transcription))
+    }
 }
 
 extension CapabilityTests {

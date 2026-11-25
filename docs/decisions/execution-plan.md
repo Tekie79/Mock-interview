@@ -1,22 +1,17 @@
-# M10.1 development execution
+# M10.2 development execution
 
-Base is `feature/v1-cloud-implementation` at `ea24dc780aeca50358ba452446f3c5b99a3ecaba`. Work on `feature/m10-1-pipeline-hardening` and leave M11 for a separate qualification run.
+Branch `feature/m10-2-final-development` starts from reviewed M10.1 commit `42b8dda68ecc05a00a529a59cd03975e4ce56c05`. Preserve V1 features and the macOS 14.2 deployment target. Do not start M11, merge, or publish a release.
 
-| Checkpoint | Scope and development evidence |
+| Checkpoint | Scope, files and development evidence |
 |---|---|
-| A | Bounded ordered ingestion/classification and session/source failure regression |
-| B | Role-labelled context, stage timings, provider drain and cancellation fixtures |
-| C | Digital output taps, stable route identifiers, independent candidate input and epoch-safe switching |
-| D | Provider capability and common audio contracts, truthful availability gates |
-| E | Apple Speech adapter and strict/local mode policy |
-| F | ElevenLabs WebSocket adapter and official-wire fixtures |
-| G | OpenAI and Deepgram drain, timestamps, error and model-contract corrections |
-| H | Official ChatGPT subscription eligibility, independent authorization boundary and fail-closed tests |
-| I | Independent settings, credentials, and persisted presets |
-| J | Trace FR-01–21 and M10.1, fix verified regressions, run development checks and open PR |
+| A | ElevenLabs protocol and `TranscriptionChannel`: distinct audio, utterance and drain states; mocked delayed, duplicate, empty, timed-out and cancelled finals; silence-safe watchdog and retry tests |
+| B | `InterviewSession` and `PipelineMeasurements`: bounded cross-source attribution and timestamp provenance; arrival order, overlap, repeats, reset, reconnect and display acknowledgment regression |
+| C | ChatGPT authorization and AppShell: synthetic browser/loopback, account lifecycle and subscription composition; live activation remains gated on documented eligibility; audit independent provider settings and contracts |
+| D | Native Core Audio and SpeechAnalyzer: remove warning causes, review buffer/converter ownership and task cleanup; test portable lifecycle and compile/package on macOS 15 and 26 |
+| E | Run the full portable and hosted suites; update traceability, provider compatibility, implementation status and exact-head verification; open the review PR against M10.1 |
 
-Use the portable build and test scripts at each checkpoint. Hosted macOS CI owns Xcode compilation and the unsigned package check. Report runtime, provider-account and physical-device gaps separately. Confirm external authorization eligibility before enabling subscription features.
+Use `./scripts/build.sh`, `./scripts/test.sh`, and `git diff --check`. Hosted macOS runners must also run `./scripts/package-macos.sh`. Keep untagged provider timing and acoustic correlation limitations explicit: silence is not a stalled recognizer, a partial is not a final, and transcript evidence cannot prove acoustic isolation. No real authorization, paid-provider traffic, signing, or physical acceptance is part of these checkpoints.
 
-## Review handoff
+The branch already contained uncommitted M10.2 implementation and regression fixtures at the reviewed base. Preserve those changes, record them as a development checkpoint, and run hosted CI while auditing the remaining edge cases. The local Swift 6.3.2 Command Line Tools build passed. Local XCTest requires the Xcode test SDK, so use the Swift 6.2.3 Linux container and the hosted macOS matrix for full results.
 
-The A–J code commits and linked traceability table are the development review baseline. Follow the documented live eligibility gate for ChatGPT. Review unresolved coverage, then plan a separate M11 run on supported Apple Silicon hardware with representative devices, synthetic recordings and approved provider test accounts.
+Next action: collect the initial CI results and resolve any failures, then verify the final candidate. See [M10.1 verification](../verification/m10-1.md) and [M10.2 verification](../verification/m10-2.md).

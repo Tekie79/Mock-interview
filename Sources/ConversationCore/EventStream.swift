@@ -37,6 +37,7 @@ struct EventStreamParser {
 
 final class StreamingHTTP: NSObject, URLSessionDataDelegate, @unchecked Sendable {
     typealias Decode = @Sendable (String) throws -> Event
+    typealias Validate = @Sendable (URLResponse) throws -> Void
 
     enum Event {
         case ignore
@@ -47,19 +48,23 @@ final class StreamingHTTP: NSObject, URLSessionDataDelegate, @unchecked Sendable
 
     private let output: AsyncThrowingStream<GenerationEvent, Error>.Continuation
     private let decode: Decode
+    private let validate: Validate
     private var parser = EventStreamParser()
     private var finished = false
     private var emittedText = false
 
-    private init(output: AsyncThrowingStream<GenerationEvent, Error>.Continuation, decode: @escaping Decode) {
+    private init(output: AsyncThrowingStream<GenerationEvent, Error>.Continuation, validate: @escaping Validate,
+                 decode: @escaping Decode) {
         self.output = output
+        self.validate = validate
         self.decode = decode
     }
 
-    static func start(_ request: URLRequest, decode: @escaping Decode) -> AsyncThrowingStream<GenerationEvent, Error> {
+    static func start(_ request: URLRequest, validate: @escaping Validate = { try OpenAIResponsesClient.validate($0) },
+                      decode: @escaping Decode) -> AsyncThrowingStream<GenerationEvent, Error> {
         let (stream, output) = AsyncThrowingStream<GenerationEvent, Error>.makeStream(
             bufferingPolicy: .bufferingOldest(512))
-        let receiver = StreamingHTTP(output: output, decode: decode)
+        let receiver = StreamingHTTP(output: output, validate: validate, decode: decode)
         let configuration = URLSessionConfiguration.ephemeral
         configuration.timeoutIntervalForResource = 45
         let session = URLSession(configuration: configuration, delegate: receiver, delegateQueue: nil)
@@ -72,7 +77,7 @@ final class StreamingHTTP: NSObject, URLSessionDataDelegate, @unchecked Sendable
     func urlSession(_ session: URLSession, dataTask: URLSessionDataTask, didReceive response: URLResponse,
                     completionHandler: @escaping (URLSession.ResponseDisposition) -> Void) {
         do {
-            try OpenAIResponsesClient.validate(response)
+            try validate(response)
             guard (response as? HTTPURLResponse)?.mimeType == "text/event-stream" else {
                 throw ProviderFailure.malformedEvent
             }

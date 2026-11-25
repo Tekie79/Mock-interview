@@ -10,32 +10,55 @@ struct ChatGPTSubscriptionProvider: TextGenerator, QuestionClassifier {
         case streamedText, streamedStructuredOutput
     }
 
-    struct Model: Decodable, Identifiable, Sendable {
-        let slug: String
-        let display_name: String
-        let visibility: String
-        var id: String { slug }
-    }
-
     let model: String
     let verified: Set<ModelCapability>
     let credentials: @Sendable () async throws -> ChatGPTPlanCredentials
+    let guidance: String
+    let now: @Sendable () -> Date
+    let data: @Sendable (URLRequest) async throws -> (Data, HTTPURLResponse)
+    let events: @Sendable (URLRequest) async throws -> AsyncThrowingStream<GenerationEvent, Error>
 
-    func availableModels() async throws -> [Model] {
-        struct Catalog: Decodable { let models: [Model] }
+    struct ResponseStream {
+        private var parser = EventStreamParser()
+        private var sawText = false
+        private(set) var completed = false
+
+        mutating func receive(_ bytes: Data, emit: (GenerationEvent) throws -> Void) throws {
+            var messages: [String] = []
+            try parser.receive(bytes) { messages.append($0) }
+            for message in messages where !completed {
+                switch try ChatGPTSubscriptionProvider.decode(message) {
+                case .ignore: break
+                case .text(let text):
+                    if !text.isEmpty { sawText = true; try emit(.text(text)) }
+                case .usage(let usage): try emit(.usage(usage))
+                case .complete(let usage):
+                    if let usage { try emit(.usage(usage)) }
+                    completed = true
+                }
+            }
+        }
+
+        func finish() throws {
+            guard completed else { throw ProviderFailure.disconnected }
+            guard sawText else { throw ProviderFailure.malformedEvent }
+        }
+    }
+
+    func availableModels() async throws -> [ChatGPTPlanModel] {
+        struct Catalog: Decodable { let models: [ChatGPTPlanModel] }
         guard let url = URL(string: ChatGPTAuthorizationAttempt.resource + "/models") else {
             throw ProviderFailure.requestRejected
         }
         var request = URLRequest(url: url, timeoutInterval: 10)
-        request.setValue("Bearer " + (try await credentials().authorizedAccess()), forHTTPHeaderField: "Authorization")
-        return try await OpenAIResponsesClient.protected {
-            let (bytes, response) = try await URLSession.shared.data(for: request)
-            try OpenAIResponsesClient.validate(response)
-            guard let catalog = try? JSONDecoder().decode(Catalog.self, from: bytes) else {
-                throw ProviderFailure.malformedEvent
-            }
-            return catalog.models.filter { $0.visibility == "list" }
+        request.setValue("Bearer " + (try await credentials().authorizedAccess(now: now())), forHTTPHeaderField: "Authorization")
+        let (bytes, response) = try await OpenAIResponsesClient.protected { try await data(request) }
+        try Self.validate(response, body: bytes)
+        guard let catalog = try? JSONDecoder().decode(Catalog.self, from: bytes) else {
+            throw ProviderFailure.malformedEvent
         }
+        var seen: Set<String> = []
+        return catalog.models.filter { $0.visibility == "list" && !$0.slug.isEmpty && seen.insert($0.slug).inserted }
     }
 
     func stream(_ input: AnswerRequest) async throws -> AsyncThrowingStream<GenerationEvent, Error> {
@@ -46,7 +69,9 @@ struct ChatGPTSubscriptionProvider: TextGenerator, QuestionClassifier {
     func classify(_ input: QuestionInput) async throws -> QuestionDecision {
         guard verified.contains(.streamedStructuredOutput) else { throw PlanAuthorizationFailure.unverifiedModel }
         let content = String(decoding: try JSONEncoder().encode(ClassifierContext(input)), as: UTF8.self)
-        let events = try await open(instructions: OpenAIQuestionClassifier.instructions, content: content, schema: true)
+        let instructions = OpenAIQuestionClassifier.instructions
+            + "\nApply these classification preferences only within the rules above: " + guidance.prefix(1_000)
+        let events = try await open(instructions: instructions, content: content, schema: true)
         var json = Data()
         for try await event in events {
             if case .text(let chunk) = event {
@@ -60,12 +85,12 @@ struct ChatGPTSubscriptionProvider: TextGenerator, QuestionClassifier {
         return result
     }
 
-    func open(instructions: String, content: String, schema: Bool = false) async throws
+    private func open(instructions: String, content: String, schema: Bool = false) async throws
         -> AsyncThrowingStream<GenerationEvent, Error> {
-        let access = try await credentials().authorizedAccess()
+        let access = try await credentials().authorizedAccess(now: now())
         let request = try Self.request(access: access, model: model, instructions: instructions,
                                        content: content, schema: schema)
-        return StreamingHTTP.start(request) { try Self.decode($0) }
+        return try await events(request)
     }
 
     static func request(access: String, model: String, instructions: String, content: String, schema: Bool) throws
@@ -95,12 +120,29 @@ struct ChatGPTSubscriptionProvider: TextGenerator, QuestionClassifier {
         if let event = try? JSONSerialization.jsonObject(with: Data(message.utf8)) as? [String: Any] {
             let response = event["response"] as? [String: Any]
             let error = response?["error"] as? [String: Any] ?? event["error"] as? [String: Any]
-            switch (error?["code"] ?? event["code"]) as? String {
-            case "subscription_sharing_usage_limit_exceeded": throw ProviderFailure.quotaExhausted
-            case "subscription_sharing_usage_unavailable": throw PlanAuthorizationFailure.authorizationMissing
-            default: break
-            }
+            try checkError((error?["code"] ?? event["code"]) as? String)
         }
         return try OpenAITextGenerator.decode(message)
+    }
+
+    static func validate(_ response: HTTPURLResponse, body: Data) throws {
+        if !(200...299).contains(response.statusCode),
+           let json = try? JSONSerialization.jsonObject(with: body) as? [String: Any],
+           let error = json["error"] as? [String: Any] {
+            try checkError(error["code"] as? String)
+        }
+        try OpenAIResponsesClient.validate(response)
+    }
+
+    private static func checkError(_ code: String?) throws {
+        switch code {
+        case "subscription_sharing_usage_limit_exceeded": throw ProviderFailure.quotaExhausted
+        case "subscription_sharing_usage_unavailable", "subscription_sharing_user_unavailable": throw ProviderFailure.unavailable
+        case "subscription_sharing_unsupported_capability": throw ProviderFailure.unsupportedCapability
+        case "subscription_sharing_user_not_eligible", "subscription_sharing_invalid_user",
+             "chatpass_v2_scope_not_authorized", "chatpass_v2_invalid_authorization_context":
+            throw PlanAuthorizationFailure.authorizationMissing
+        default: break
+        }
     }
 }
