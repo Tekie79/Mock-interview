@@ -15,3 +15,7 @@
 | M11-11 | Medium | Implemented, runtime upgrade pending | Rebuilt app prompted again for saved Keychain items. An in-app provider check blocked its main thread while macOS waited for authorization. | The app reuses one authorized credential read per launch and performs reads and writes on a serial background queue. Tests cover reuse, failed writes, replacement and removal. Cross-build prompt continuity depends on app identity and the original OS grant. [Permission evidence](m11-provider-qualification.md) |
 
 M11-01 and M11-07 have [native regression procedures](../acceptance-test-plan.md). M11-04 and M11-05 have deterministic detector regressions. Unscored, blocked and failed acceptance cases remain visible in the [acceptance matrix](m11-final-acceptance.md).
+
+### M12 follow-on
+
+The redesigned UI uses viewport-based answer acknowledgment and attributed temporary context. OpenAI-specific physical, quality, latency, sustained Chat and endurance gates remain open. Previous optional-provider drain defects remain outside the approved primary scope. [M12 validation](m12-ui-validation.md)

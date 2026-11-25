@@ -626,3 +626,9 @@ The owner selected OpenAI for production qualification. Use `gpt-live-transcribe
 - Context learns from bounded finalized interviewer and candidate turns in the current session. Retain attribution and prefer original dialogue and recent corrections. Keep actual candidate speech, AI suggestions and reviewed profile evidence distinct. Optional OpenAI summarization runs in the background with a bounded older-turn batch. Stop or clear discards derived memory. Explicit session saves retain the existing transcript and suggestion model.
 - Alternate adapter implementation and deterministic test requirements remain applicable. Defer ElevenLabs live qualification, graceful drain and performance, as well as live Deepgram and Anthropic. ChatGPT activation remains eligibility-gated.
 - Every acceptance threshold in §12 remains applicable to the OpenAI production scope. The 90-minute remote, dual-source, displayed latency, packaging and grounding gates are mandatory. A provider connection smoke or diagnostic replay is evidence only for its tested layer.
+
+### M12 approved native workspace extension
+
+Keep audio capture and generation active when switching sidebar destinations, Focus/Chat or windows. Focus and Chat share stable logical questions, revision-scoped actions and withdrawal. Chat must pause following during manual reading and expose an explicit way to resume. First-useful-text instrumentation requires that the actual answer content intersect a visible window viewport.
+
+Support a temporary Recent or Adaptive conversation context. Attribute learned information to the source, speaker and capture epoch. Include delayed candidate finals with eligible capture timing, exclude future conversation and revoke affected memory, summaries and answer revisions after corrections. Approved profile evidence remains a separate grounding authority. Keep current provider choices, fail-closed attribution and production thresholds.

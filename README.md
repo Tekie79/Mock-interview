@@ -36,3 +36,11 @@ Use feature branches and reviewed changes. Do not merge or publish releases auto
 ## Qualification evidence
 
 See [requirements traceability](docs/requirements-traceability.md), [audio compatibility](docs/audio-routing.md), [provider capabilities](docs/provider-compatibility.md), and [pipeline and timing](docs/realtime-pipeline.md). See [M11 acceptance](docs/verification/m11-final-acceptance.md) for native and live provider observations and [release readiness](docs/release-readiness.md) for outstanding qualification gates. Hosted packaging checks build an unsigned bundle.
+
+## Native workspace
+
+The Live Interview workspace offers Focus or chronological Chat, an optional Transcript and Learned Context inspector, and a resizable Compact window. Both windows share the same active session and answer history. Open Profiles, History, Practice or Settings while the interview continues. Appearance and reading-size preferences are in Settings → General.
+
+Recent and Adaptive context use attributable conversation for follow-ups. Correct or exclude conversation-derived items in the inspector. Session memory is temporary by default. Use the explicit save controls for local interview history.
+
+See the [navigation and layout](docs/design/navigation-and-layout.md), [native UI evidence](docs/verification/m12-ui-validation.md) and [release readiness](docs/release-readiness.md).

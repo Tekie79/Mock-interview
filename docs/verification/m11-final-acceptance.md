@@ -114,3 +114,7 @@ A scenario earns **Passed** only within its specified layer. Native runtime, pro
 | Not tested | Cross-app z-order, VoiceOver, live response-format changes and copy in the updated bundle, signed installation and clean-host upgrade. |
 
 Sanitized UI observations used the accessibility tree and visual inspection of the workspace, Compact, settings and Solo Practice. Private meeting details, credentials and audio recordings are excluded from the evidence.
+
+## M12 follow-on
+
+M12 adds the redesigned app shell, Chat viewport visibility and temporal session memory. Earlier physical and live timing evidence remains associated with M11. See [M12 native UI validation](m12-ui-validation.md) for the updated presentation evidence and the OpenAI production gates.

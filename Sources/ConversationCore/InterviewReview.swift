@@ -37,10 +37,11 @@ public struct SavedInterview: Identifiable, Equatable, Codable, Sendable {
     public var missedQuestions: [String]
     public var notes: String
     public var coaching: String
+    public var profileName: String? = nil
 
     public init(id: UUID = UUID(), title: String, startedAt: Date, endedAt: Date,
                 transcript: [InterviewTranscript], suggestions: [InterviewAnswer],
-                missedQuestions: [String] = [], notes: String = "", coaching: String = "") {
+                missedQuestions: [String] = [], notes: String = "", coaching: String = "", profileName: String? = nil) {
         self.id = id
         self.title = title
         self.startedAt = startedAt
@@ -50,10 +51,12 @@ public struct SavedInterview: Identifiable, Equatable, Codable, Sendable {
         self.missedQuestions = missedQuestions
         self.notes = notes
         self.coaching = coaching
+        self.profileName = profileName
     }
 
     public var plainText: String {
         var sections = [title, "Started: " + startedAt.formatted(.iso8601)]
+        if let profileName { sections.append("Profile: " + profileName) }
         if !transcript.isEmpty {
             sections.append("Transcript\n" + transcript.map {
                 "\($0.role.rawValue.capitalized): \($0.text)"
@@ -62,7 +65,8 @@ public struct SavedInterview: Identifiable, Equatable, Codable, Sendable {
         if !suggestions.isEmpty {
             sections.append("Suggested answers\n" + suggestions.map {
                 let label = $0.originLabel ?? "Suggestion"
-                return "Question: \($0.question.original)\n\(label) (\($0.state.rawValue)): \($0.text)"
+                let content = $0.state == .invalidated ? "Withdrawn after attribution or context changed." : $0.text
+                return "Question: \($0.question.original)\n\(label) (\($0.state.rawValue)): \(content)"
             }.joined(separator: "\n\n"))
         }
         if !missedQuestions.isEmpty {

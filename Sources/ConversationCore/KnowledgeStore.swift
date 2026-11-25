@@ -33,6 +33,8 @@ public struct InterviewProfile: Codable, Identifiable, Equatable, Sendable {
     public var instructions: String
     public var answerLanguage: String
     public var answerTraining: ProfileAnswerTraining?
+    public var professionalSummary: String? = nil
+    public var modifiedAt: Date? = nil
 
     public init(id: UUID = UUID(), name: String, role: String = "", seniority: String = "",
                 industry: String = "", instructions: String = "", answerLanguage: String = "",
@@ -69,6 +71,12 @@ public struct ProfileDocument: Codable, Identifiable, Equatable, Sendable {
     public let title: String
     public let text: String
     private var pageRegions: [PageRegion]?
+
+    fileprivate func duplicate() -> Self {
+        var copy = ProfileDocument(kind: kind, title: title, text: text)
+        copy.pageRegions = pageRegions
+        return copy
+    }
 
     public init(id: UUID = UUID(), kind: Kind, title: String, text: String) {
         self.id = id
@@ -333,6 +341,41 @@ public actor KnowledgeStore {
         try database.query("SELECT data FROM profiles ORDER BY rowid") {
             try SQLiteDatabase.decode(InterviewProfile.self, from: $0)
         }
+    }
+
+    public func profileDocumentCounts() throws -> [UUID: Int] {
+        let rows = try database.query("SELECT profile, COUNT(*) FROM documents GROUP BY profile") {
+            (UUID(uuidString: SQLiteDatabase.text($0, 0)), Int(SQLiteDatabase.text($0, 1)) ?? 0)
+        }
+        return Dictionary(uniqueKeysWithValues: rows.compactMap { id, count in id.map { ($0, count) } })
+    }
+
+    public func duplicateProfile(_ original: UUID) throws -> InterviewProfile {
+        guard let source = try profiles().first(where: { $0.id == original }) else { throw StorageFailure.invalidRecord }
+        var copy = InterviewProfile(name: source.name + " Copy", role: source.role, seniority: source.seniority,
+            industry: source.industry, instructions: source.instructions, answerLanguage: source.answerLanguage,
+            answerTraining: source.answerTraining)
+        copy.professionalSummary = source.professionalSummary
+        copy.modifiedAt = .now
+        let documents = try documents(profile: original)
+        let facts = try facts(profile: original)
+        try database.transaction {
+            try save(copy)
+            var mapping: [UUID: UUID] = [:]
+            for document in documents {
+                let newDocument = document.duplicate()
+                mapping[document.id] = newDocument.id
+                try database.write("INSERT INTO documents VALUES (?, ?, ?)",
+                                   [newDocument.id.uuidString, copy.id.uuidString, try SQLiteDatabase.json(newDocument)])
+            }
+            for fact in facts {
+                let newFact = ExperienceFact(documentID: fact.documentID.flatMap { mapping[$0] }, locator: fact.locator,
+                    category: fact.category, claim: fact.claim, ownership: fact.ownership, dates: fact.dates,
+                    limitations: fact.limitations, status: fact.status, sourceTitle: fact.sourceTitle)
+                try Self.writeFact(newFact, profile: copy.id, in: database)
+            }
+        }
+        return copy
     }
 
     public func deleteProfile(_ id: UUID) throws {

@@ -21,3 +21,7 @@ No signing credentials were used. The M11 builds are unsigned and local. Publica
 ## Provider release boundaries
 
 The owner approved deferral of live ElevenLabs, Deepgram and Anthropic qualification. ElevenLabs graceful drain and performance are outside the mandatory release gate. Retain the optional adapters and deterministic tests. ChatGPT sign-in remains gated until the owner documents official eligibility for the exact distribution and completes any required OpenAI approval. [Provider qualification](verification/m11-provider-qualification.md)
+
+## M12 release decision
+
+**HOLD for production distribution.** M12 is a native UI review candidate. [M12 validation](verification/m12-ui-validation.md) records the redesign’s exact build and test evidence. The OpenAI production scope still needs physical dual-source cycles, an independent holdout and observed display latency, curated live grounding, a sustained Chat run, 90 minutes over a controlled remote endpoint, and clean supported-system installation and upgrade qualification. Optional-provider qualification is outside the primary release decision.

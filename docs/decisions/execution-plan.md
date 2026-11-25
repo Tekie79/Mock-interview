@@ -119,3 +119,12 @@ The exact baseline failed the deterministic 100-turn reproduction with 0/40 reco
 - Run portable tests, native unsigned packaging and exact-revision hosted checks. Record applicable live evidence and leave unexecuted native and performance gates open.
 
 Local SwiftPM build and 159 XCTest cases passed with zero failures. Xcode built unsigned version 1.0.0 (11.2) for arm64 and x86_64. Hosted checks, native UI observations and provider measurements are indexed in [draft PR #3](https://github.com/Tekie79/Mock-interview/pull/3).
+
+## M12 native redesign
+
+Base `a843a565ef0c9f7ed5d4c9a3bb3bd9bb5a318d0a` on `feature/m12-modern-ui`.
+
+- Split the native shell into navigation, live, answer, inspector, settings, profiles, practice and review surfaces. Add semantic design tokens and keep one workspace model above navigation.
+- Add viewport-based answer visibility, shared actions, stable chronological cards, follow controls, bounded updates and narrow Compact layout.
+- Add session-local Recent and Adaptive policies, capture-time context selection, inspection and editing, and provenance invalidation.
+- Run deterministic regressions, unsigned Release packaging and hosted Linux, macOS 15 and macOS 26. Inspect the native UI with synthetic content. Keep OpenAI hardware, independent accuracy/display timing, endurance and distribution qualification separate.

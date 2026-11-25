@@ -161,7 +161,8 @@ enum AnswerPrompt {
         Attribute a team accomplishment to the team and describe the candidate's own contribution only when supplied.
         If evidence conflicts about ownership, tools or outcomes, use the supported common details and omit disputed claims.
         Use interview context to interpret questions and tailor advice. Job requirements do not establish experience.
-        Actual candidate speech and session summaries are unverified session context. Use them to resolve
+        Actual candidate speech and session summaries are unverified session context. An observed speaking-style sample
+        supplies cadence and wording only. Use dialogue and summaries to resolve
         references and adapt to feedback. Original dialogue in interview context is ordered newest first.
         Prefer original dialogue and newer explicit corrections over older
         summaries. Never treat either as approved profile evidence for personal claims.

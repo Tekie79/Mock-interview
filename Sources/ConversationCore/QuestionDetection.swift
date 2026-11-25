@@ -7,6 +7,7 @@ public struct AcceptedQuestion: Identifiable, Equatable, Sendable, Codable {
     public let parts: [String]
     public let previousQuestionID: UUID?
     public let category: String?
+    public var referencesExplicitContext: Bool? = nil
 
     public init(id: UUID = UUID(), original: String, normalized: String, parts: [String] = [],
                 previousQuestionID: UUID? = nil, category: String? = nil) {
@@ -208,9 +209,10 @@ public actor QuestionDetector {
             $0.original.caseInsensitiveCompare(text) == .orderedSame
         })?.id : nil
         let contextualReference = result.isFollowUp || result.isIntentionalRepeat ? matched ?? context.last?.id : nil
-        let question = AcceptedQuestion(original: text, normalized: normalized, parts: result.parts,
+        var question = AcceptedQuestion(original: text, normalized: normalized, parts: result.parts,
                                         previousQuestionID: priorRepeat ?? contextualReference,
                                         category: result.category == "past_work" ? result.category : nil)
+        if matched != nil || priorRepeat != nil { question.referencesExplicitContext = true }
         let detection = Detection(question: question, transcriptIDs: transcriptIDs)
         recent.append(detection)
         if recent.count > 8 { recent.removeFirst() }
