@@ -62,3 +62,19 @@ Coarse case matching used unique lexical-overlap assignments within each convers
 | Estimated endpoint to terminal | 27, 4,425 / 5,333 | 13, 4,216 / 4,962 |
 
 Nearest-rank percentiles use successful completed cards. Six generating cards were outside these percentiles and remain in the table. No live provider error or overrun was reported. Local and provider-estimated endpoint clocks differ by adapter. No SwiftUI display acknowledgment or photometric time was captured by this headless harness.
+
+### Follow-up audio replay after classifier corrections
+
+The next 100-turn production replay scored the same recordings with the same model split. OpenAI produced 24 completed cards, 23 lexical matches to expected questions and one to an incomplete turn. ElevenLabs semantic turn produced 11 cards, of which 9 completed and 2 were streaming at cutoff. Five mapped to accepted labels, five to ignored labels and one to an incomplete turn. These counts use the same approximate mapping. The ElevenLabs replay gate remains open.
+
+On the retest, classification p50/p95 was 1,446/2,447 ms for 24 completed OpenAI STT cards and 1,575/2,301 ms for nine completed ElevenLabs STT cards. Estimated endpoint to terminal p50/p95 was 4,179/5,136 ms and 4,213/4,891 ms respectively. Across both configurations the harness reported zero reconnects, zero drops and zero question queue overflows. All ten sessions drained to zero connected sources after Stop.
+
+## Zoom runtime smoke
+
+The 120-second process-scoped trial used `gpt-live-transcribe` and `gpt-4.1-mini` with the candidate mic and local retention off. There were 8 final segments, 5 completed answers, 0 reconnects, 0 reported dropped chunks, 0 question queue overflows and 0 connected sources after Stop. Recognition reported 32 seconds. The app submitted 26 PCM seconds locally, reflecting local speech gating. Completed streams used 1,249 input tokens and 404 output tokens. During the trial, four `ps` observations were 35.0–61.8% CPU and 217,136–224,128 KiB RSS.
+
+The last answer showed estimated local endpoint to SwiftUI visibility of 4,202 ms and estimated endpoint to terminal of 4,913 ms. These are single-answer diagnostics based on the app's clock correlations. The source was not aligned to an independent annotation, so this trial provides no acceptance percentile. The run stopped after two minutes and is excluded from the 90-minute stability gate.
+
+A supplemental 12-turn text probe alternated substantive questions and spoken answers on one interviewer-designated source. With the latest utterance separated from the reference context, six expected positives yielded five acceptances and one timeout. Two of six negative examples still produced acceptances. The one-source Zoom Q&A test has no corresponding independent turn labels, so recorded automatic answer counts do not establish correctness. [Supplemental fixture](../../Tests/Fixtures/m11/zoom-qa.jsonl)
+
+The live Q&A follow-up five-minute checkpoint reported 28 finalized segments, 16 completed automatic answers, 1 connected source and zero reconnects, drops or queue overflows. The app submitted 110 PCM seconds and the provider reported 124 recognition seconds. Completed answers used 4,628 input and 1,372 output tokens. Its latest local estimate was 2,884 ms to the SwiftUI visibility callback, a pipeline observation only. A separate credential-free OpenAI HTTPS probe connected in 20 ms and completed TLS in 43 ms on this host. This probe is not a Zoom RTT measurement.

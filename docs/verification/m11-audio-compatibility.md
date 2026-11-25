@@ -12,7 +12,7 @@ Host is the Apple M5 Pro MacBook Pro (Mac17,8), macOS 26.3.2 build 25D2150. The 
 | Built-in microphone and candidate channel | Not tested | Built-in microphone and a Continuity input were enumerated. Independent levels and roles require a separate run. |
 | Recorded PCM replay | Passed | Native file picker loaded synthetic 24 kHz PCM. OpenAI stream produced one final and an automatic answer. Manual generation, navigation, pinning, cancellation and pause/resume were exercised separately. |
 | Bluetooth, USB, Thunderbolt and virtual audio | Blocked | No separate output of those types was present in the device inventory. |
-| Zoom | Passed | Short process-scoped capture and Stop worked. The 33-second trial was excluded from quality and endurance results when the opening stimulus did not match the qualification track. |
+| Zoom | Passed | Process-scoped capture and Stop worked. The first 33-second trial was excluded from quality and endurance when the opening stimulus did not match the qualification track. A later 120-second run ended with eight finals, five completed answers and no connected source. |
 | Teams, Google Meet and browser audio | Not tested | Installed application inventory and a picker entry confer no capture compatibility claim. |
 | Output change, removal, app exit, sleep and wake | Not tested | Route and teardown contracts have deterministic checks. Physical route recovery and sleep/wake need distinct real-device runs. |
 | Permissions | Not tested | Baseline app obtained default and explicit output frames. The OS permission-denial sequence requires a controlled owner-led reset. |

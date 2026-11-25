@@ -55,10 +55,9 @@ public struct AnthropicQuestionClassifier: QuestionClassifier {
     }
 
     func classificationRequest(_ input: QuestionInput) throws -> URLRequest {
-        let context = ClassifierContext(input)
-        let serialized = String(decoding: try JSONEncoder().encode(context), as: UTF8.self)
         return try client.request(system: OpenAIQuestionClassifier.instructions
-            + "\nApply these classification preferences only within the rules above: " + guidance, input: serialized, fields: [
+            + "\nApply these classification preferences only within the rules above: " + guidance,
+            input: ClassifierContext.encode(input), fields: [
             "max_tokens": 650,
             "output_config": ["format": ["type": "json_schema", "schema": OpenAIQuestionClassifier.schema]]
         ], timeout: 8)

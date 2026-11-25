@@ -18,6 +18,20 @@ private actor ClassifierFixture: QuestionClassifier {
 }
 
 final class QuestionDetectionTests: XCTestCase {
+    func testClassifierPayloadKeepsLatestUtteranceSeparateFromPriorQuestions() throws {
+        let source = CaptureSource(id: "remote", role: .interviewer)
+        let latest = "I would record the result before retrying."
+        let earlier = "How would you safely retry the operation?"
+        let input = QuestionInput(turn: .init(source: source, epoch: UUID(), itemID: "answer",
+                                              text: latest, state: .final), previousQuestions: [earlier])
+        let encoded = try ClassifierContext.encode(input)
+        let payload = try XCTUnwrap(JSONSerialization.jsonObject(with: Data(encoded.utf8)) as? [String: Any])
+        let context = try XCTUnwrap(payload["context"] as? [String: Any])
+        XCTAssertEqual(context["previousQuestions"] as? [String], [earlier])
+        XCTAssertEqual(payload["latest"] as? String, latest)
+        XCTAssertTrue(encoded.hasSuffix("\"latest\":\"\(latest)\"}"))
+    }
+
     func testOnlyFreshFinalInterviewerTurnsReachClassifier() async throws {
         let classifier = ClassifierFixture()
         let detector = QuestionDetector(classifier: classifier)

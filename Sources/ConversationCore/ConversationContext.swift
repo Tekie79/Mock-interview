@@ -57,19 +57,24 @@ public struct ContextBudget: Equatable, Sendable {
 }
 
 struct ClassifierContext: Encodable {
-    let latest: String
-    let providerTurnProbability: Double?
-    let previousQuestions: [String]
-    let conversation: [ConversationTurn]
-    let approvedEvidence: [String]
-    let interviewContext: [String]
+    private struct ReferenceContext: Encodable {
+        let providerTurnProbability: Double?
+        let previousQuestions: [String]
+        let conversation: [ConversationTurn]
+        let approvedEvidence: [String]
+        let interviewContext: [String]
+    }
 
-    init(_ input: QuestionInput) {
-        latest = input.turn.text
-        providerTurnProbability = input.turn.turnProbability
-        previousQuestions = input.previousQuestions
-        conversation = input.conversation
-        approvedEvidence = input.approvedEvidence
-        interviewContext = input.interviewContext
+    private let context: ReferenceContext
+    private let latest: String
+
+    static func encode(_ input: QuestionInput) throws -> String {
+        let context = ReferenceContext(providerTurnProbability: input.turn.turnProbability,
+                                       previousQuestions: input.previousQuestions, conversation: input.conversation,
+                                       approvedEvidence: input.approvedEvidence, interviewContext: input.interviewContext)
+        let encoder = JSONEncoder()
+        encoder.outputFormatting = .sortedKeys
+        let payload = Self(context: context, latest: input.turn.text)
+        return String(decoding: try encoder.encode(payload), as: UTF8.self)
     }
 }

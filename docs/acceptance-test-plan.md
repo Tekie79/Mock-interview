@@ -25,3 +25,5 @@ For each run record: commit SHA, date, OS/toolchain/device, command or manual st
 ## M11 execution
 
 Use the [AT-01–18 evidence table](verification/m11-final-acceptance.md) for current status and report Passed, Failed, Blocked or Not tested. Keep pipeline estimates and live text classification distinct from independently timed displayed responses and real audio question accuracy. For the compact window regression, launch the native application, open Compact from the workspace, click Expand, and verify that the Window menu and accessibility tree show the same single workspace. Repeat after opening Compact with the configured shortcut.
+
+For the presentation regression, render a synthetic answer containing paragraphs, a heading, inline emphasis, ordered and unordered steps, and a fenced code example. Inspect wide and compact layouts, including accessibility labels. For the startup regression, relaunch an unsigned test build with pre-existing provider items and confirm an idle workspace and status labels without a prompt on launch. Keep explicit provider access subject to macOS authorization.

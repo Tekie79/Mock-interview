@@ -1,5 +1,6 @@
 import AppKit
 import ConversationCore
+import LocalAuthentication
 import Security
 import SwiftUI
 import UniformTypeIdentifiers
@@ -72,6 +73,17 @@ private final class InterviewAppDelegate: NSObject, NSApplicationDelegate {
 
 private enum Keychain {
     static let service = "com.mockinterview.desktop"
+
+    static func configuredAccounts() -> Set<String> {
+        let authentication = LAContext()
+        authentication.interactionNotAllowed = true
+        return Set(["openai", "deepgram", "anthropic", "elevenlabs"].filter { account in
+            var query = base(account)
+            query[kSecUseAuthenticationContext as String] = authentication
+            query[kSecMatchLimit as String] = kSecMatchLimitOne
+            return SecItemCopyMatching(query as CFDictionary, nil) == errSecSuccess
+        })
+    }
 
     static func load(_ account: String) -> String? {
         var query = base(account)
@@ -295,7 +307,8 @@ final class WorkspaceModel: ObservableObject {
     @Published var endedAt: Date?
     @Published var providerTest: String?
     @Published var checkingProvider = false
-    @Published var configuredKeys = Set(["openai", "deepgram", "anthropic", "elevenlabs"].filter { Keychain.load($0) != nil })
+    @Published var configuredKeys: Set<String> = []
+    private var keySettingsRevision = 0
     @Published private(set) var chatGPTSnapshot: ChatGPTPlanAccounts.Snapshot?
     @Published private(set) var chatGPTStatus: String?
     @Published private(set) var chatGPTBusy = false
@@ -336,6 +349,9 @@ final class WorkspaceModel: ObservableObject {
         }
         await reloadProfiles()
         reloadDevices()
+        let revision = keySettingsRevision
+        let accounts = await Task.detached { Keychain.configuredAccounts() }.value
+        if revision == keySettingsRevision { configuredKeys = accounts }
     }
 
     func reloadDevices() {
@@ -361,6 +377,7 @@ final class WorkspaceModel: ObservableObject {
         do {
             let normalized = key.trimmingCharacters(in: .whitespacesAndNewlines)
             try Keychain.save(normalized, account: account)
+            keySettingsRevision += 1
             if normalized.isEmpty { configuredKeys.remove(account) } else { configuredKeys.insert(account) }
             providerTest = nil
         } catch {
@@ -999,12 +1016,20 @@ private struct AnswerPanel: View {
                 }.font(.caption)
             }
             if let answer = model.displayedAnswer {
-                Text(answer.question.original).font(.title3.weight(.medium))
-                if let label = answer.originLabel { Text(label).font(.caption).foregroundStyle(.secondary) }
                 ScrollView {
-                    VStack(alignment: .leading, spacing: 10) {
+                    VStack(alignment: .leading, spacing: 14) {
+                        VStack(alignment: .leading, spacing: 5) {
+                            if let label = answer.originLabel {
+                                Text(label).font(.caption).foregroundStyle(.secondary)
+                            }
+                            Text(answer.question.original)
+                                .font(.title3.weight(.semibold))
+                                .textSelection(.enabled)
+                                .accessibilityAddTraits(.isHeader)
+                        }
                         if answer.state != .invalidated {
-                            Text(answer.text).font(.system(size: fontSize)).textSelection(.enabled)
+                            if !answer.text.isEmpty { Divider() }
+                            AnswerText(text: answer.text, fontSize: fontSize)
                                 .onChange(of: answer.text, initial: true) { _, value in
                                     if value.contains(where: { $0.isLetter || $0.isNumber }) {
                                         model.responseVisible(answer.revision)
@@ -1013,33 +1038,38 @@ private struct AnswerPanel: View {
                         }
                         if answer.state != .invalidated, !answer.evidence.isEmpty {
                             DisclosureGroup("Approved evidence") {
-                                ForEach(Array(answer.evidence.enumerated()), id: \.offset) { _, fact in
-                                    Text(fact).textSelection(.enabled)
+                                VStack(alignment: .leading, spacing: 7) {
+                                    ForEach(Array(answer.evidence.enumerated()), id: \.offset) { _, fact in
+                                        Text(fact).textSelection(.enabled)
+                                    }
                                 }
+                                .padding(.top, 5)
                             }
+                            .font(.callout)
                         }
                     }
+                    .frame(maxWidth: 720, alignment: .leading)
+                    .padding(14)
                     .frame(maxWidth: .infinity, alignment: .leading)
                 }
-                Text(answer.state.rawValue.capitalized).font(.caption).foregroundStyle(.secondary)
-                if let failure = answer.failure { Text(failure).font(.caption).foregroundStyle(.secondary) }
-                if let usage = answer.usage {
-                    Text("\(usage.input) input / \(usage.output) output tokens")
-                        .font(.caption).foregroundStyle(.secondary)
+                .background(Color(nsColor: .controlBackgroundColor), in: RoundedRectangle(cornerRadius: 10))
+                .id(answer.revision)
+                ViewThatFits(in: .horizontal) {
+                    HStack(spacing: 8) { answerStatus(answer) }
+                    VStack(alignment: .leading, spacing: 2) { answerStatus(answer) }
                 }
+                if let failure = answer.failure { Text(failure).font(.caption).foregroundStyle(.secondary) }
                 HStack {
-                    if answer.state == .generating {
-                        Button("Cancel", action: model.cancelAnswer)
-                    }
-                    Button(answer.state == .invalidated ? "Generate manually" : answer.state == .failed ? "Retry" : "Regenerate") {
-                        model.regenerate()
-                    }
-                    Menu("Format") {
-                        ForEach(AnswerFormat.allCases) { format in
-                            Button(format.rawValue) { model.regenerate(format) }
+                    if answer.state != .invalidated && !answer.text.isEmpty {
+                        Button("Copy answer", systemImage: "doc.on.doc") {
+                            NSPasteboard.general.clearContents()
+                            NSPasteboard.general.setString(answer.text, forType: .string)
                         }
+                        .labelStyle(.iconOnly)
+                        .help("Copy answer")
                     }
-                }.disabled(!model.state.isRunning)
+                    answerActions(answer)
+                }
             } else {
                 Text("Accepted questions and suggested answers will appear here.")
                     .foregroundStyle(.secondary)
@@ -1047,6 +1077,127 @@ private struct AnswerPanel: View {
             }
         }
         .padding(.leading, 8)
+    }
+
+    @ViewBuilder
+    private func answerStatus(_ answer: InterviewAnswer) -> some View {
+        Text(answer.state.rawValue.capitalized).font(.caption.weight(.semibold)).foregroundStyle(.secondary)
+        if let usage = answer.usage {
+            Text("\(usage.input) input / \(usage.output) output tokens")
+                .font(.caption).foregroundStyle(.secondary)
+        }
+    }
+
+    private func answerActions(_ answer: InterviewAnswer) -> some View {
+        HStack {
+            if answer.state == .generating {
+                Button("Cancel", action: model.cancelAnswer)
+            }
+            Button(answer.state == .invalidated ? "Generate manually" : answer.state == .failed ? "Retry" : "Regenerate") {
+                model.regenerate()
+            }
+            Menu("Format") {
+                ForEach(AnswerFormat.allCases) { format in
+                    Button(format.rawValue) { model.regenerate(format) }
+                }
+            }
+        }.disabled(!model.state.isRunning)
+    }
+}
+
+private struct AnswerText: View {
+    let text: String
+    let fontSize: Double
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 9) {
+            ForEach(Array(blocks.enumerated()), id: \.offset) { _, block in
+                switch block {
+                case .paragraph(let text):
+                    Text(Self.inline(text))
+                case .heading(let text):
+                    Text(Self.inline(text))
+                        .bold()
+                        .accessibilityAddTraits(.isHeader)
+                case .item(let marker, let text):
+                    HStack(alignment: .firstTextBaseline, spacing: 8) {
+                        Text(marker).foregroundStyle(.secondary)
+                        Text(Self.inline(text))
+                    }
+                    .accessibilityElement(children: .combine)
+                case .code(let text):
+                    Text(text)
+                        .font(.system(size: fontSize * 0.9, design: .monospaced))
+                        .padding(9)
+                        .frame(maxWidth: .infinity, alignment: .leading)
+                        .background(.quaternary, in: RoundedRectangle(cornerRadius: 6))
+                }
+            }
+        }
+        .font(.system(size: fontSize))
+        .lineSpacing(4)
+        .textSelection(.enabled)
+        .frame(maxWidth: .infinity, alignment: .leading)
+    }
+
+    private enum Block {
+        case paragraph(String)
+        case heading(String)
+        case item(String, String)
+        case code(String)
+    }
+
+    private var blocks: [Block] {
+        var result: [Block] = []
+        var paragraph: [String] = []
+        var code: [String]?
+        func flushParagraph() {
+            if !paragraph.isEmpty {
+                result.append(.paragraph(paragraph.joined(separator: "\n")))
+                paragraph.removeAll(keepingCapacity: true)
+            }
+        }
+        for rawLine in text.split(omittingEmptySubsequences: false, whereSeparator: \.isNewline) {
+            let line = rawLine.trimmingCharacters(in: .whitespaces)
+            if line.hasPrefix("```") {
+                flushParagraph()
+                if let codeLines = code {
+                    result.append(.code(codeLines.joined(separator: "\n")))
+                    code = nil
+                } else {
+                    code = []
+                }
+            } else if code != nil {
+                code?.append(String(rawLine))
+            } else if line.isEmpty {
+                flushParagraph()
+            } else {
+                let titleMarker = line.prefix(while: { $0 == "#" })
+                let itemNumber = line.prefix(while: \.isNumber)
+                if (1...6).contains(titleMarker.count), line.dropFirst(titleMarker.count).hasPrefix(" ") {
+                    flushParagraph()
+                    result.append(.heading(String(line.dropFirst(titleMarker.count + 1))))
+                } else if ["- ", "* ", "+ "].contains(where: line.hasPrefix) {
+                    flushParagraph()
+                    result.append(.item("•", String(line.dropFirst(2))))
+                } else if !itemNumber.isEmpty, line.dropFirst(itemNumber.count).hasPrefix(". ") {
+                    flushParagraph()
+                    result.append(.item(String(itemNumber) + ".", String(line.dropFirst(itemNumber.count + 2))))
+                } else {
+                    paragraph.append(String(rawLine))
+                }
+            }
+        }
+        flushParagraph()
+        if let code, !code.isEmpty { result.append(.code(code.joined(separator: "\n"))) }
+        return result
+    }
+
+    private static func inline(_ text: String) -> AttributedString {
+        var attributed = (try? AttributedString(markdown: text,
+            options: .init(interpretedSyntax: .inlineOnlyPreservingWhitespace))) ?? AttributedString(text)
+        attributed.link = nil
+        return attributed
     }
 }
 

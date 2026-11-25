@@ -1,0 +1,12 @@
+{"session": "zoom-qa-synthetic", "turn": 1, "role": "interviewer", "category": "qa", "expected": "accept", "text": "Explain how a message queue retries failed work."}
+{"session": "zoom-qa-synthetic", "turn": 2, "role": "interviewer", "category": "qa", "expected": "ignore", "text": "You give the job a stable identity and record the result before acknowledging it, right?"}
+{"session": "zoom-qa-synthetic", "turn": 3, "role": "interviewer", "category": "qa", "expected": "accept", "text": "That makes sense. Compare a fixed delay with an exponential retry schedule."}
+{"session": "zoom-qa-synthetic", "turn": 4, "role": "interviewer", "category": "qa", "expected": "ignore", "text": "We use a queue because the application should acknowledge soon after receiving the request."}
+{"session": "zoom-qa-synthetic", "turn": 5, "role": "interviewer", "category": "qa", "expected": "accept", "text": "Describe two ways to measure whether the retries are healthy."}
+{"session": "zoom-qa-synthetic", "turn": 6, "role": "interviewer", "category": "qa", "expected": "ignore", "text": "The first measure is queue age. The second is how many jobs have gone to the dead-letter queue, okay?"}
+{"session": "zoom-qa-synthetic", "turn": 7, "role": "interviewer", "category": "qa", "expected": "accept", "text": "The queue is getting old. Which metric would you alert on first?"}
+{"session": "zoom-qa-synthetic", "turn": 8, "role": "interviewer", "category": "qa", "expected": "ignore", "text": "I would alert on age first since a low retry rate can hide a backlog."}
+{"session": "zoom-qa-synthetic", "turn": 9, "role": "interviewer", "category": "qa", "expected": "ignore", "text": "That is enough for the queue exercise. Can everyone see the next slide?"}
+{"session": "zoom-qa-synthetic", "turn": 10, "role": "interviewer", "category": "qa", "expected": "accept", "text": "The message IDs are stable, so what else would you check before enabling retries at scale?"}
+{"session": "zoom-qa-synthetic", "turn": 11, "role": "interviewer", "category": "qa", "expected": "ignore", "text": "Then you can use a concurrency limit to protect the downstream service. Does that make sense?"}
+{"session": "zoom-qa-synthetic", "turn": 12, "role": "interviewer", "category": "qa", "expected": "accept", "text": "Let's turn to deployment safety. Walk me through a rollback for this worker."}

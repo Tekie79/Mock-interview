@@ -11,3 +11,5 @@ python3 Tests/Fixtures/m11/render.py --render both --output /tmp/mock-interview-
 ```
 
 Each conversation yields three aligned raw mono PCM16 little-endian tracks at 24 kHz. A JSON file records the insertion sample positions for every clip. These positions support repeatable playback and overlap checks. Independently annotate the actual end of speech before using recordings for the product latency gate. Synthetic voices are one test condition. Human accent, room noise and microphone variation require separate coverage.
+
+`zoom-qa.jsonl` adds a 12-turn synthetic transcript probe for interview questions interleaved with spoken answers and trailing agreement checks on one source. It is a supplemental fixture for the classifier boundary.
