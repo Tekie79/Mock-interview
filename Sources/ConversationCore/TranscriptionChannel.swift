@@ -85,6 +85,7 @@ public struct TranscriptionChannel: Sendable {
                 var sampleUsage = 0
 
                 func send(_ frame: AudioFrame) async throws {
+                    if providerCommits { await progress.recordAudio(frame) }
                     try await stt.append(frame)
                     sampleUsage += frame.pcm.count / 2
                     if sampleUsage >= 24_000 {
@@ -208,6 +209,8 @@ private actor CommitProgress {
     private var ended = false
     private let requiresStreamEnd: Bool
     private var speechObservation: PipelineTiming?
+    private var audioClock = StreamAudioClock()
+    private var lastProviderEnd = 0.0
 
     init(requiresStreamEnd: Bool) {
         self.requiresStreamEnd = requiresStreamEnd
@@ -225,6 +228,10 @@ private actor CommitProgress {
         ended = true
         signal.yield(())
         return isFinished
+    }
+
+    func recordAudio(_ frame: AudioFrame) {
+        audioClock.record(frame)
     }
 
     func observedSpeech(_ timing: PipelineTiming) {
@@ -250,6 +257,13 @@ private actor CommitProgress {
         } else {
             let first = firstPartials.removeValue(forKey: event.itemID)
             event.timing = pending.first ?? speechObservation ?? event.timing
+            if let range = event.audioRange, range.endSeconds > lastProviderEnd,
+               let boundary = audioClock.measure(range) {
+                event.timing.capture = boundary.start
+                event.timing.speechStart = boundary.start
+                event.timing.endpoint = boundary.end
+                lastProviderEnd = range.endSeconds
+            }
             event.timing.firstPartial = first ?? event.timing.firstPartial
             event.timing.final = .now
         }

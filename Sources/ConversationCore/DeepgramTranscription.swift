@@ -98,9 +98,16 @@ public struct DeepgramTranscriptAssembler {
         guard !text.isEmpty else { return nil }
         let soleSpeaker = ordered.first?.speaker
         let speaker = final && ordered.allSatisfy { $0.speaker == soleSpeaker } ? soleSpeaker : nil
+        let words = ordered.flatMap(\.words)
+        let range: TranscriptAudioRange?
+        if let start = words.first?.startSeconds, let end = words.last?.endSeconds {
+            range = .init(startSeconds: start, endSeconds: end)
+        } else {
+            range = nil
+        }
         return TranscriptEvent(source: source, epoch: epoch, itemID: "deepgram-\(utterance)", text: text,
                                state: final ? .final : .partial, speaker: speaker,
-                               words: Array(ordered.flatMap(\.words).prefix(1_024)), language: language)
+                               words: Array(words.prefix(1_024)), language: language, audioRange: range)
     }
 
     static func isStreamSummary(_ bytes: Data) -> Bool {

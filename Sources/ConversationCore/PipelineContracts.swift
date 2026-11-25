@@ -47,6 +47,16 @@ public struct TranscriptWord: Equatable, Sendable, Codable {
     }
 }
 
+public struct TranscriptAudioRange: Equatable, Sendable {
+    public let startSeconds: Double
+    public let endSeconds: Double
+
+    public init(startSeconds: Double, endSeconds: Double) {
+        self.startSeconds = startSeconds
+        self.endSeconds = endSeconds
+    }
+}
+
 public struct TranscriptEvent: Equatable, Sendable {
     public enum State: Equatable, Sendable {
         case partial
@@ -65,11 +75,12 @@ public struct TranscriptEvent: Equatable, Sendable {
     public let words: [TranscriptWord]
     public let language: String?
     public let turnProbability: Double?
+    public let audioRange: TranscriptAudioRange?
 
     public init(source: CaptureSource, epoch: UUID, itemID: String, previousItemID: String? = nil,
                 text: String, state: State, speaker: Int? = nil, timing: PipelineTiming = .init(),
                 utteranceID: String? = nil, words: [TranscriptWord] = [],
-                language: String? = nil, turnProbability: Double? = nil) {
+                language: String? = nil, turnProbability: Double? = nil, audioRange: TranscriptAudioRange? = nil) {
         self.source = source
         self.epoch = epoch
         self.itemID = itemID
@@ -82,6 +93,7 @@ public struct TranscriptEvent: Equatable, Sendable {
         self.words = words
         self.language = language
         self.turnProbability = turnProbability
+        self.audioRange = audioRange
     }
 }
 

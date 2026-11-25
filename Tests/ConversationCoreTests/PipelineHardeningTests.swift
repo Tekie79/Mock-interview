@@ -302,3 +302,21 @@ extension PipelineHardeningTests {
         XCTAssertFalse(launchedAfterStop)
     }
 }
+
+extension PipelineHardeningTests {
+    func testProviderAudioRangeMapsToBoundedMonotonicStreamClock() throws {
+        let instant = ContinuousClock.now
+        let source = CaptureSource(id: "test", role: .interviewer)
+        var clock = StreamAudioClock()
+        for frame in 0..<100 {
+            let simulated = instant.advanced(by: .milliseconds(frame * 20))
+            clock.record(.init(source: source, sampleRate: 24_000, startSample: Int64(frame * 480),
+                               pcm: Data(repeating: 0, count: 960), capturedAt: simulated))
+        }
+        let measurement = try XCTUnwrap(clock.measure(.init(startSeconds: 0.2, endSeconds: 1.4)))
+        XCTAssertEqual(instant.duration(to: measurement.start), .milliseconds(200))
+        XCTAssertEqual(instant.duration(to: measurement.end), .milliseconds(1_400))
+        XCTAssertNil(clock.measure(.init(startSeconds: 0, endSeconds: 2.02)))
+        XCTAssertNil(clock.measure(.init(startSeconds: .nan, endSeconds: 1)))
+    }
+}

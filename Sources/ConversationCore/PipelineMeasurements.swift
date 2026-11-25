@@ -61,3 +61,57 @@ public struct PipelineDurations: Codable, Equatable, Sendable {
         }.joined(separator: "\n")
     }
 }
+
+
+/// Maps provider-relative audio positions onto the sample clock of an activation.
+/// Retains about three minutes at nominal frame cadence without storing audio.
+struct StreamAudioClock {
+    private struct Anchor {
+        let sample: Int64
+        let instant: ContinuousClock.Instant
+    }
+
+    private let capacity = 2_048
+    private var anchors: [Anchor] = []
+    private var head = 0
+    private var latestSample: Int64 = 0
+
+    mutating func record(_ frame: AudioFrame) {
+        latestSample = frame.startSample + Int64(frame.pcm.count / 2)
+        if let last = lastAnchor, frame.startSample - last.sample < 2_400 { return }
+        let anchor = Anchor(sample: frame.startSample, instant: frame.capturedAt)
+        if anchors.count < capacity { anchors.append(anchor) }
+        else {
+            anchors[head] = anchor
+            head = (head + 1) % capacity
+        }
+    }
+
+    func measure(_ range: TranscriptAudioRange) -> (start: ContinuousClock.Instant, end: ContinuousClock.Instant)? {
+        guard range.startSeconds.isFinite, range.endSeconds.isFinite,
+              range.startSeconds >= 0, range.endSeconds > range.startSeconds,
+              range.endSeconds <= Double(latestSample) / 24_000 else { return nil }
+        guard let start = Int64(exactly: (range.startSeconds * 24_000).rounded(.towardZero)),
+              let end = Int64(exactly: (range.endSeconds * 24_000).rounded(.towardZero)),
+              let first = lookup(start), let last = lookup(end), last >= first else { return nil }
+        return (first, last)
+    }
+
+    private var lastAnchor: Anchor? {
+        guard !anchors.isEmpty else { return nil }
+        return anchors[(head + anchors.count - 1) % anchors.count]
+    }
+
+    private func lookup(_ target: Int64) -> ContinuousClock.Instant? {
+        var low = 0
+        var high = anchors.count
+        while low < high {
+            let middle = (low + high) / 2
+            if anchors[(head + middle) % anchors.count].sample <= target { low = middle + 1 }
+            else { high = middle }
+        }
+        guard low > 0 else { return nil }
+        let anchor = anchors[(head + low - 1) % anchors.count]
+        return anchor.instant.advanced(by: .seconds(Double(target - anchor.sample) / 24_000))
+    }
+}

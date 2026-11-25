@@ -82,7 +82,9 @@ actor MacSpeechAnalyzerTranscriber: StreamingSTT {
                     }
                     let text = String(String(result.text.characters).prefix(8_000))
                     let event = TranscriptEvent(source: source, epoch: epoch, itemID: id, text: text,
-                                                state: result.isFinal ? .final : .partial, language: language)
+                                                state: result.isFinal ? .final : .partial, language: language,
+                                                audioRange: .init(startSeconds: CMTimeGetSeconds(start),
+                                                                  endSeconds: CMTimeGetSeconds(CMTimeRangeGetEnd(result.range))))
                     if case .dropped = output.yield(event) { throw CaptureFailure.bufferOverrun }
                 }
                 output.finish()

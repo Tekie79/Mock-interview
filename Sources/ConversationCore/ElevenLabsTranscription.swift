@@ -256,17 +256,19 @@ public actor ElevenLabsTranscriber: StreamingSTT {
         let words = (wire.words ?? []).prefix(1_024).filter { $0.type == nil || $0.type == "word" }.map {
             TranscriptWord(text: $0.text, startSeconds: $0.start, endSeconds: $0.end)
         }
+        var audioRange: TranscriptAudioRange?
         if let start = words.first?.startSeconds, let end = words.last?.endSeconds, start <= end {
             let range = start...end
             if let previous = lastCommit, range == previous.range, text == previous.text, partial.isEmpty {
                 return true
             }
             lastCommit = (range, text)
+            audioRange = .init(startSeconds: start, endSeconds: end)
         }
         let event = TranscriptEvent(source: source, epoch: epoch, itemID: item,
                                     previousItemID: nextItem > 0 ? "scribe-\(nextItem - 1)" : nil,
                                     text: text, state: .final, words: words,
-                                    language: wire.language_code, turnProbability: prediction)
+                                    language: wire.language_code, turnProbability: prediction, audioRange: audioRange)
         nextItem += 1
         partial = ""
         prediction = nil
