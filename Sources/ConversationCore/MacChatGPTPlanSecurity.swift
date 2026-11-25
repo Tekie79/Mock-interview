@@ -34,7 +34,9 @@ enum MacChatGPTPlanSecurity {
             guard let url = URL(string: ChatGPTAuthorizationAttempt.issuer + "/.well-known/jwks.json") else {
                 throw PlanAuthorizationFailure.invalidIdentity
             }
-            let (bytes, response) = try await URLSession.shared.data(for: URLRequest(url: url, timeoutInterval: 10))
+            let (bytes, response) = try await OpenAIResponsesClient.protected {
+                try await MacChatGPTPlanHTTP.data(URLRequest(url: url, timeoutInterval: 10))
+            }
             try OpenAIResponsesClient.validate(response)
             return try JSONDecoder().decode(Self.self, from: bytes)
         }

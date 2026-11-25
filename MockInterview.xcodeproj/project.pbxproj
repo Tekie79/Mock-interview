@@ -31,7 +31,7 @@
         };
         A00000000000000000000003 = {
             isa = PBXGroup;
-            children = (A00000000000000000000005, A00000000000000000000016, A00000000000000000000004);
+            children = (A00000000000000000000005, A00000000000000000000016, A00000000000000000000018, A00000000000000000000004);
             sourceTree = "<group>";
         };
         A00000000000000000000004 = {
@@ -55,6 +55,12 @@
         A00000000000000000000017 = {
             isa = PBXBuildFile;
             fileRef = A00000000000000000000016;
+        };
+        A00000000000000000000018 = {
+            isa = PBXFileReference;
+            lastKnownFileType = text.plist.xml;
+            path = AppShell/Info.plist;
+            sourceTree = "<group>";
         };
         A00000000000000000000006 = {
             isa = PBXFileReference;
@@ -105,21 +111,19 @@
         };
         A00000000000000000000012 = {
             isa = XCBuildConfiguration;
-            buildSettings = { MACOSX_DEPLOYMENT_TARGET = 14.2; SDKROOT = macosx; };
+            buildSettings = { ALWAYS_SEARCH_USER_PATHS = NO; MACOSX_DEPLOYMENT_TARGET = 14.2; SDKROOT = macosx; };
             name = Debug;
         };
         A00000000000000000000013 = {
             isa = XCBuildConfiguration;
-            buildSettings = { MACOSX_DEPLOYMENT_TARGET = 14.2; SDKROOT = macosx; };
+            buildSettings = { ALWAYS_SEARCH_USER_PATHS = NO; MACOSX_DEPLOYMENT_TARGET = 14.2; SDKROOT = macosx; };
             name = Release;
         };
         A00000000000000000000014 = {
             isa = XCBuildConfiguration;
             buildSettings = {
                 GENERATE_INFOPLIST_FILE = YES;
-                INFOPLIST_KEY_NSAudioCaptureUsageDescription = "Transcribe audio from the application you select for a mock interview.";
-                INFOPLIST_KEY_NSSpeechRecognitionUsageDescription = "Transcribe selected practice audio using Apple Speech.";
-                INFOPLIST_KEY_NSMicrophoneUsageDescription = "Transcribe your selected microphone during a mock interview.";
+                INFOPLIST_FILE = AppShell/Info.plist;
                 PRODUCT_BUNDLE_IDENTIFIER = com.mockinterview.desktop;
                 PRODUCT_NAME = "$(TARGET_NAME)";
                 SWIFT_VERSION = 5.0;
@@ -130,9 +134,7 @@
             isa = XCBuildConfiguration;
             buildSettings = {
                 GENERATE_INFOPLIST_FILE = YES;
-                INFOPLIST_KEY_NSAudioCaptureUsageDescription = "Transcribe audio from the application you select for a mock interview.";
-                INFOPLIST_KEY_NSSpeechRecognitionUsageDescription = "Transcribe selected practice audio using Apple Speech.";
-                INFOPLIST_KEY_NSMicrophoneUsageDescription = "Transcribe your selected microphone during a mock interview.";
+                INFOPLIST_FILE = AppShell/Info.plist;
                 PRODUCT_BUNDLE_IDENTIFIER = com.mockinterview.desktop;
                 PRODUCT_NAME = "$(TARGET_NAME)";
                 SWIFT_VERSION = 5.0;

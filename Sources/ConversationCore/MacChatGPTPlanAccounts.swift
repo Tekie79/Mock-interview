@@ -1,174 +1,117 @@
 #if os(macOS)
+import AppKit
 import Foundation
 import Security
 
-/// Lifecycle for an approved distribution. UI composition is disabled until eligibility is established.
-actor MacChatGPTPlanAccounts {
-    private struct TokenReply: Decodable {
-        let access_token: String
-        let refresh_token: String?
-        let id_token: String?
-        let token_type: String
-        let expires_in: Double
-        let scope: String
+extension ChatGPTPlanAccounts {
+    public static func makeDesktop() -> ChatGPTPlanAccounts? {
+        guard ChatGPTPlanEligibility.desktopAvailable else { return nil }
+        return ChatGPTPlanAccounts(
+            browser: .init(listen: { try await MacChatGPTLoopback.start() }, open: { NSWorkspace.shared.open($0) },
+                secrets: { try MacChatGPTPlanSecurity.secrets() }),
+            transport: .init(data: { try await MacChatGPTPlanHTTP.data($0) },
+                stream: { MacChatGPTPlanHTTP.stream($0) }, signature: { kid, payload, signature in
+                    try await MacChatGPTPlanSecurity.Keys.download().verify(kid, payload, signature)
+                }),
+            store: .init(load: { try MacPlanKeychain.load() }, save: { try MacPlanKeychain.save($0) }))
     }
-
-    private struct Discovery: Decodable { let revocation_endpoint: URL }
-    private struct OAuthError: Decodable { let error: String }
-
-    private let eligible: Bool
-    private var changes: [String: UUID] = [:]
-
-    init(eligible: Bool = false) { self.eligible = eligible }
-
-    func exchange(_ callback: URL, attempt: ChatGPTAuthorizationAttempt,
-                  expectedSubject: String? = nil) async throws -> ChatGPTPlanIdentity {
-        try requireEligibility()
-        let grant = try attempt.validateCallback(callback)
-        let previousSubject = try MacPlanKeychain.load(grant.clientID)?.identity.subject
-        let revision = UUID()
-        changes[grant.clientID] = revision
-        defer { if changes[grant.clientID] == revision { changes[grant.clientID] = nil } }
-        let reply = try await readTokens(attempt.exchange(grant))
-        guard let token = reply.id_token else { throw PlanAuthorizationFailure.invalidIdentity }
-        let keys = try await MacChatGPTPlanSecurity.Keys.download()
-        let identity = try ChatGPTIDToken.verify(token, clientID: grant.clientID, nonce: attempt.nonce,
-                                                expectedSubject: expectedSubject ?? previousSubject, now: .now,
-                                                verifySignature: keys.verify)
-        guard changes[grant.clientID] == revision else { throw CancellationError() }
-        let credentials = try validated(reply, identity: identity, idToken: token)
-        try MacPlanKeychain.save(credentials)
-        return identity
-    }
-
-    func credentials(for identity: ChatGPTPlanIdentity) async throws -> ChatGPTPlanCredentials {
-        try requireEligibility()
-        guard let credentials = try MacPlanKeychain.load(identity.clientID),
-              credentials.identity.subject == identity.subject else { throw PlanAuthorizationFailure.authorizationMissing }
-        if credentials.expiry.timeIntervalSinceNow > 60 {
-            _ = try credentials.authorizedAccess()
-            return credentials
-        }
-        if changes[identity.clientID] != nil { throw ProviderFailure.unavailable }
-        let revision = UUID()
-        changes[identity.clientID] = revision
-        defer { if changes[identity.clientID] == revision { changes[identity.clientID] = nil } }
-        do {
-            let reply = try await readTokens(credentials.refreshRequest())
-            let currentIdentity: ChatGPTPlanIdentity
-            if let token = reply.id_token {
-                let keys = try await MacChatGPTPlanSecurity.Keys.download()
-                currentIdentity = try ChatGPTIDToken.verify(token, clientID: identity.clientID, nonce: nil,
-                    expectedSubject: identity.subject, now: .now, verifySignature: keys.verify)
-            } else {
-                currentIdentity = credentials.identity
-            }
-            let updated = try validated(reply, identity: currentIdentity, idToken: reply.id_token ?? credentials.idToken)
-            guard updated.refreshToken != nil, changes[identity.clientID] == revision else {
-                throw PlanAuthorizationFailure.authorizationMissing
-            }
-            try MacPlanKeychain.save(updated)
-            return updated
-        } catch PlanAuthorizationFailure.authorizationMissing {
-            if changes[identity.clientID] == revision { try MacPlanKeychain.remove(identity.clientID) }
-            throw PlanAuthorizationFailure.authorizationMissing
-        }
-    }
-
-    func signOut(_ identity: ChatGPTPlanIdentity) async throws {
-        try requireEligibility()
-        defer { changes[identity.clientID] = nil }
-        changes[identity.clientID] = UUID()
-        let stored = try MacPlanKeychain.load(identity.clientID)
-        guard stored == nil || stored?.identity.subject == identity.subject else {
-            throw PlanAuthorizationFailure.accountMismatch
-        }
-        try MacPlanKeychain.remove(identity.clientID)
-        guard let token = stored?.refreshToken,
-              let discoveryURL = URL(string: ChatGPTAuthorizationAttempt.issuer + "/.well-known/openid-configuration") else { return }
-        let (bytes, response) = try await Self.http.data(for: URLRequest(url: discoveryURL, timeoutInterval: 10))
-        try OpenAIResponsesClient.validate(response)
-        let endpoint = try JSONDecoder().decode(Discovery.self, from: bytes).revocation_endpoint
-        guard endpoint.scheme == "https", endpoint.host == "auth.openai.com", endpoint.user == nil,
-              endpoint.password == nil, endpoint.fragment == nil else { throw PlanAuthorizationFailure.invalidIdentity }
-        let request = ChatGPTAuthorizationAttempt.form(
-            ["token": token, "token_type_hint": "refresh_token", "client_id": identity.clientID], url: endpoint)
-        let (_, result) = try await Self.http.data(for: request)
-        try OpenAIResponsesClient.validate(result)
-    }
-
-    private func requireEligibility() throws {
-        if !eligible { throw PlanAuthorizationFailure.authorizationMissing }
-    }
-
-    private func readTokens(_ request: URLRequest) async throws -> TokenReply {
-        let (bytes, response) = try await Self.http.data(for: request)
-        if let error = try? JSONDecoder().decode(OAuthError.self, from: bytes), error.error == "invalid_grant" {
-            throw PlanAuthorizationFailure.authorizationMissing
-        }
-        try OpenAIResponsesClient.validate(response)
-        return try JSONDecoder().decode(TokenReply.self, from: bytes)
-    }
-
-    private func validated(_ reply: TokenReply, identity: ChatGPTPlanIdentity,
-                           idToken: String) throws -> ChatGPTPlanCredentials {
-        guard reply.token_type.lowercased() == "bearer", reply.expires_in.isFinite,
-              reply.expires_in > 0, reply.expires_in <= 86_400 else { throw PlanAuthorizationFailure.invalidIdentity }
-        let scopes = Set(reply.scope.split(separator: " ").map(String.init))
-        let credentials = ChatGPTPlanCredentials(identity: identity, accessToken: reply.access_token,
-            refreshToken: reply.refresh_token, idToken: idToken,
-            expiry: .now.addingTimeInterval(reply.expires_in), scopes: scopes)
-        _ = try credentials.authorizedAccess()
-        return credentials
-    }
-
-    private static let http = URLSession(configuration: .ephemeral, delegate: NoRedirect(), delegateQueue: nil)
 }
 
-private final class NoRedirect: NSObject, URLSessionTaskDelegate, @unchecked Sendable {
-    func urlSession(_ session: URLSession, task: URLSessionTask, willPerformHTTPRedirection response: HTTPURLResponse,
-                    newRequest request: URLRequest, completionHandler: @escaping (URLRequest?) -> Void) {
-        completionHandler(nil)
+enum MacChatGPTPlanHTTP {
+    private final class NoRedirect: NSObject, URLSessionTaskDelegate, Sendable {
+        func urlSession(_ session: URLSession, task: URLSessionTask, willPerformHTTPRedirection response: HTTPURLResponse,
+                        newRequest request: URLRequest, completionHandler: @escaping @Sendable (URLRequest?) -> Void) {
+            completionHandler(nil)
+        }
+    }
+
+    private static let session: URLSession = {
+        let settings = URLSessionConfiguration.ephemeral
+        settings.httpCookieStorage = nil
+        settings.httpShouldSetCookies = false
+        settings.urlCredentialStorage = nil
+        settings.urlCache = nil
+        settings.timeoutIntervalForResource = 45
+        return URLSession(configuration: settings, delegate: NoRedirect(), delegateQueue: nil)
+    }()
+
+    static func data(_ request: URLRequest) async throws -> (Data, HTTPURLResponse) {
+        let (bytes, response) = try await session.bytes(for: request)
+        defer { bytes.task.cancel() }
+        guard let http = response as? HTTPURLResponse else { throw ProviderFailure.disconnected }
+        return (try await read(bytes, limit: 1_048_576), http)
+    }
+
+    static func stream(_ request: URLRequest) -> AsyncThrowingStream<GenerationEvent, Error> {
+        let (stream, output) = AsyncThrowingStream<GenerationEvent, Error>.makeStream(bufferingPolicy: .bufferingOldest(512))
+        let task = Task {
+            do {
+                let (bytes, response) = try await session.bytes(for: request)
+                defer { bytes.task.cancel() }
+                guard let http = response as? HTTPURLResponse else { throw ProviderFailure.disconnected }
+                if !(200...299).contains(http.statusCode) {
+                    try ChatGPTSubscriptionProvider.validate(http, body: try await read(bytes, limit: 16_384))
+                }
+                guard http.mimeType == "text/event-stream" else { throw ProviderFailure.malformedEvent }
+                var parser = ChatGPTSubscriptionProvider.ResponseStream()
+                var chunk = Data()
+                for try await byte in bytes {
+                    chunk.append(byte)
+                    if byte == 10 || chunk.count == 4_096 {
+                        try parser.receive(chunk) { event in
+                            if case .dropped = output.yield(event) { throw CaptureFailure.bufferOverrun }
+                        }
+                        if parser.completed { break }
+                        chunk.removeAll(keepingCapacity: true)
+                    }
+                }
+                try Task.checkCancellation()
+                try parser.finish()
+                output.finish()
+            } catch let error as URLError {
+                output.finish(throwing: Task.isCancelled ? CancellationError() :
+                    (error.code == .timedOut ? ProviderFailure.timeout : ProviderFailure.disconnected))
+            } catch { output.finish(throwing: error) }
+        }
+        output.onTermination = { _ in task.cancel() }
+        return stream
+    }
+
+    private static func read(_ bytes: URLSession.AsyncBytes, limit: Int) async throws -> Data {
+        var body = Data()
+        for try await byte in bytes {
+            guard body.count < limit else { throw ProviderFailure.malformedEvent }
+            body.append(byte)
+        }
+        return body
     }
 }
 
 private enum MacPlanKeychain {
-    private static let service = "com.mockinterview.desktop.chatgpt-plan"
+    private static let query: [String: String] = [kSecClass as String: kSecClassGenericPassword as String,
+        kSecAttrService as String: "com.mockinterview.desktop.chatgpt-plan", kSecAttrAccount as String: "account-vault.v1"]
 
-    static func load(_ clientID: String) throws -> ChatGPTPlanCredentials? {
-        var query = base(clientID)
-        query[kSecReturnData as String] = true
-        query[kSecMatchLimit as String] = kSecMatchLimitOne
+    static func load() throws -> ChatGPTPlanAccounts.Vault? {
+        var request: [String: Any] = query
+        request[kSecReturnData as String] = true
+        request[kSecMatchLimit as String] = kSecMatchLimitOne
         var result: CFTypeRef?
-        let status = SecItemCopyMatching(query as CFDictionary, &result)
+        let status = SecItemCopyMatching(request as CFDictionary, &result)
         if status == errSecItemNotFound { return nil }
-        guard status == errSecSuccess, let bytes = result as? Data else {
-            throw PlanAuthorizationFailure.authorizationMissing
-        }
-        return try JSONDecoder().decode(ChatGPTPlanCredentials.self, from: bytes)
+        guard status == errSecSuccess, let bytes = result as? Data else { throw PlanAuthorizationFailure.storageUnavailable }
+        return try JSONDecoder().decode(ChatGPTPlanAccounts.Vault.self, from: bytes)
     }
 
-    static func save(_ value: ChatGPTPlanCredentials) throws {
-        let query = base(value.identity.clientID)
-        let bytes = try JSONEncoder().encode(value)
-        let attributes: [String: Any] = [kSecValueData as String: bytes]
+    static func save(_ value: ChatGPTPlanAccounts.Vault) throws {
+        let attributes: [String: Any] = [kSecValueData as String: try JSONEncoder().encode(value)]
         var status = SecItemUpdate(query as CFDictionary, attributes as CFDictionary)
         if status == errSecItemNotFound {
-            status = SecItemAdd(query.merging(attributes) { _, latest in latest } as CFDictionary, nil)
+            var item: [String: Any] = query
+            item.merge(attributes) { _, latest in latest }
+            item[kSecAttrSynchronizable as String] = false
+            status = SecItemAdd(item as CFDictionary, nil)
         }
-        guard status == errSecSuccess else { throw PlanAuthorizationFailure.authorizationMissing }
-    }
-
-    static func remove(_ clientID: String) throws {
-        let status = SecItemDelete(base(clientID) as CFDictionary)
-        guard status == errSecSuccess || status == errSecItemNotFound else {
-            throw PlanAuthorizationFailure.authorizationMissing
-        }
-    }
-
-    private static func base(_ clientID: String) -> [String: Any] {
-        [kSecClass as String: kSecClassGenericPassword, kSecAttrService as String: service,
-         kSecAttrAccount as String: clientID]
+        guard status == errSecSuccess else { throw PlanAuthorizationFailure.storageUnavailable }
     }
 }
 #endif

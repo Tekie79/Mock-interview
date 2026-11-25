@@ -76,11 +76,15 @@ public struct TranscriptEvent: Equatable, Sendable {
     public let language: String?
     public let turnProbability: Double?
     public let audioRange: TranscriptAudioRange?
+    public let recognitionUsage: RecognitionUsage?
+
+    var transcriptID: String { epoch.uuidString + "/" + source.id + "/" + itemID }
 
     public init(source: CaptureSource, epoch: UUID, itemID: String, previousItemID: String? = nil,
                 text: String, state: State, speaker: Int? = nil, timing: PipelineTiming = .init(),
                 utteranceID: String? = nil, words: [TranscriptWord] = [],
-                language: String? = nil, turnProbability: Double? = nil, audioRange: TranscriptAudioRange? = nil) {
+                language: String? = nil, turnProbability: Double? = nil, audioRange: TranscriptAudioRange? = nil,
+                recognitionUsage: RecognitionUsage? = nil) {
         self.source = source
         self.epoch = epoch
         self.itemID = itemID
@@ -94,6 +98,7 @@ public struct TranscriptEvent: Equatable, Sendable {
         self.language = language
         self.turnProbability = turnProbability
         self.audioRange = audioRange
+        self.recognitionUsage = recognitionUsage
     }
 }
 
@@ -104,6 +109,7 @@ public protocol StreamingSTT: Sendable {
     func append(_ frame: AudioFrame) async throws
     func commit() async throws
     func finishInput() async throws
+    func checkConnection() async throws
     func close() async
 }
 
@@ -124,6 +130,9 @@ public extension StreamingSTT {
 
     /// Most manually committed transports remain open until the final events are read.
     func finishInput() async throws {}
+
+    /// Network adapters can verify a quiet transport without requiring recognition activity.
+    func checkConnection() async throws {}
 }
 
 public struct QuestionInput: Equatable, Sendable {
@@ -202,6 +211,11 @@ public struct TokenUsage: Sendable, Equatable, Codable {
         self.input = max(0, input)
         self.output = max(0, output)
     }
+}
+
+public enum RecognitionUsage: Sendable, Equatable {
+    case audioSeconds(Double)
+    case tokens(TokenUsage)
 }
 
 public enum GenerationEvent: Sendable, Equatable {

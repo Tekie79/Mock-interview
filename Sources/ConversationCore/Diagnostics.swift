@@ -3,6 +3,8 @@ import Foundation
 /// Uses controlled messages because transport errors can contain headers or response bodies.
 public func publicErrorMessage(_ error: Error) -> String {
     switch error {
+    case TranscriptionRecoveryFailure.exhausted(let failure):
+        "Transcription recovery attempts exhausted. " + publicErrorMessage(failure)
     case ProviderFailure.missingCredentials:
         "Add the provider key in Settings."
     case ProviderFailure.authentication:
@@ -53,12 +55,18 @@ public extension InterviewSnapshot {
     var diagnosticSummary: String {
         let usage = usage.map { "Answer tokens: \($0.input) input, \($0.output) output" }
             ?? "Answer tokens: unavailable"
+        let recognitionTime = recognitionSeconds.isEmpty ? "unavailable" :
+            recognitionSeconds.values.reduce(0, +).formatted(.number.precision(.fractionLength(0...2)))
+        let recognitionUsage = recognitionTokens.isEmpty ? "unavailable" :
+            "\(recognitionTokens.values.reduce(0) { $0 + $1.input }) input, \(recognitionTokens.values.reduce(0) { $0 + $1.output }) output"
         return [
             "Mock Interview",
             "Session state: \(state.rawValue)",
             "Connected source count: \(connected.count)",
             "STT reconnects: \(reconnects)",
             "PCM seconds submitted locally: \(submittedAudioSamples.values.reduce(0, +) / 24_000)",
+            "Provider-reported recognition seconds: \(recognitionTime)",
+            "Provider-reported recognition tokens: \(recognitionUsage)",
             "Minimum dropped audio chunks: \(droppedAudioChunks)",
             "Question queue overflows: \(discardedQuestions)",
             "Final transcript segments: \(transcript.filter(\.isFinal).count)",

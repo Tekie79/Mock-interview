@@ -37,16 +37,29 @@ public struct ProviderPreset: Codable, Identifiable, Equatable, Sendable {
                                            (classifier, classificationModel, .classification),
                                            (answer, answerModel, .answer)] {
             let caps = ProviderCapabilities.describe(provider, model: model)
-            if !caps.supports(service) { return caps.unavailableReason ?? "The provider does not support this service." }
+            if let reason = caps.unavailableReason { return reason }
             if provider != .appleSpeech && model.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
                 return "Enter a model for each selected service."
             }
+            if !caps.supports(service) { return "The selected provider or model does not support this service." }
         }
         if transcription == .elevenLabs {
             let caps = ProviderCapabilities.describe(transcription, model: transcriptionModel)
             if !caps.models.contains(transcriptionModel) || !caps.commits.contains(commit) {
                 return "The selected Scribe model does not support this configuration."
             }
+        }
+        if transcription == .openai,
+           (try? OpenAIRealtimeWire.session(model: transcriptionModel, language: language)) == nil {
+            return "Enter a language code supported by the selected OpenAI transcription model."
+        }
+        if transcription == .deepgram, language.trimmingCharacters(in: .whitespacesAndNewlines) == "multi",
+           !ProviderCapabilities.describe(transcription, model: transcriptionModel).detectsLanguage {
+            return "The selected Deepgram model does not support multilingual transcription."
+        }
+        if let embeddingsModel,
+           !ProviderCapabilities.describe(.openai, model: embeddingsModel).supports(.embeddings) {
+            return "Enter an OpenAI embedding model or disable semantic retrieval."
         }
         return nil
     }
@@ -70,7 +83,7 @@ public struct ProviderPreset: Codable, Identifiable, Equatable, Sendable {
                   classifier: .openai, classificationModel: "gpt-4.1-mini", answer: .openai, answerModel: "gpt-4.1-mini"),
             .init(name: "Alternative cloud", transcription: .deepgram, transcriptionModel: "nova-3",
                   classifier: .anthropic, classificationModel: "claude-haiku-4-5",
-                  answer: .anthropic, answerModel: "claude-haiku-4-5"),
+                  answer: .anthropic, answerModel: "claude-haiku-4-5", commit: .voiceActivity),
             .init(name: "Hybrid", transcription: .elevenLabs, transcriptionModel: "scribe_v3_live",
                   classifier: .openai, classificationModel: "gpt-4.1-mini", answer: .openai, answerModel: "gpt-4.1-mini",
                   commit: .semanticTurn),

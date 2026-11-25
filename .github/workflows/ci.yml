@@ -1,11 +1,28 @@
 name: Swift core CI
 on:
   push:
-    branches: [main, feature/v1-cloud-implementation, feature/m10-1-pipeline-hardening]
+    branches: [main, feature/v1-cloud-implementation, feature/m10-1-pipeline-hardening, feature/m10-2-final-development]
   pull_request:
 permissions:
   contents: read
 jobs:
+  linux-core:
+    name: Linux portable development (Swift 6.2.3)
+    runs-on: ubuntu-24.04
+    container: swift:6.2.3-noble@sha256:976e1f9747d050142343d6ca90400cf11e08cef7e204af06a8d23a342831eb60
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v4
+      - name: Toolchain and development headers
+        run: |
+          swift --version
+          uname -m
+          apt-get update
+          apt-get install -y --no-install-recommends pkg-config libsqlite3-dev zlib1g-dev
+      - name: Build portable core
+        run: ./scripts/build.sh
+      - name: Run deterministic tests
+        run: ./scripts/test.sh
   macos-core:
     name: macOS development (${{ matrix.runner }})
     strategy:

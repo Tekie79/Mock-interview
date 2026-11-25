@@ -15,6 +15,7 @@ The original bootstrap is documented in the baseline evidence below. Status voca
 | M08 | IMPLEMENTED (qualification pending) | Deepgram PCM WebSocket, Anthropic classifier and answer streams, configurable independent provider/model settings. |
 | M09 | IMPLEMENTED (qualification pending) | Opt-in saved history with SQLite search, review and missed questions, text export, and solo practice with AI-estimate coaching. |
 | M10 | IMPLEMENTED (qualification pending) | DOCX text extraction, opt-in hybrid retrieval, and explicit epoch-scoped roles for diarized mixed microphone speech. |
+| M10.2 | IMPLEMENTED (qualification pending) | Finalization, cross-source gating, watchdog, account lifecycle, native capture and provider hardening. See the development verification record. Live ChatGPT authorization depends on official eligibility. |
 | M11 | NOT STARTED | Final qualification |
 
 ## Verification log
@@ -111,3 +112,16 @@ See `docs/verification/baseline.md` for the initial build/test run. No native Ma
 - Remaining M10.1 gaps: confirmed ChatGPT eligibility and browser linking, complete provider-runtime regression matrix, and full correlatable timing for provider-owned segmentation. M11 hardware/live smoke and target measurements remain untouched. See the [requirements traceability](requirements-traceability.md) and [verification record](verification/m10-1.md).
 - Review follow-up: explicitly invalid provider selections fail closed, and stale recognition epochs are rejected before timing or drain acknowledgments. The Linux suite passed 47 tests.
 - Timing follow-up: timestamped Deepgram, ElevenLabs and SpeechAnalyzer results can be correlated against recent sample-clock anchors. Timestamp-less or reset ranges fall back to local observation where available. Linux 48 tests passed.
+
+## M10.2 development
+
+- ElevenLabs tracks voiced sample ranges, manual commit requests and delayed final companions independently. Duplicate or unpositioned events cannot finalize newer audio. Transcription transports monitor stalled writes, pending speech and connection health, with bounded fresh-epoch recovery.
+- Dual-source practice keeps candidate and interviewer transcripts intact. Timing and lexical evidence can mark ambiguous remote attribution as unknown and invalidate affected automatic work. Native timestamps use activation-local frame positions. Mapped timing remains approximate.
+- The ChatGPT coordinator, account panel, native loopback and subscription-only text composition are implemented against synthetic grants. The owner must confirm the supported distribution path before enabling live linking. See [provider compatibility](provider-compatibility.md).
+- The first hosted checkpoint passed deterministic tests on Linux, macOS 15 and macOS 26. Its packaging check found a missing Core Audio permission string on macOS 26. The follow-up supplies permission strings explicitly and verifies the arm64 bundle, minimum OS, and unsigned package on both hosts. See [development verification](verification/m10-2.md) for test counts and the pull request evidence.
+
+### Final review corrections
+
+- Automatic answer provenance is retained with the answer, including in saved sessions. Late attribution corrections withdraw affected answers and remove the question from follow-up context. Explicit manual answers and original transcript text are retained.
+- Graceful drain distinguishes unresolved audio from confirmed recognition and silence. ElevenLabs tracks remaining voiced intervals and independent commit acknowledgments, including when timestamped results overlap or arrive out of order.
+- Validation uses the full Linux and macOS 15/26 matrix and unsigned macOS packaging. Exact-head test counts and warning evidence are recorded in PR #2. Live ChatGPT authorization remains gated and M11 remains pending. [Development verification](verification/m10-2.md)

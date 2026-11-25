@@ -11,6 +11,7 @@ actor HeldAudio: AudioSource {
     }
     func stop() { output?.finish(); output = nil }
     func fail() { output?.finish(throwing: CaptureFailure.sourceUnavailable) }
+    func send(_ frame: AudioFrame) { output?.yield(frame) }
 }
 
 actor InjectedSTT: StreamingSTT {
@@ -27,9 +28,11 @@ actor InjectedSTT: StreamingSTT {
     func append(_ frame: AudioFrame) {}
     func commit() {}
     func close() { output?.finish(); output = nil }
-    func send(_ text: String, item: String, state: TranscriptEvent.State = .final, epoch override: UUID? = nil) {
+    func send(_ text: String, item: String, state: TranscriptEvent.State = .final, epoch override: UUID? = nil,
+              timing: PipelineTiming = .init(), usage: RecognitionUsage? = nil) {
         guard let source, let epoch else { return }
-        output?.yield(.init(source: source, epoch: override ?? epoch, itemID: item, text: text, state: state))
+        output?.yield(.init(source: source, epoch: override ?? epoch, itemID: item, text: text, state: state,
+                            timing: timing, recognitionUsage: usage))
     }
 }
 
@@ -318,5 +321,509 @@ extension PipelineHardeningTests {
         XCTAssertEqual(instant.duration(to: measurement.end), .milliseconds(1_400))
         XCTAssertNil(clock.measure(.init(startSeconds: 0, endSeconds: 2.02)))
         XCTAssertNil(clock.measure(.init(startSeconds: .nan, endSeconds: 1)))
+    }
+
+    func testCrossSourceAttributionBothOrdersDifferentTextShortSpeechAndRepeat() async throws {
+        let remote = InjectedSTT()
+        let candidate = InjectedSTT()
+        let classifier = HeldClassifier(slow: false)
+        let session = InterviewSession(channels: [
+            .init(source: .init(id: "remote", role: .interviewer), audio: HeldAudio(), makeSTT: { remote }),
+            .init(source: .init(id: "mic", role: .candidate), audio: HeldAudio(), makeSTT: { candidate })
+        ], detector: .init(classifier: classifier), generator: FixedAnswer())
+        await session.start()
+        try await eventually { await session.current().state == .listening }
+        let origin = ContinuousClock.now.advanced(by: .seconds(-10))
+        func time(_ start: Int, _ end: Int) -> PipelineTiming {
+            var timing = PipelineTiming()
+            timing.speechStart = origin.advanced(by: .milliseconds(start))
+            timing.endpoint = origin.advanced(by: .milliseconds(end))
+            timing.audioTimingBasis = .providerRangeEstimate
+            return timing
+        }
+        await candidate.send("Why?", item: "short-mic", timing: time(900, 1_100))
+        try await eventually { await session.current().transcript.count == 1 }
+        await remote.send("Why?", item: "short-remote", timing: time(930, 1_130))
+        try await eventually { await session.current().transcript.last?.role == .unknown }
+        await remote.send("Explain how you used the queue.", item: "leak-remote", timing: time(2_000, 3_000))
+        try await eventually { await session.current().transcript.count == 3 }
+        await candidate.send("Explain how you use the queue.", item: "leak-mic", state: .partial, timing: time(2_010, 3_030))
+        try await eventually { await session.current().transcript.filter { $0.role == .unknown }.count == 2 }
+        await candidate.send("I am taking notes", item: "overlap-mic", timing: time(4_000, 4_900))
+        await remote.send("Explain the retry design.", item: "overlap-remote", timing: time(4_450, 5_350))
+        try await eventually { await session.current().answers.count == 1 }
+        await remote.send("Why?", item: "repeat-remote", timing: time(6_000, 6_200))
+        try await eventually { await session.current().answers.count == 2 }
+        let inputs = await classifier.inputs.map(\.turn.text)
+        XCTAssertEqual(inputs, ["Explain the retry design.", "Why?"])
+        let unknown = await session.current().transcript.filter { $0.role == .unknown }.map(\.text)
+        XCTAssertEqual(unknown, ["Why?", "Explain how you used the queue."])
+        await session.stop()
+    }
+
+    func testProviderWatchdogTracksSpeechAndOutOfOrderFinalsWithoutTreatingSilenceAsFailure() async throws {
+        let progress = RecognitionProgress(providerCommits: true)
+        let source = CaptureSource(id: "remote", role: .interviewer)
+        let epoch = UUID()
+        let time = ContinuousClock.now
+        let frame = AudioFrame(source: source, sampleRate: 24_000, startSample: 24_000,
+                               pcm: Data(repeating: 0, count: 144_000), capturedAt: time)
+        await progress.sending(frame, voiced: false, now: time)
+        let stalledSend = await progress.expired(recognition: .seconds(5), drain: .seconds(2), now: time.advanced(by: .seconds(6)))
+        XCTAssertEqual(stalledSend, .timeout)
+        await progress.sent()
+        let silence = await progress.expired(recognition: .seconds(5), drain: .seconds(2), now: time.advanced(by: .seconds(60)))
+        XCTAssertNil(silence)
+        for (start, end) in [(0, 1), (1, 2)] {
+            var speech = PipelineTiming()
+            speech.speechStart = time.advanced(by: .seconds(start))
+            speech.endpoint = time.advanced(by: .seconds(end))
+            try await progress.endedSpeech(speech, now: time.advanced(by: .seconds(end)))
+        }
+        func final(_ id: String, start: Double, end: Double) -> TranscriptEvent {
+            .init(source: source, epoch: epoch, itemID: id, text: id, state: .final,
+                  audioRange: .init(startSeconds: start, endSeconds: end))
+        }
+        let late = await progress.tag(final("second", start: 0.9, end: 2.1))
+        let second = try XCTUnwrap(late)
+        XCTAssertEqual(second.timing.endpoint, time.advanced(by: .milliseconds(2_100)))
+        XCTAssertEqual(second.timing.audioTimingBasis, .providerRangeEstimate)
+        XCTAssertNil(second.timing.commit)
+        await progress.delivered(second)
+        let missingEarlier = await progress.expired(recognition: .seconds(5), drain: .seconds(2), now: time.advanced(by: .seconds(6)))
+        // The second provider range crosses the first utterance by 100 ms; that sliver is not a final for it.
+        XCTAssertEqual(missingEarlier, .timeout)
+        let early = await progress.tag(final("first", start: 0, end: 1))
+        let first = try XCTUnwrap(early)
+        XCTAssertEqual(first.timing.endpoint, time.advanced(by: .seconds(1)))
+        await progress.delivered(first)
+        let clear = await progress.expired(recognition: .seconds(5), drain: .seconds(2), now: time.advanced(by: .seconds(6)))
+        XCTAssertNil(clear)
+        let replay = await progress.tag(final("first", start: 0, end: 1))
+        XCTAssertNil(replay)
+        let reset = await progress.tag(final("reset-item", start: 0, end: 1))
+        XCTAssertNil(reset?.timing.endpoint)
+        XCTAssertNil(reset?.timing.audioTimingBasis)
+    }
+
+    func testProviderFinalRangesCoverSplitSpeechWithoutCountingOverlapTwice() async throws {
+        let progress = RecognitionProgress(providerCommits: true)
+        let source = CaptureSource(id: "remote", role: .interviewer)
+        let epoch = UUID()
+        let time = ContinuousClock.now
+        let frame = AudioFrame(source: source, sampleRate: 24_000, startSample: 0,
+                               pcm: Data(repeating: 0, count: 144_000), capturedAt: time)
+        await progress.sending(frame, voiced: false, now: time)
+        await progress.sent()
+        var speech = PipelineTiming()
+        speech.speechStart = time
+        speech.endpoint = time.advanced(by: .seconds(3))
+        try await progress.endedSpeech(speech, now: time.advanced(by: .seconds(3)))
+
+        let ranges = [(0.0, 0.75), (0.1, 0.8), (2.6, 3.0), (1.1, 1.8)]
+        for (index, range) in ranges.enumerated() {
+            let raw = TranscriptEvent(source: source, epoch: epoch, itemID: "\(index)", text: "Synthetic speech",
+                                      state: .final, audioRange: .init(startSeconds: range.0, endSeconds: range.1))
+            let tagged = await progress.tag(raw)
+            await progress.delivered(try XCTUnwrap(tagged))
+            let deadline = await progress.expired(recognition: .seconds(5), drain: .seconds(2),
+                                                  now: time.advanced(by: .seconds(9)))
+            XCTAssertEqual(deadline, index < 3 ? .timeout : nil)
+        }
+    }
+
+    func testClientCommitEmptyFinalAndExplicitStreamAcknowledgmentAreIndependent() async throws {
+        let progress = RecognitionProgress(providerCommits: false, requiresStreamEnd: true)
+        let time = ContinuousClock.now
+        var timing = PipelineTiming()
+        timing.commit = time
+        try await progress.committed(timing, now: time)
+        await progress.sent()
+        let missing = await progress.expired(recognition: .seconds(5), drain: .seconds(2), now: time.advanced(by: .seconds(6)))
+        XCTAssertEqual(missing, .timeout)
+        let source = CaptureSource(id: "remote", role: .interviewer)
+        let raw = TranscriptEvent(source: source, epoch: UUID(), itemID: "empty", text: "", state: .final)
+        let event = await progress.tag(raw)
+        await progress.delivered(try XCTUnwrap(event))
+        let notStalled = await progress.expired(recognition: .seconds(5), drain: .seconds(2), now: time.advanced(by: .seconds(6)))
+        XCTAssertNil(notStalled)
+        await progress.requestFinish()
+        await progress.finishSent()
+        let waiting = await progress.drainOutcome
+        XCTAssertNil(waiting)
+        let drainTimeout = await progress.expired(recognition: .seconds(5), drain: .seconds(2), now: time.advanced(by: .seconds(3)))
+        XCTAssertEqual(drainTimeout, .incompleteTranscription)
+        try await progress.streamEnded()
+        let done = await progress.drainOutcome
+        XCTAssertEqual(done, .noSpeech)
+    }
+}
+
+private struct AttributionFixture {
+    let remote = InjectedSTT()
+    let candidate = InjectedSTT()
+    let classifier = HeldClassifier(slow: false)
+    let generator = ControlledGenerator()
+    let session: InterviewSession
+    private let origin = ContinuousClock.now.advanced(by: .seconds(-10))
+
+    init() {
+        let remote = self.remote, candidate = self.candidate
+        session = InterviewSession(channels: [
+            .init(source: .init(id: "remote", role: .interviewer), audio: HeldAudio(), makeSTT: { remote }),
+            .init(source: .init(id: "mic", role: .candidate), audio: HeldAudio(), makeSTT: { candidate })
+        ], detector: .init(classifier: classifier), generator: generator)
+    }
+
+    func start() async throws {
+        await session.start()
+        try await eventually { await session.current().state == .listening }
+    }
+
+    func timing(_ seconds: Int) -> PipelineTiming {
+        var timing = PipelineTiming()
+        timing.speechStart = origin.advanced(by: .seconds(seconds))
+        timing.endpoint = origin.advanced(by: .seconds(seconds + 1))
+        timing.audioTimingBasis = .providerRangeEstimate
+        return timing
+    }
+}
+
+extension PipelineHardeningTests {
+    func testAttributionCorrectionDuringStreamingInvalidatesTheAutomaticRevision() async throws {
+        let fixture = AttributionFixture()
+        try await fixture.start()
+        let question = "Describe the synthetic queue."
+        await fixture.remote.send(question, item: "remote-one", timing: fixture.timing(1))
+        try await eventually { await fixture.generator.submitted.count == 1 }
+        await fixture.generator.write("Retained partial", to: 0)
+        try await eventually { await fixture.session.current().answers.first?.text == "Retained partial" }
+
+        await fixture.candidate.send(question, item: "mic-one", timing: fixture.timing(1))
+        try await eventually { await fixture.session.current().answers.first?.state == .invalidated }
+        await fixture.generator.write("Late provider text", to: 0, finish: true)
+        let snapshot = await fixture.session.current()
+        let answer = try XCTUnwrap(snapshot.answers.first)
+        let remote = try XCTUnwrap(snapshot.transcript.first)
+        let provenance = try XCTUnwrap(answer.automaticProvenance)
+        XCTAssertEqual(provenance.sourceID, "remote")
+        XCTAssertEqual(provenance.captureEpoch.uuidString, remote.id.split(separator: "/").first.map(String.init))
+        XCTAssertEqual(provenance.transcriptID, remote.id)
+        XCTAssertEqual(provenance.contributingTranscriptIDs, [remote.id])
+        XCTAssertEqual(provenance.questionID, answer.id)
+        XCTAssertEqual(answer.text, "Retained partial")
+        XCTAssertEqual(remote.text, question)
+        XCTAssertEqual(remote.role, .unknown)
+        let loaded = try JSONDecoder().decode(InterviewAnswer.self, from: JSONEncoder().encode(answer))
+        XCTAssertEqual(loaded, answer)
+        await fixture.session.stop()
+    }
+
+    func testLateAttributionInvalidatesCompletedAnswerAndRemovesItFromFollowUpContext() async throws {
+        let fixture = AttributionFixture()
+        try await fixture.start()
+        let withdrawn = "Explain the synthetic queue."
+        let valid = "Describe the retry policy."
+        await fixture.remote.send(withdrawn, item: "withdrawn", timing: fixture.timing(1))
+        try await eventually { await fixture.generator.submitted.count == 1 }
+        await fixture.generator.write("Completed earlier answer", to: 0, finish: true)
+        try await eventually { await fixture.session.current().answers.first?.state == .complete }
+        await fixture.remote.send(valid, item: "valid", timing: fixture.timing(3))
+        try await eventually { await fixture.generator.submitted.count == 2 }
+        let before = await fixture.session.current()
+
+        await fixture.candidate.send(withdrawn, item: "candidate", timing: fixture.timing(1))
+        try await eventually { await fixture.session.current().answers.first?.state == .invalidated }
+        let corrected = await fixture.session.current()
+        XCTAssertEqual(corrected.answers.map(\.state), [.invalidated, .generating])
+        XCTAssertEqual(corrected.answers.last?.revision, before.answers.last?.revision)
+        await fixture.generator.write("Completed valid answer", to: 1, finish: true)
+        try await eventually { await fixture.session.current().answers.last?.state == .complete }
+        await fixture.remote.send("Why did you choose that policy?", item: "next", timing: fixture.timing(5))
+        try await eventually { await fixture.generator.submitted.count == 3 }
+        let inputs = await fixture.classifier.inputs
+        let requests = await fixture.generator.submitted
+        let after = await fixture.session.current()
+        let invalid = try XCTUnwrap(after.answers.first)
+        XCTAssertTrue(inputs.last?.previousQuestions.allSatisfy { !$0.contains(invalid.id.uuidString) } == true)
+        XCTAssertFalse(inputs.last?.conversation.contains { $0.id == invalid.automaticProvenance?.transcriptID } ?? true)
+        XCTAssertFalse(requests.last?.interviewContext.contains { $0 == "Previous interviewer question: " + withdrawn } ?? true)
+        XCTAssertEqual(after.answers.last?.question.previousQuestionID, corrected.answers.last?.id)
+        XCTAssertEqual(invalid.text, "Completed earlier answer")
+        await fixture.session.stop()
+    }
+
+    func testExplicitRegenerationIsManualAndSurvivesAttributionCorrection() async throws {
+        let fixture = AttributionFixture()
+        try await fixture.start()
+        let question = "Explain the synthetic cache."
+        await fixture.remote.send(question, item: "remote", timing: fixture.timing(1))
+        try await eventually { await fixture.generator.submitted.count == 1 }
+        let initial = await fixture.session.current()
+        let auto = try XCTUnwrap(initial.answers.first)
+        await fixture.session.regenerate(auto.id)
+        try await eventually { await fixture.generator.submitted.count == 2 }
+        await fixture.candidate.send(question, item: "mic", timing: fixture.timing(1))
+        try await eventually { await fixture.session.current().transcript.first?.role == .unknown }
+        await fixture.generator.write("Explicitly requested response", to: 1, finish: true)
+        try await eventually { await fixture.session.current().answers.first?.state == .complete }
+        let updated = await fixture.session.current()
+        XCTAssertEqual(updated.answers.first?.origin, .manual)
+        XCTAssertEqual(updated.answers.first?.id, auto.id)
+        XCTAssertEqual(updated.answers.first?.text, "Explicitly requested response")
+        await fixture.session.stop()
+    }
+
+    func testLateCorrectionToLeadingSegmentInvalidatesTheJoinedQuestion() async throws {
+        let fixture = AttributionFixture()
+        try await fixture.start()
+        await fixture.remote.send("Describe queues and", item: "lead", timing: fixture.timing(1))
+        try await eventually { await fixture.session.current().transcript.count == 1 }
+        await fixture.remote.send("explain retries.", item: "tail", timing: fixture.timing(3))
+        try await eventually { await fixture.generator.submitted.count == 1 }
+        await fixture.generator.write("Joined answer", to: 0, finish: true)
+        try await eventually { await fixture.session.current().answers.first?.state == .complete }
+        let joined = await fixture.session.current()
+        XCTAssertEqual(joined.answers.first?.automaticProvenance?.contributingTranscriptIDs, joined.transcript.map(\.id))
+        await fixture.candidate.send("Describe queues and", item: "candidate", timing: fixture.timing(1))
+        try await eventually { await fixture.session.current().answers.first?.state == .invalidated }
+        let after = await fixture.session.current()
+        XCTAssertEqual(after.transcript.map(\.text), ["Describe queues and", "explain retries.", "Describe queues and"])
+        await fixture.session.stop()
+    }
+}
+
+private actor FinishingSTT: StreamingSTT {
+    nonisolated let behavior: TranscriptionBehavior
+    private var output: AsyncThrowingStream<TranscriptEvent, Error>.Continuation?
+    private var source: CaptureSource?
+    private var epoch: UUID?
+    private(set) var inputEnded = false
+
+    init(delivery: TranscriptionBehavior.Delivery) {
+        behavior = .init(delivery: delivery, streamsSilence: true, requiresStreamEnd: true)
+    }
+
+    func connect(source: CaptureSource, epoch: UUID) -> AsyncThrowingStream<TranscriptEvent, Error> {
+        self.source = source
+        self.epoch = epoch
+        let (stream, output) = AsyncThrowingStream<TranscriptEvent, Error>.makeStream()
+        self.output = output
+        return stream
+    }
+
+    func append(_ frame: AudioFrame) {}
+    func commit() {}
+    func finishInput() { inputEnded = true }
+    func close() { output?.finish() }
+
+    func emit(_ text: String, state: TranscriptEvent.State = .final) {
+        guard let source, let epoch else { return }
+        output?.yield(.init(source: source, epoch: epoch, itemID: "one", text: text, state: state,
+                            audioRange: .init(startSeconds: 0, endSeconds: 0.1)))
+    }
+}
+
+extension PipelineHardeningTests {
+    func testCleanEOFWithMissingRecognitionFailsForBothCommitModes() async throws {
+        let source = CaptureSource(id: "replay", role: .interviewer)
+        let cases: [(TranscriptionBehavior.Delivery, Bool)] = [(.providerCommit, true), (.clientCommit, true), (.providerCommit, false)]
+        for (delivery, voiced) in cases {
+            let stt = FinishingSTT(delivery: delivery)
+            let audio = PCMReplaySource(source: source, pcm: Data(repeating: voiced ? 64 : 0, count: 4_800), pace: { _ in })
+            let channel = TranscriptionChannel(source: source, audio: audio, replay: true,
+                                               drainTimeout: .seconds(2), makeSTT: { stt })
+            let run = Task { try await channel.run { _ in } }
+            defer { run.cancel() }
+            try await eventually { await stt.inputEnded }
+            if !voiced { await stt.emit("Unresolved provisional speech", state: .partial) }
+            await stt.close()
+            do {
+                try await run.value
+                XCTFail("An EOF cannot acknowledge unresolved audio")
+            } catch {
+                XCTAssertEqual(error as? ProviderFailure, .incompleteTranscription)
+            }
+        }
+    }
+
+    func testProviderDrainSeparatesSilenceFromExplicitFinalAndDelayedAcknowledgment() async throws {
+        let source = CaptureSource(id: "replay", role: .interviewer)
+        for text in ["", "Confirmed speech"] {
+            let progress = RecognitionProgress(providerCommits: true)
+            let time = ContinuousClock.now
+            let frame = AudioFrame(source: source, sampleRate: 24_000, startSample: 0,
+                                   pcm: Data(repeating: 64, count: 4_800), capturedAt: time)
+            await progress.sending(frame, voiced: true)
+            var speech = PipelineTiming()
+            speech.speechStart = time
+            speech.endpoint = time.advanced(by: .milliseconds(100))
+            try await progress.endedSpeech(speech)
+            await progress.requestFinish()
+            let final = TranscriptEvent(source: source, epoch: UUID(), itemID: "one", text: text, state: .final,
+                                        audioRange: .init(startSeconds: 0, endSeconds: 0.1))
+            let tagged = await progress.tag(final)
+            await progress.delivered(try XCTUnwrap(tagged))
+            try await progress.streamEnded() // The provider can acknowledge before the writer returns.
+            let beforeWrite = await progress.drainOutcome
+            XCTAssertNil(beforeWrite)
+            await progress.finishSent()
+            let done = await progress.drainOutcome
+            XCTAssertEqual(done, text.isEmpty ? .noSpeech : .transcribed)
+        }
+
+        let silence = RecognitionProgress(providerCommits: true)
+        await silence.requestFinish()
+        await silence.finishSent()
+        let beforeAcknowledgment = await silence.drainOutcome
+        XCTAssertNil(beforeAcknowledgment)
+        try await silence.streamEnded()
+        let silentResult = await silence.drainOutcome
+        XCTAssertEqual(silentResult, .noSpeech)
+    }
+
+    func testCancellationWhileWaitingForStreamAcknowledgmentIsCancellation() async throws {
+        let source = CaptureSource(id: "replay", role: .interviewer)
+        let stt = FinishingSTT(delivery: .providerCommit)
+        let audio = PCMReplaySource(source: source, pcm: Data(repeating: 0, count: 960), pace: { _ in })
+        let channel = TranscriptionChannel(source: source, audio: audio, replay: true,
+                                           drainTimeout: .seconds(2), makeSTT: { stt })
+        let run = Task { try await channel.run { _ in } }
+        defer { run.cancel() }
+        try await eventually { await stt.inputEnded }
+        run.cancel()
+        await stt.close()
+        do {
+            try await run.value
+            XCTFail("Expected cancellation while waiting for the provider")
+        } catch {
+            XCTAssertTrue(error is CancellationError)
+        }
+    }
+}
+
+private actor WatchdogSTT: StreamingSTT {
+    nonisolated let behavior = TranscriptionBehavior(delivery: .providerCommit, streamsSilence: true)
+    private var output: AsyncThrowingStream<TranscriptEvent, Error>.Continuation?
+    private(set) var epochs: [UUID] = []
+    private(set) var submitted: [Int64] = []
+    private(set) var heartbeats = 0
+    private var connected = true
+    func connect(source: CaptureSource, epoch: UUID) -> AsyncThrowingStream<TranscriptEvent, Error> {
+        epochs.append(epoch)
+        let (stream, output) = AsyncThrowingStream<TranscriptEvent, Error>.makeStream()
+        self.output = output
+        return stream
+    }
+    func append(_ frame: AudioFrame) { submitted.append(frame.startSample) }
+    func commit() {}
+    func checkConnection() throws {
+        heartbeats += 1
+        if !connected { throw ProviderFailure.disconnected }
+    }
+    func dropWithoutClosingStream() { connected = false }
+    func disconnect() { output?.finish(throwing: ProviderFailure.disconnected) }
+    func close() { output?.finish(); output = nil }
+}
+
+extension PipelineHardeningTests {
+    func testStalledProviderRecoversWithFreshEpochNoReplayAndExhaustsRetries() async throws {
+        let source = CaptureSource(id: "remote", role: .interviewer)
+        let audio = HeldAudio()
+        let stt = WatchdogSTT()
+        let session = InterviewSession(channels: [
+            .init(source: source, audio: audio, recognitionTimeout: .milliseconds(50), makeSTT: { stt }, delay: { _ in })
+        ], detector: .init(classifier: HeldClassifier(slow: false)), generator: FixedAnswer())
+        await session.start()
+        try await eventually { await session.current().state == .listening }
+        let start = ContinuousClock.now
+        await audio.send(.init(source: source, sampleRate: 24_000, startSample: 0,
+                               pcm: Data(repeating: 64, count: 960), capturedAt: start))
+        await audio.send(.init(source: source, sampleRate: 24_000, startSample: 480,
+                               pcm: Data(repeating: 0, count: 24_000), capturedAt: start.advanced(by: .milliseconds(20))))
+        try await eventually {
+            let snapshot = await session.current()
+            return snapshot.state == .listening && snapshot.reconnects == 1
+        }
+        await stt.disconnect()
+        try await eventually {
+            let snapshot = await session.current()
+            return snapshot.state == .listening && snapshot.reconnects == 2
+        }
+        await stt.disconnect()
+        try await eventually { await session.current().state == .failed }
+        let epochs = await stt.epochs
+        let submitted = await stt.submitted
+        XCTAssertEqual(Set(epochs).count, 3)
+        XCTAssertEqual(submitted, [0, 480])
+        let snapshot = await session.current()
+        XCTAssertTrue(snapshot.issues.last?.contains("attempts exhausted") == true)
+        XCTAssertTrue(snapshot.answers.isEmpty)
+        await session.stop()
+    }
+
+    func testProviderUsageIsCountedOnceAndRejectedForStaleEpoch() async throws {
+        let stt = InjectedSTT()
+        let session = InterviewSession(channels: [
+            .init(source: .init(id: "remote", role: .interviewer), audio: HeldAudio(), makeSTT: { stt })
+        ], detector: .init(classifier: HeldClassifier(slow: false)), generator: FixedAnswer())
+        await session.start()
+        try await eventually { await session.current().state == .listening }
+        await stt.send("", item: "empty", usage: .audioSeconds(1.25))
+        await stt.send("", item: "empty", usage: .audioSeconds(1.25))
+        await stt.send("", item: "stale", epoch: UUID(), usage: .audioSeconds(99))
+        await stt.send("Explain usage.", item: "visible", usage: .tokens(.init(input: 3, output: 2)))
+        try await eventually { await session.current().answers.count == 1 }
+        let snapshot = await session.current()
+        XCTAssertEqual(snapshot.recognitionSeconds["remote"], 1.25)
+        XCTAssertEqual(snapshot.recognitionTokens["remote"], .init(input: 3, output: 2))
+        XCTAssertEqual(snapshot.transcript.map(\.text), ["Explain usage."])
+        await session.stop()
+    }
+
+    func testQuietTransportHeartbeatOnlyFailsWhenDisconnected() async throws {
+        let stt = WatchdogSTT()
+        let session = InterviewSession(channels: [
+            .init(source: .init(id: "remote", role: .interviewer), audio: HeldAudio(),
+                  heartbeatInterval: .milliseconds(20), makeSTT: { stt }, delay: { _ in })
+        ], detector: .init(classifier: HeldClassifier(slow: false)), generator: FixedAnswer())
+        await session.start()
+        try await eventually { await stt.heartbeats >= 2 }
+        let quiet = await session.current()
+        XCTAssertEqual(quiet.state, .listening)
+        XCTAssertEqual(quiet.reconnects, 0)
+        await stt.dropWithoutClosingStream()
+        try await eventually { await session.current().state == .failed }
+        let failed = await session.current()
+        XCTAssertEqual(failed.reconnects, 2)
+        XCTAssertTrue(failed.issues.last?.contains("attempts exhausted") == true)
+        await session.stop()
+    }
+
+    func testCoincidentMicrophoneSpeechWithoutCandidateRecognitionIsAmbiguous() async throws {
+        let remote = InjectedSTT()
+        let candidate = InjectedSTT()
+        let mic = CaptureSource(id: "mic", role: .candidate)
+        let microphone = HeldAudio()
+        let classifier = HeldClassifier(slow: false)
+        let session = InterviewSession(channels: [
+            .init(source: .init(id: "remote", role: .interviewer), audio: HeldAudio(), makeSTT: { remote }),
+            .init(source: mic, audio: microphone, makeSTT: { candidate })
+        ], detector: .init(classifier: classifier), generator: FixedAnswer())
+        await session.start()
+        try await eventually { await session.current().state == .listening }
+        let start = ContinuousClock.now.advanced(by: .seconds(-2))
+        await microphone.send(.init(source: mic, sampleRate: 24_000, startSample: 0,
+                                    pcm: Data(repeating: 64, count: 24_000), capturedAt: start))
+        var timing = PipelineTiming()
+        timing.speechStart = start.advanced(by: .milliseconds(50))
+        timing.endpoint = start.advanced(by: .milliseconds(550))
+        await remote.send("Explain the transaction.", item: "untagged-echo", timing: timing)
+        try await eventually { await session.current().transcript.last?.role == .unknown }
+        let inputs = await classifier.inputs
+        XCTAssertTrue(inputs.isEmpty)
+        let transcript = await session.current().transcript
+        XCTAssertEqual(transcript.first?.text, "Explain the transaction.")
+        await session.stop()
     }
 }

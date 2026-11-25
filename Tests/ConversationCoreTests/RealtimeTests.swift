@@ -41,9 +41,9 @@ extension RealtimeTests {
         let socket = ScriptedSocket()
         let source = CaptureSource(id: "source", role: .interviewer)
         let provider = OpenAIRealtimeTranscriber(apiKey: "synthetic", model: "gpt-live-transcribe",
-                                                 socket: { _ in socket })
+                                                 socket: { _ in UnresponsivePingSocket(base: socket) })
         await socket.enqueue(#"{"type":"session.created"}"#)
-        await socket.enqueue(#"{"type":"session.updated"}"#)
+        await socket.enqueue(#"{"type":"session.updated","session":{"type":"transcription","audio":{"input":{"format":{"type":"audio/pcm","rate":24000},"transcription":{"model":"gpt-live-transcribe"},"turn_detection":null}}}}"#)
         let stream = try await provider.connect(source: source, epoch: UUID())
         try await provider.append(.init(source: source, sampleRate: 24_000, startSample: 0, pcm: Data([0, 0])))
         try await provider.commit()
@@ -51,15 +51,97 @@ extension RealtimeTests {
         XCTAssertEqual(sent.count, 3)
         XCTAssertTrue(sent.first?.contains("session.update") == true)
         XCTAssertEqual(sent.last, OpenAIRealtimeWire.commit)
+        do {
+            try await provider.checkConnection()
+            XCTFail("Expected the socket ping failure")
+        } catch {
+            XCTAssertEqual(error as? ProviderFailure, .timeout)
+        }
         _ = stream
         await provider.close()
     }
 
-    func testLiveModelOmitsUnsupportedVocabularyPrompt() throws {
-        let live = try OpenAIRealtimeWire.session(model: "gpt-live-transcribe", language: "en", vocabulary: ["Swift"])
-        let other = try OpenAIRealtimeWire.session(model: "gpt-4o-transcribe", language: "en", vocabulary: ["Swift"])
-        XCTAssertFalse(live.contains("prompt"))
-        XCTAssertTrue(other.contains("Swift"))
-        XCTAssertFalse(other.contains("delay"))
+    func testRejectsMismatchedSessionAcknowledgment() async throws {
+        let configurations = [("realtime", "gpt-live-transcribe", 24_000, "null"),
+                              ("transcription", "gpt-transcribe", 24_000, "null"),
+                              ("transcription", "gpt-live-transcribe", 16_000, "null"),
+                              ("transcription", "gpt-live-transcribe", 24_000, #"{"type":"server_vad"}"#)]
+        for (type, model, rate, vad) in configurations {
+            let socket = ScriptedSocket()
+            await socket.enqueue(#"{"type":"session.updated","session":{"type":"\#(type)","audio":{"input":{"format":{"type":"audio/pcm","rate":\#(rate)},"transcription":{"model":"\#(model)"},"turn_detection":\#(vad)}}}}"#)
+            await socket.fail()
+            let provider = OpenAIRealtimeTranscriber(apiKey: "synthetic", model: "gpt-live-transcribe", socket: { _ in socket })
+            do {
+                _ = try await provider.connect(source: .init(id: "source", role: .interviewer), epoch: UUID())
+                XCTFail("Expected the mismatched acknowledgment to be rejected")
+            } catch {
+                XCTAssertEqual(error as? ProviderFailure, .malformedEvent)
+            }
+        }
     }
+
+    func testModelSpecificLanguageAndVocabularyFields() throws {
+        func transcription(model: String, language: String?) throws -> [String: Any] {
+            let wire = try OpenAIRealtimeWire.session(model: model, language: language,
+                                                      vocabulary: [" Swift ", "\nnew line", "<markup>", " ", "C++"])
+            let json = try XCTUnwrap(JSONSerialization.jsonObject(with: Data(wire.utf8)) as? [String: Any])
+            let session = json["session"] as? [String: Any]
+            let audio = session?["audio"] as? [String: Any]
+            let input = audio?["input"] as? [String: Any]
+            return try XCTUnwrap(input?["transcription"] as? [String: Any])
+        }
+
+        let live = try transcription(model: "gpt-live-transcribe", language: " ZH-TW ")
+        XCTAssertEqual(live["languages"] as? [String], ["zh-tw"])
+        XCTAssertEqual(live["keywords"] as? [String], ["Swift", "C++"])
+        XCTAssertEqual(live["delay"] as? String, "low")
+        XCTAssertNil(live["language"])
+        XCTAssertNil(live["prompt"])
+        let automatic = try transcription(model: "gpt-transcribe", language: nil)
+        XCTAssertNil(automatic["languages"])
+        XCTAssertNil(automatic["delay"])
+        let prompted = try transcription(model: "gpt-4o-transcribe", language: "en")
+        XCTAssertEqual(prompted["language"] as? String, "en")
+        XCTAssertEqual(prompted["prompt"] as? String, "Swift, C++")
+        XCTAssertNil(prompted["keywords"])
+        XCTAssertNil(prompted["languages"])
+        XCTAssertThrowsError(try transcription(model: "gpt-4o-transcribe", language: "en-US")) {
+            XCTAssertEqual($0 as? ProviderFailure, .unsupportedCapability)
+        }
+    }
+
+    func testNormalizesFinalLanguageAndBothUsageShapesOnlyForTheAudioPart() throws {
+        let source = CaptureSource(id: "remote", role: .interviewer)
+        var assembler = OpenAITranscriptAssembler(source: source, epoch: UUID())
+        let commits = [
+            #"{"type":"input_audio_buffer.committed","item_id":"one"}"#,
+            #"{"type":"input_audio_buffer.committed","item_id":"two","previous_item_id":"one"}"#,
+            #"{"type":"input_audio_buffer.committed","item_id":"three","previous_item_id":"two"}"#
+        ]
+        for commit in commits { XCTAssertTrue(try assembler.receive(Data(commit.utf8)).isEmpty) }
+        let otherPart = #"{"type":"conversation.item.input_audio_transcription.completed","item_id":"one","content_index":1,"transcript":"Wrong part"}"#
+        XCTAssertTrue(try assembler.receive(Data(otherPart.utf8)).isEmpty)
+        let partialWire = #"{"type":"conversation.item.input_audio_transcription.delta","item_id":"one","content_index":0,"delta":"Hello"}"#
+        let partial = try XCTUnwrap(assembler.receive(Data(partialWire.utf8)).first)
+        XCTAssertNil(partial.recognitionUsage)
+        let duration = #"{"type":"conversation.item.input_audio_transcription.completed","item_id":"one","content_index":0,"transcript":"Hello.","languages":[{"code":"en"}],"usage":{"type":"duration","seconds":1.5}}"#
+        let tokens = #"{"type":"conversation.item.input_audio_transcription.completed","item_id":"two","content_index":0,"transcript":"Next.","languages":[{"code":"en"},{"code":"es"}],"usage":{"type":"tokens","input_tokens":10,"output_tokens":2}}"#
+        let invalid = #"{"type":"conversation.item.input_audio_transcription.completed","item_id":"three","content_index":0,"transcript":"Last.","usage":{"type":"duration","seconds":-1}}"#
+        let first = try XCTUnwrap(assembler.receive(Data(duration.utf8)).first)
+        XCTAssertEqual(first.state, .final)
+        XCTAssertEqual(first.language, "en")
+        XCTAssertEqual(first.recognitionUsage, .audioSeconds(1.5))
+        let second = try XCTUnwrap(assembler.receive(Data(tokens.utf8)).first)
+        XCTAssertNil(second.language)
+        XCTAssertEqual(second.recognitionUsage, .tokens(.init(input: 10, output: 2)))
+        XCTAssertNil(try XCTUnwrap(assembler.receive(Data(invalid.utf8)).first).recognitionUsage)
+    }
+}
+
+private struct UnresponsivePingSocket: RealtimeSocket {
+    let base: ScriptedSocket
+    func read() async throws -> Data { try await base.read() }
+    func send(_ text: String) async throws { await base.send(text) }
+    func ping() async throws { throw ProviderFailure.timeout }
+    func close() { base.close() }
 }

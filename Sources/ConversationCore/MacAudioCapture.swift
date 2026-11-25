@@ -5,6 +5,7 @@ import AudioBufferSlots
 import AVFoundation
 import CoreAudio
 import Foundation
+import os
 
 public enum MacAudioDevices {
     public static func processes() throws -> [AudioEndpointChoice] {
@@ -76,11 +77,12 @@ public enum MacAudioDevices {
 
     private static func stringProperty(_ id: AudioObjectID, _ selector: AudioObjectPropertySelector) -> String? {
         var address = property(selector)
-        var result: CFString?
-        var size = UInt32(MemoryLayout<CFString?>.size)
+        var result: Unmanaged<CFString>?
+        var size = UInt32(MemoryLayout.size(ofValue: result))
         guard AudioObjectGetPropertyData(id, &address, 0, nil, &size, &result) == noErr,
               let result else { return nil }
-        return result as String
+        // Core Audio transfers ownership of these string properties to the caller.
+        return result.takeRetainedValue() as String
     }
 
     fileprivate static func objectList(_ selector: AudioObjectPropertySelector) throws -> [AudioObjectID] {
@@ -113,7 +115,6 @@ public actor MacAudioSource: AudioSource {
         case microphone(uid: String)
         case application(group: String)
         case output(uid: String?)
-
     }
 
     private let source: CaptureSource
@@ -121,10 +122,11 @@ public actor MacAudioSource: AudioSource {
     private var runID: UUID?
     private var engine: AVAudioEngine?
     private var engineObserver: NSObjectProtocol?
+    private var applicationObserver: NSObjectProtocol?
     private var tap = AudioObjectID(kAudioObjectUnknown)
     private var aggregate = AudioObjectID(kAudioObjectUnknown)
     private var ioProc: AudioDeviceIOProcID?
-    private var listeners: [(AudioObjectPropertySelector, AudioObjectPropertyListenerBlock)] = []
+    private var listeners: [(AudioObjectID, AudioObjectPropertyAddress, AudioObjectPropertyListenerBlock)] = []
     private var conversionTask: Task<Void, Never>?
     private var rawOutput: AsyncThrowingStream<NativeAudioBufferPool.Lease, Error>.Continuation?
 
@@ -134,6 +136,7 @@ public actor MacAudioSource: AudioSource {
     }
 
     public func start() async throws -> AsyncThrowingStream<AudioFrame, Error> {
+        try Task.checkCancellation()
         guard runID == nil else { throw CaptureFailure.alreadyRunning }
         let id = UUID()
         runID = id
@@ -145,65 +148,75 @@ public actor MacAudioSource: AudioSource {
         do {
             switch input {
             case .microphone(let uid):
-                let permission = AsyncStream<Bool> { status in
-                    AVCaptureDevice.requestAccess(for: .audio) {
-                        status.yield($0)
-                        status.finish()
-                    }
-                }
-                var responses = permission.makeAsyncIterator()
-                let granted = await responses.next()
+                let granted = await Self.requestMicrophonePermission()
                 try Task.checkCancellation()
-                guard granted == true else { throw CaptureFailure.permissionDenied }
                 guard runID == id else { throw CancellationError() }
+                guard granted else { throw CaptureFailure.permissionDenied }
                 guard let device = try MacAudioDevices.devices(scope: kAudioDevicePropertyScopeInput)
                     .first(where: { $0.choice.id == uid })?.object else { throw CaptureFailure.sourceUnavailable }
+                try monitorDevice(device, uid: uid, scope: kAudioDevicePropertyScopeInput, followsDefault: false,
+                                  output: buffers)
                 try startMicrophone(device, output: buffers)
-                try observe(kAudioHardwarePropertyDevices) {
-                    if (try? MacAudioDevices.microphones().contains { $0.id == uid }) != true {
-                        buffers.finish(throwing: CaptureFailure.sourceUnavailable)
-                    }
-                }
             case .application(let group):
                 let selected = try Set(MacAudioDevices.processGroup(group))
                 guard !selected.isEmpty else { throw CaptureFailure.sourceUnavailable }
-                try startTap(CATapDescription(monoMixdownOfProcesses: selected.sorted()), output: buffers)
-                try observe(kAudioHardwarePropertyProcessObjectList) {
-                    let current = (try? Set(MacAudioDevices.processGroup(group))) ?? []
-                    if current.isEmpty { buffers.finish(throwing: CaptureFailure.sourceUnavailable) }
-                    else if current != selected { buffers.finish(throwing: CaptureFailure.routeChanged) }
+                applicationObserver = Self.observeApplicationTermination(group, output: buffers)
+                let validate: @Sendable () throws -> Void = {
+                    guard let current = try? Set(MacAudioDevices.processGroup(group)) else { throw CaptureFailure.routeChanged }
+                    guard !current.isEmpty else { throw CaptureFailure.sourceUnavailable }
+                    guard current == selected else { throw CaptureFailure.routeChanged }
                 }
+                try observe(property(kAudioHardwarePropertyProcessObjectList)) {
+                    do { try validate() } catch { buffers.finish(throwing: error) }
+                }
+                try validate()
+                try startTap(CATapDescription(monoMixdownOfProcesses: selected.sorted()), output: buffers)
+                try validate()
             case .output(let uid):
                 let defaultUID = uid == nil ? try MacAudioDevices.uidOfDefaultOutput() : nil
-                let selected = try AudioRouteSelection.output(in: MacAudioDevices.outputs(),
-                                                               selectedUID: uid, defaultUID: defaultUID)
-                try startTap(CATapDescription(excludingProcesses: MacAudioDevices.ownProcess(),
-                                              deviceUID: selected.id, stream: 0), output: buffers)
-                try observe(kAudioHardwarePropertyDevices) {
-                    if (try? MacAudioDevices.outputs().contains { $0.id == selected.id && $0.canTap }) != true {
-                        buffers.finish(throwing: uid == nil ? CaptureFailure.routeChanged : .sourceUnavailable)
-                    }
+                let devices = try MacAudioDevices.devices(scope: kAudioDevicePropertyScopeOutput)
+                let selected = try AudioRouteSelection.output(in: devices.map(\.choice), selectedUID: uid,
+                                                               defaultUID: defaultUID)
+                guard let device = devices.first(where: { $0.choice.id == selected.id })?.object else {
+                    throw CaptureFailure.sourceUnavailable
                 }
+                try monitorDevice(device, uid: selected.id, scope: kAudioDevicePropertyScopeOutput,
+                                  followsDefault: uid == nil, output: buffers)
                 if uid == nil {
-                    try observe(kAudioHardwarePropertyDefaultOutputDevice) {
+                    try observe(property(kAudioHardwarePropertyDefaultOutputDevice)) {
                         if (try? MacAudioDevices.uidOfDefaultOutput()) != selected.id {
                             buffers.finish(throwing: CaptureFailure.routeChanged)
                         }
                     }
+                    guard (try? MacAudioDevices.uidOfDefaultOutput()) == selected.id else {
+                        throw CaptureFailure.routeChanged
+                    }
+                }
+                try startTap(CATapDescription(excludingProcesses: MacAudioDevices.ownProcess(),
+                                              deviceUID: selected.id, stream: 0), output: buffers)
+                if uid == nil, (try? MacAudioDevices.uidOfDefaultOutput()) != selected.id {
+                    throw CaptureFailure.routeChanged
                 }
             }
+            try Task.checkCancellation()
         } catch {
             if runID == id { await stop() }
             throw error
         }
-        conversionTask = Task.detached { [source, weak self] in
+        output.onTermination = { [weak self] _ in Task { await self?.stop(id) } }
+        conversionTask = Task.detached { [source] in
             do {
                 var encoder = PCMEncoder(source: source)
                 for try await lease in raw {
                     defer { lease.release() }
                     try Task.checkCancellation()
                     for frame in try encoder.convert(lease.buffer, capturedAt: lease.capturedAt) {
-                        if case .dropped = output.yield(frame) { throw CaptureFailure.bufferOverrun }
+                        switch output.yield(frame) {
+                        case .enqueued: break
+                        case .terminated: return
+                        case .dropped: throw CaptureFailure.bufferOverrun
+                        @unknown default: throw CaptureFailure.invalidFormat
+                        }
                     }
                 }
                 output.finish()
@@ -212,9 +225,7 @@ public actor MacAudioSource: AudioSource {
             } catch {
                 output.finish(throwing: error)
             }
-            Task { await self?.stop(id) }
         }
-        output.onTermination = { [weak self] _ in Task { await self?.stop(id) } }
         return frames
     }
 
@@ -222,14 +233,15 @@ public actor MacAudioSource: AudioSource {
         runID = nil
         if let engineObserver { NotificationCenter.default.removeObserver(engineObserver) }
         engineObserver = nil
+        if let applicationObserver { NSWorkspace.shared.notificationCenter.removeObserver(applicationObserver) }
+        applicationObserver = nil
         if let engine {
             engine.stop()
             engine.inputNode.removeTap(onBus: 0)
         }
         engine = nil
-        for (selector, listener) in listeners {
-            var address = property(selector)
-            AudioObjectRemovePropertyListenerBlock(AudioObjectID(kAudioObjectSystemObject), &address, .main, listener)
+        for (object, var address, listener) in listeners {
+            AudioObjectRemovePropertyListenerBlock(object, &address, .main, listener)
         }
         listeners.removeAll()
         if let ioProc {
@@ -253,6 +265,17 @@ public actor MacAudioSource: AudioSource {
         if id == runID { await stop() }
     }
 
+    private static func requestMicrophonePermission() async -> Bool {
+        let permission = AsyncStream<Bool> { status in
+            AVCaptureDevice.requestAccess(for: .audio) {
+                status.yield($0)
+                status.finish()
+            }
+        }
+        var responses = permission.makeAsyncIterator()
+        return await responses.next() == true
+    }
+
     private func startMicrophone(_ device: AudioObjectID,
                                  output: AsyncThrowingStream<NativeAudioBufferPool.Lease, Error>.Continuation) throws {
         let engine = AVAudioEngine()
@@ -263,21 +286,80 @@ public actor MacAudioSource: AudioSource {
                                        0, &selected, UInt32(MemoryLayout<AudioObjectID>.size)))
         let format = node.outputFormat(forBus: 0)
         let pool = try NativeAudioBufferPool(format: format)
-        node.installTap(onBus: 0, bufferSize: 960, format: format) { buffer, _ in
+        let copy: @Sendable (AVAudioPCMBuffer, AVAudioTime) -> Void = { buffer, _ in
             pool.copy(buffer.audioBufferList, frames: buffer.frameLength, into: output)
         }
+        node.installTap(onBus: 0, bufferSize: 960, format: nil, block: copy)
         self.engine = engine
         engineObserver = NotificationCenter.default.addObserver(
             forName: .AVAudioEngineConfigurationChange, object: engine, queue: nil
-        ) { _ in output.finish(throwing: CaptureFailure.sourceUnavailable) }
+        ) { _ in output.finish(throwing: CaptureFailure.routeChanged) }
         try engine.start()
+        var actual = AudioObjectID(kAudioObjectUnknown)
+        var size = UInt32(MemoryLayout<AudioObjectID>.size)
+        try check(AudioUnitGetProperty(unit, kAudioOutputUnitProperty_CurrentDevice, kAudioUnitScope_Global,
+                                       0, &actual, &size))
+        guard actual == device, node.outputFormat(forBus: 0) == format else { throw CaptureFailure.routeChanged }
     }
 
-    private func observe(_ selector: AudioObjectPropertySelector, change: @escaping @Sendable () -> Void) throws {
-        var address = property(selector)
-        let listener: AudioObjectPropertyListenerBlock = { _, _ in change() }
-        try check(AudioObjectAddPropertyListenerBlock(AudioObjectID(kAudioObjectSystemObject), &address, .main, listener))
-        listeners.append((selector, listener))
+    private static func observeApplicationTermination(
+        _ group: String, output: AsyncThrowingStream<NativeAudioBufferPool.Lease, Error>.Continuation
+    ) -> NSObjectProtocol {
+        NSWorkspace.shared.notificationCenter.addObserver(
+            forName: NSWorkspace.didTerminateApplicationNotification, object: nil, queue: .main
+        ) { notification in
+            guard let app = notification.userInfo?[NSWorkspace.applicationUserInfoKey] as? NSRunningApplication,
+                  app.bundleIdentifier == group || "pid:\(app.processIdentifier)" == group else { return }
+            output.finish(throwing: CaptureFailure.sourceUnavailable)
+        }
+    }
+
+    private func monitorDevice(_ object: AudioObjectID, uid: String, scope: AudioObjectPropertyScope,
+                               followsDefault: Bool,
+                               output: AsyncThrowingStream<NativeAudioBufferPool.Lease, Error>.Continuation) throws {
+        let changesOutput = scope == kAudioDevicePropertyScopeOutput
+        let unavailable: CaptureFailure = followsDefault ? .routeChanged : .sourceUnavailable
+        let validatePresence: @Sendable () throws -> Void = {
+            guard let devices = try? MacAudioDevices.devices(scope: scope) else { throw CaptureFailure.routeChanged }
+            guard let current = devices.first(where: { $0.choice.id == uid }), !changesOutput || current.choice.canTap else {
+                throw unavailable
+            }
+            guard current.object == object else { throw CaptureFailure.routeChanged }
+        }
+        let validateAlive: @Sendable () throws -> Void = {
+            var address = property(kAudioDevicePropertyDeviceIsAlive)
+            var alive: UInt32 = 0
+            var size = UInt32(MemoryLayout<UInt32>.size)
+            guard AudioObjectGetPropertyData(object, &address, 0, nil, &size, &alive) == noErr, alive != 0 else {
+                throw unavailable
+            }
+        }
+        try observe(property(kAudioHardwarePropertyDevices)) {
+            do { try validatePresence() } catch { output.finish(throwing: error) }
+        }
+        try observe(property(kAudioDevicePropertyDeviceIsAlive), on: object) {
+            do { try validateAlive() } catch { output.finish(throwing: error) }
+        }
+        try observe(property(kAudioDevicePropertyNominalSampleRate), on: object) {
+            output.finish(throwing: CaptureFailure.routeChanged)
+        }
+        try observe(property(kAudioDevicePropertyStreams, scope: scope), on: object) {
+            do {
+                try validatePresence()
+                output.finish(throwing: CaptureFailure.routeChanged)
+            } catch { output.finish(throwing: error) }
+        }
+        try validatePresence()
+        try validateAlive()
+    }
+
+    private func observe(_ property: AudioObjectPropertyAddress,
+                         on object: AudioObjectID = AudioObjectID(kAudioObjectSystemObject),
+                         change: @escaping @Sendable () -> Void) throws {
+        var address = property
+        let listener: @Sendable (UInt32, UnsafePointer<AudioObjectPropertyAddress>) -> Void = { _, _ in change() }
+        try check(AudioObjectAddPropertyListenerBlock(object, &address, .main, listener))
+        listeners.append((object, address, listener))
     }
 
     private func startTap(_ description: CATapDescription,
@@ -308,10 +390,19 @@ public actor MacAudioSource: AudioSource {
         try check(AudioHardwareCreateAggregateDevice(configuration as CFDictionary, &aggregate))
         let pool = try NativeAudioBufferPool(format: format)
         let bytesPerFrame = streamFormat.mBytesPerFrame
-        try check(AudioDeviceCreateIOProcIDWithBlock(&ioProc, aggregate, nil) { _, input, _, _, _ in
-            let frames = input.pointee.mBuffers.mDataByteSize / bytesPerFrame
+        let copy: @Sendable (UnsafePointer<AudioTimeStamp>, UnsafePointer<AudioBufferList>,
+                             UnsafePointer<AudioTimeStamp>, UnsafeMutablePointer<AudioBufferList>,
+                             UnsafePointer<AudioTimeStamp>) -> Void = { _, input, _, _, _ in
+            guard input.pointee.mNumberBuffers > 0 else { return }
+            let bytes = input.pointee.mBuffers.mDataByteSize
+            guard bytes.isMultiple(of: bytesPerFrame) else {
+                output.finish(throwing: CaptureFailure.invalidFormat)
+                return
+            }
+            let frames = bytes / bytesPerFrame
             pool.copy(input, frames: frames, into: output)
-        })
+        }
+        try check(AudioDeviceCreateIOProcIDWithBlock(&ioProc, aggregate, nil, copy))
         guard let ioProc else { throw CaptureFailure.sourceUnavailable }
         try check(AudioDeviceStart(aggregate, ioProc))
     }
@@ -399,13 +490,62 @@ private final class NativeAudioBufferPool: @unchecked Sendable {
     }
 }
 
-private struct PCMEncoder {
+// Keep each converter on one worker or actor. AVAudioConverter borrows its input only during convert().
+final class NativePCMConverter {
+    private let inputFormat: AVAudioFormat
+    private let converter: AVAudioConverter
+
+    init(from input: AVAudioFormat, to output: AVAudioFormat) throws {
+        guard let converter = AVAudioConverter(from: input, to: output) else { throw CaptureFailure.invalidFormat }
+        converter.downmix = input.channelCount > output.channelCount
+        inputFormat = input
+        self.converter = converter
+    }
+
+    func convert(_ input: AVAudioPCMBuffer) throws -> AVAudioPCMBuffer {
+        let outputFormat = converter.outputFormat
+        let count = ceil(Double(input.frameLength) * outputFormat.sampleRate / inputFormat.sampleRate)
+        guard inputFormat == input.format, count.isFinite, count > 0, count <= Double(UInt32.max - 256),
+              let output = AVAudioPCMBuffer(pcmFormat: outputFormat, frameCapacity: AVAudioFrameCount(count) + 256)
+        else { throw CaptureFailure.invalidFormat }
+        // The sendable callback takes the buffer exactly once, without a shared captured `var`.
+        let pending = OSAllocatedUnfairLock(uncheckedState: Optional(input))
+        let status = converter.convert(to: output, error: nil) { _, state in
+            let buffer = pending.withLockUnchecked { stored in
+                let buffer = stored
+                stored = nil
+                return buffer
+            }
+            state.pointee = buffer == nil ? .noDataNow : .haveData
+            return buffer
+        }
+        guard status == .haveData || status == .inputRanDry,
+              pending.withLockUnchecked({ $0 == nil }) else { throw CaptureFailure.invalidFormat }
+        return output
+    }
+
+    func drain() throws -> AVAudioPCMBuffer? {
+        guard let output = AVAudioPCMBuffer(pcmFormat: converter.outputFormat, frameCapacity: 4_096) else {
+            throw CaptureFailure.invalidFormat
+        }
+        let status = converter.convert(to: output, error: nil) { _, state in
+            state.pointee = .endOfStream
+            return nil
+        }
+        if status == .endOfStream, output.frameLength == 0 { return nil }
+        guard status != .error, output.frameLength > 0 else { throw CaptureFailure.invalidFormat }
+        return output
+    }
+}
+
+struct PCMEncoder {
     private static let rate = 24_000
     private static let frameBytes = 960
     let source: CaptureSource
-    private var converter: AVAudioConverter?
+    private var converter: NativePCMConverter?
     private var pending = Data()
     private var startSample: Int64 = 0
+    private var captureAnchor: ContinuousClock.Instant?
 
     init(source: CaptureSource) { self.source = source }
 
@@ -413,33 +553,25 @@ private struct PCMEncoder {
         if converter == nil {
             guard let format = AVAudioFormat(commonFormat: .pcmFormatInt16, sampleRate: Double(Self.rate),
                                              channels: 1, interleaved: true) else { throw CaptureFailure.invalidFormat }
-            converter = AVAudioConverter(from: input.format, to: format)
+            converter = try NativePCMConverter(from: input.format, to: format)
+            // A callback observes a block after capture. Estimate the first sample from that
+            // observation, then keep distinct frame boundaries on this activation's sample clock.
+            let nanoseconds = Double(input.frameLength) * 1_000_000_000 / input.format.sampleRate
+            captureAnchor = capturedAt.advanced(by: .nanoseconds(-Int64(nanoseconds.rounded())))
         }
-        guard let converter, converter.inputFormat == input.format,
-              let converted = AVAudioPCMBuffer(
-                pcmFormat: converter.outputFormat,
-                frameCapacity: AVAudioFrameCount(ceil(Double(input.frameLength) * Double(Self.rate)
-                                                     / input.format.sampleRate)) + 256
-              ) else { throw CaptureFailure.invalidFormat }
-        var sent = false
-        var error: NSError?
-        let status = converter.convert(to: converted, error: &error) { _, state in
-            if sent {
-                state.pointee = .noDataNow
-                return nil
-            }
-            sent = true
-            state.pointee = .haveData
-            return input
-        }
-        guard status != .error, let samples = converted.int16ChannelData else {
+        guard let converter, let captureAnchor else { throw CaptureFailure.invalidFormat }
+        let converted = try converter.convert(input)
+        guard converted.frameLength > 0 else { return [] }
+        guard let samples = converted.int16ChannelData else {
             throw CaptureFailure.invalidFormat
         }
         pending.append(Data(bytes: samples[0], count: Int(converted.frameLength) * 2))
         var frames: [AudioFrame] = []
         while pending.count >= Self.frameBytes {
+            let start = Duration.milliseconds(startSample / Int64(Self.frameBytes / 2) * 20)
+            let estimatedStart = captureAnchor.advanced(by: start)
             frames.append(AudioFrame(source: source, sampleRate: Self.rate, startSample: startSample,
-                                     pcm: Data(pending.prefix(Self.frameBytes)), capturedAt: capturedAt))
+                                     pcm: Data(pending.prefix(Self.frameBytes)), capturedAt: estimatedStart))
             pending.removeFirst(Self.frameBytes)
             startSample += Int64(Self.frameBytes / 2)
         }

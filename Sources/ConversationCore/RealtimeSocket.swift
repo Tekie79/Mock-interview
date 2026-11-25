@@ -6,7 +6,12 @@ import FoundationNetworking
 protocol RealtimeSocket: Sendable {
     func read() async throws -> Data
     func send(_ text: String) async throws
+    func ping() async throws
     func close()
+}
+
+extension RealtimeSocket {
+    func ping() async throws {}
 }
 
 final class FoundationRealtimeSocket: RealtimeSocket, @unchecked Sendable {
@@ -33,6 +38,27 @@ final class FoundationRealtimeSocket: RealtimeSocket, @unchecked Sendable {
     }
 
     func close() { task.cancel(with: .goingAway, reason: nil) }
+
+    func ping() async throws {
+        try await withThrowingTaskGroup(of: Void.self) { group in
+            group.addTask { [task] in
+                let (responses, pong) = AsyncThrowingStream<Void, Error>.makeStream(bufferingPolicy: .bufferingNewest(1))
+                task.sendPing { error in
+                    if error != nil { pong.finish(throwing: ProviderFailure.disconnected) }
+                    else { pong.yield(()); pong.finish() }
+                }
+                for try await _ in responses { return }
+                try Task.checkCancellation()
+                throw ProviderFailure.disconnected
+            }
+            group.addTask {
+                try await Task.sleep(for: .seconds(5))
+                throw ProviderFailure.timeout
+            }
+            defer { group.cancelAll() }
+            _ = try await group.next()
+        }
+    }
 
     private func perform<T>(_ body: () async throws -> T) async throws -> T {
         do {
