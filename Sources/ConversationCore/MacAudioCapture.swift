@@ -85,16 +85,17 @@ public enum MacAudioDevices {
         return result.takeRetainedValue() as String
     }
 
-    fileprivate static func objectList(_ selector: AudioObjectPropertySelector) throws -> [AudioObjectID] {
-        var address = property(selector)
-        let system = AudioObjectID(kAudioObjectSystemObject)
+    fileprivate static func objectList(_ selector: AudioObjectPropertySelector,
+                                      on object: AudioObjectID = AudioObjectID(kAudioObjectSystemObject),
+                                      scope: AudioObjectPropertyScope = kAudioObjectPropertyScopeGlobal) throws -> [AudioObjectID] {
+        var address = property(selector, scope: scope)
         var size: UInt32 = 0
-        try check(AudioObjectGetPropertyDataSize(system, &address, 0, nil, &size))
+        try check(AudioObjectGetPropertyDataSize(object, &address, 0, nil, &size))
         guard size > 0 else { return [] }
         var objects = [AudioObjectID](repeating: 0, count: Int(size) / MemoryLayout<AudioObjectID>.stride)
         try objects.withUnsafeMutableBytes { bytes in
             guard let baseAddress = bytes.baseAddress else { return }
-            try check(AudioObjectGetPropertyData(system, &address, 0, nil, &size, baseAddress))
+            try check(AudioObjectGetPropertyData(object, &address, 0, nil, &size, baseAddress))
         }
         return Array(objects.prefix(Int(size) / MemoryLayout<AudioObjectID>.stride))
     }
@@ -334,21 +335,31 @@ public actor MacAudioSource: AudioSource {
                 throw unavailable
             }
         }
+        let configuration: @Sendable () throws -> (streams: [AudioObjectID], rate: Double) = {
+            let streams = try MacAudioDevices.objectList(kAudioDevicePropertyStreams, on: object, scope: scope)
+            var address = property(kAudioDevicePropertyNominalSampleRate)
+            var rate = Float64(0)
+            var size = UInt32(MemoryLayout<Float64>.size)
+            try check(AudioObjectGetPropertyData(object, &address, 0, nil, &size, &rate))
+            return (streams, rate)
+        }
+        let original = try configuration()
+        let configurationChanged: @Sendable () -> Void = {
+            do {
+                try validatePresence()
+                // HAL can notify listeners while an aggregate starts even when the selected device stays intact.
+                if let current = try? configuration(), current == original { return }
+                output.finish(throwing: CaptureFailure.routeChanged)
+            } catch { output.finish(throwing: error) }
+        }
         try observe(property(kAudioHardwarePropertyDevices)) {
             do { try validatePresence() } catch { output.finish(throwing: error) }
         }
         try observe(property(kAudioDevicePropertyDeviceIsAlive), on: object) {
             do { try validateAlive() } catch { output.finish(throwing: error) }
         }
-        try observe(property(kAudioDevicePropertyNominalSampleRate), on: object) {
-            output.finish(throwing: CaptureFailure.routeChanged)
-        }
-        try observe(property(kAudioDevicePropertyStreams, scope: scope), on: object) {
-            do {
-                try validatePresence()
-                output.finish(throwing: CaptureFailure.routeChanged)
-            } catch { output.finish(throwing: error) }
-        }
+        try observe(property(kAudioDevicePropertyNominalSampleRate), on: object, change: configurationChanged)
+        try observe(property(kAudioDevicePropertyStreams, scope: scope), on: object, change: configurationChanged)
         try validatePresence()
         try validateAlive()
     }

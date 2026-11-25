@@ -118,7 +118,9 @@ public actor QuestionDetector {
         }
 
         let arrived = now()
-        let substantiveSegments = segments.filter { !Self.isObviousNonQuestion($0.text) }
+        let substantiveSegments = segments.filter {
+            !Self.isObviousNonQuestion($0.text) && !Self.isNarrationOrAgreementCheck($0.text)
+        }
         var transcriptIDs = substantiveSegments.map(\.transcriptID)
         var text = substantiveSegments.map { $0.text.trimmingCharacters(in: .whitespacesAndNewlines) }.joined(separator: "\n")
         if text.isEmpty {
@@ -208,4 +210,34 @@ public actor QuestionDetector {
             .replacingOccurrences(of: "’", with: "'").trimmingCharacters(in: .punctuationCharacters)
         return folded.isEmpty || obviousNonQuestions.contains(folded) || isOnlyCallLogistics(folded)
     }
+
+    // Process audio can contain both speakers. Reject clear first-person narration even when
+    // it quotes a question or ends in a check for agreement. Mixed turns that contain a
+    // separately directed request still go to semantic classification.
+    private static func isNarrationOrAgreementCheck(_ text: String) -> Bool {
+        let folded = text.lowercased().replacingOccurrences(of: "’", with: "'")
+            .trimmingCharacters(in: .whitespacesAndNewlines)
+        let firstPerson = folded.range(of: #"^(?:(?:well|yes|yeah|sure|so|no|actually|basically|um|uh|you know)[,.\s]+)*(?:i|we|my|our)\b"#,
+                                       options: .regularExpression) != nil
+        let agreementCheck = folded.range(of: #"[,.;]\s*(?:right|okay|ok|does that make sense|do you know what i mean|you know)[.!?\s]*$"#,
+                                          options: .regularExpression) != nil
+        guard firstPerson || agreementCheck else { return false }
+        let spoken = folded.replacingOccurrences(of: #"“[^”]*”|"[^"]*""#, with: " ", options: .regularExpression)
+        return spoken.range(of: directedRequest, options: .regularExpression) == nil
+            && spoken.range(of: #"\b(?:how|what|why|when|where|which)\s+(?:did|would|could|should|will|can|do)\s+you\b"#,
+                            options: .regularExpression) == nil
+    }
+
+    private static let directedRequest = #"(?:^|[.!?;:]\s*|\b(?:but|and)\s+)(?:(?:and|so|then|instead|now|next)[,\s]+)*(?:"#
+        + [
+            #"(?:what|where|when|why|who|which|how)\s+(?:would|could|should|did|do|does|is|are|was|were|have|has|can|will|many|much|long|else|about|kind|caused|happened|changed)\b"#,
+            #"(?:can|could|would|will|did|do|have|are|were|should)\s+you\b"#,
+            #"(?:tell|walk|talk|show|take)\s+(?:me|us)\b"#,
+            #"(?:describe|explain|compare|design|implement|write|outline|give|share|summarize|consider|suppose|imagine|calculate|review|define|list|name)\b"#,
+            #"(?:my|our)\s+(?:next\s+)?question\s+is\b"#,
+            #"(?:i|we)\s+(?:need|want|would\s+like)\s+you\s+to\b"#,
+            #"(?:why|how\s+so)(?=\s*[?!.]|$)"#,
+            #"i\s+(?:wonder|want\s+(?:you|to\s+know)|(?:was|am)\s+wondering|would\s+like\s+(?:you|to\s+know))\b"#,
+            #"i'd\s+like\s+(?:you|to\s+know)\b"#
+        ].joined(separator: "|") + ")"
 }

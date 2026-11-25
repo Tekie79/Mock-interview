@@ -1,6 +1,27 @@
 # M11 final acceptance
 
-**Release qualification remains open.** Native packaging and selected provider and hardware paths worked. The corrected held-out text run met text-level precision and recall. The audio-level gate is separate. A real 90-minute remote run and independently annotated visible-answer timings are required for release. See the [benchmark](m11-performance-benchmark.md), [provider results](m11-provider-qualification.md), [audio compatibility](m11-audio-compatibility.md) and [defects](m11-defect-register.md).
+**Hold release.** The M11 correction passed local regression tests and unsigned packaging. Live shared-feed quality, Scribe strategy comparison, physical microphone attribution, visible-answer timing and the real 90-minute run remain open. The reports below distinguish current results from historical smoke. [Benchmark](m11-performance-benchmark.md) · [Provider results](m11-provider-qualification.md) · [Audio compatibility](m11-audio-compatibility.md) · [Defects](m11-defect-register.md)
+
+## Acceptance correction after 41c243a
+
+The work continues from `41c243a1b7a72ea69b71940acd4c7edd615e732b`. [Draft PR #3](https://github.com/Tekie79/Mock-interview/pull/3) records the final commit and links its hosted Linux, macOS 15 and macOS 26 checks.
+
+| Area | Current evidence | Gate |
+|---|---|---|
+| Regression and app bundle | `./scripts/build.sh`, `./scripts/test.sh` and `./scripts/package-macos.sh` passed on local Xcode 26.6 (17F113), macOS 26.3.2 (25D2150). XCTest ran 139 tests with zero failures and zero skips. The unsigned Release bundle includes arm64 and x86_64 and targets macOS 14.2. Release executable SHA-256 `96270f8e54aff510098b4b8f278239b4ac8810f14079efc91c1724b28b49afa7`. SwiftPM reported five pkg-config search diagnostics and Xcode reported one App Intents metadata warning. Zero Swift or Clang compiler warnings. | Local pass |
+| M11-08 shared feed | Explicit speaker assignment fails closed for unknown roles. The question gate retained all three requests and rejected four of six negative turns on human Q&A through local Apple recognition. Two ambiguous turns reached a permissive classifier fixture. | Open. Needs live audio-to-card precision, recall, duplicate and premature counts. |
+| M11-06 segmentation | Offline tests cover plain and timestamped finals arriving in different orders, including punctuation variation and partial audio coverage. | Blocked for current live comparison by credential access. |
+| M11-02 output changes | Baseline and correction each recorded audible signal on 20 alternating default and explicit physical output starts. Configuration-equivalent HAL events now leave the existing tap open. | Adapter retest passed. Intermittent native failure did not reproduce. Native UI retest remains open. |
+| AT-02 and AT-18 | Candidate and unknown role regressions passed. The physical helper had undetermined microphone permission. | Physical candidate mic, overlapping voices and assigned speaker labels still require native verification. |
+| AT-05 and AT-07 | Four wait times exercised with clock-controlled provider finals. At 1 and 2 seconds, the 750 ms gap produced one combined question. | Recorded native pauses and completeness of the generated answer still require verification. |
+| AT-11 | Native PDFKit simple two-column and deterministic wrapped Markdown/legacy approval fixtures passed. Approved, pending, excluded and missing evidence boundaries are covered by fixtures. Requested word limits are forwarded and clearly advisory. | Live approved, excluded, missing and conflicting evidence outputs and word counts remain unmeasured. |
+| AT-12 and AT-13 | Lifecycle and recovery regressions passed. The physical adapter probe repeatedly stopped and reopened a source. | Native post-Stop network sends and live interruption/recovery remain unmeasured. |
+| AT-16 | The owner confirmed that no remote endpoint is currently available. | Blocked. No 90-minute run on this revision. |
+| Fresh holdout and latency | 100 new annotated synthetic turns, rendered to 30 audio tracks. The fixture was frozen before corrections. | Live question quality, duplicates, premature answers and speech-end to displayed text and completion remain unmeasured. |
+
+The local container-based Linux attempt could not connect to the Docker daemon. The hosted Linux job supplies the Linux verification. Native UI automation timed out during the correction session. The physical output adapter probe ran independently.
+
+## Earlier milestone evidence
 
 ## Test environment and artifact
 
@@ -17,9 +38,9 @@
 
 The SwiftPM runs emitted five search-path diagnostics related to missing pkg-config/SQLite/zlib metadata on the Mac. The SDK libraries linked and tests passed. The native window retest package emitted one App Intents metadata extraction warning and zero Swift or Clang compiler warnings. Packaging is unsigned.
 
-## AT-01 through AT-18
+## AT-01 through AT-18 on earlier M11 revisions
 
-A scenario earns **Passed** only within its specified layer. Native runtime, provider adapter and deterministic results are identified separately.
+A scenario earns **Passed** only within its specified layer. Native runtime, provider adapter and deterministic results are identified separately. These observations are historical. The current correction evidence is recorded above.
 
 | ID | Status | Observed evidence or missing evidence |
 |---|---|---|
@@ -42,7 +63,7 @@ A scenario earns **Passed** only within its specified layer. Native runtime, pro
 | AT-17 | Passed | Deterministic synthetic PCM replay exercised capture, transcript, role, classification, answer and diagnostics without live keys. |
 | AT-18 | Not tested | All 10 unknown-role held-out text cases yielded zero accepted questions. Deterministic mixed diarization rejects unmapped speakers and resets mappings after a new epoch. The mixed-microphone hardware scenario remains open. |
 
-## Native interaction record
+## Earlier native interaction record
 
 | Status | Observation |
 |---|---|

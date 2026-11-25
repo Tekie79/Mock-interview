@@ -132,7 +132,7 @@ See `docs/verification/baseline.md` for the initial build/test run. No native Ma
 - Actual Apple speech, OpenAI, and ElevenLabs PCM smoke reached final results. OpenAI classification, answer streaming and embeddings responded successfully. Deepgram and Anthropic live checks require keys. Live ChatGPT authorization still requires official eligibility.
 - The initial held-out text run measured 85.96% precision and 98.00% recall. Subsequent checks distinguish text classification, audio replay and physical capture. The release remains subject to independently measured visible-answer latency, long-session stability and the open scenarios in the [acceptance record](verification/m11-final-acceptance.md).
 
-- The owner-requested answer layouts now use the selected format to render short paragraphs, Talking points, STAR headings, and technical sections and code. The native Word limit accepts exact counts and the generation regression verifies that a custom limit replaces the format default. [M11 native verification](verification/m11-final-acceptance.md)
+- The selected answer format renders short paragraphs, Talking points, STAR headings, and technical sections and code. **Requested word limit** replaces the format default in the generation request. The UI identifies that actual output can exceed the requested count. [M11 native verification](verification/m11-final-acceptance.md)
 
 - **Interview on another device** exposes the shared-microphone workflow with confirmed speaker roles. The ElevenLabs Scribe v3 Live path pairs indexed speech commits and speaker labels. The Deepgram Nova path remains available. Physical room tests and live shared-mic account qualification remain open.
 
@@ -140,7 +140,7 @@ See `docs/verification/baseline.md` for the initial build/test run. No native Ma
 
 - Scenarios lead with a practical conditional response. Approved facts remain the basis for claims about past experience. Profiles provide explicit file types, batch attachment by purpose, a separate paste control, and source-linked Markdown facts.
 
-- Profile attachments and directly added experience are ready for answers without a per-fact review step. The one-time profile database upgrade enables legacy pending items and preserves exclusions. The editor supports optional corrections and a **Use in answers** toggle.
+- New profile attachments and directly added experience are ready for answers without a per-fact review step. Upgrades preserve explicit exclusions and leave legacy pending facts excluded until the owner enables them. The earlier migration did not record which confirmed facts it promoted. Existing confirmed records are preserved.
 
 - Experience answers use specific, directly relevant profile facts or a labeled practice scenario. Talking points use words the candidate can say aloud. Retrieval includes the original wording and a trusted prior question when referenced. The workspace remembers the selected profile for the next session.
 
@@ -149,3 +149,10 @@ See `docs/verification/baseline.md` for the initial build/test run. No native Ma
 - **Answer training** in Profiles stores skills and a sample of the candidate's speaking style. Recorded project stories become individual experience facts with optional source, destination, data and outcome. Broad past-work questions can retrieve approved project examples independently of their wording, and the generation policy favors an actual project in first-person past tense.
 
 - Compact and the main workspace share Start, Pause, Resume and Stop controls. Compact also shows startup errors and session issues from the selected sources and providers.
+
+### Acceptance corrections after 41c243a
+
+- Shared output can use explicit speaker assignment. The question gate rejects narration, quotations and agreement checks while retaining direct requests. The physical recording diagnostic still passed two ambiguous clips to the classifier. M11-08 remains an open quality gate.
+- Scribe pairs plain and timestamped commit results across punctuation differences and keeps later timed results pending until earlier companions can be placed. The isolated live strategy comparison remains open. The default GPT-4.1 mini stays in place pending account qualification of the newer selections.
+- Capture now preserves the tap when stream and sample-rate notifications report the same configuration. Both baseline and candidate passed 20 physical adapter starts. The intermittent native **Test Audio** failure did not reproduce in that probe.
+- Document import combines continuous wrapped text, omits incomplete fragments from the evidence index and records source locations. Native fixtures exercise simple two-column PDF extraction. Local verification passed 139 tests and unsigned packaging. Physical microphone and overlap, live model and grounding, visible-latency and real 90-minute evidence remain open. [Acceptance evidence](verification/m11-final-acceptance.md) · [Draft PR #3](https://github.com/Tekie79/Mock-interview/pull/3)

@@ -1,5 +1,35 @@
 # M11 performance benchmark
 
+## Acceptance correction benchmark
+
+The fresh holdout was frozen before tuning. `qualification.jsonl` contains 100 distinct labeled turns in 10 scenarios, with 40 accepts, 50 ignores and 10 waits. The renderer produced 30 PCM tracks and 10 insertion-label files using `python3 Tests/Fixtures/m11/render.py --render qualification --output <directory>`. SHA-256 of the frozen labels is `5dd9e1f824c83b5a4299917db29d92d776ec25cf1f9095b26db013688d749f3f`. Earlier text and audio retests serve as regression data. The new audio has not been scored against live providers. Before using it for the latency gate, independently mark actual acoustic speech ends.
+
+### Human question-and-answer recording
+
+The recorded diagnostic used the first 177 seconds of the Q&A excerpt from the May 1, 2024 Federal Reserve press conference. Nine windows were labeled from the published Q&A before classification. A continuous Apple transcription established an approximately eight- to nine-second difference between the published caption clock and the excerpt media clock. An initial misaligned run was discarded. Local SpeechAnalyzer transcribed the corrected windows. Production question gating then evaluated them with a permissive classifier fixture, which accepted everything it received. [Federal Reserve video](https://www.federalreserve.gov/monetarypolicy/fomcpresconf20240501.htm) · [Official transcript](https://www.federalreserve.gov/mediacenter/files/FOMCpresconf20240501.pdf)
+
+| Expected turn | Windows | Passed to classifier | Blocked before classification |
+|---|---:|---:|---:|
+| Complete request | 3 | 3 | 0 |
+| Spoken answer, incomplete setup or clarification | 6 | 2 | 4 |
+
+All four ordinary answer windows were blocked. The incomplete setup and clarification reached the classifier. This measures preclassifier gating at 3/5 precision and 3/3 recall on nine windows. Because this recording informed the corrections, it now serves as a regression diagnostic. Live automatic-answer precision and recall, duplicate/premature counts, physical speaker-label accuracy and model latency remain unmeasured. The excerpt SHA-256 is `8f4b966f7c1138f78589e53495b246270e1d0ea5ab2df2d53fc311bdbbbaba22`. Evaluation time windows are relative to the excerpt: positives 11.94–21.59, 123.00–126.24, 147.36–163.61 s; negatives 21.60–53.87, 60.60–79.01, 103.86–116.39, 118.60–120.95, 126.25–137.81, 163.62–176.90 s.
+
+### Silence wait trade-off
+
+`QuestionRoundTests` drove two requests separated by 750 ms of simulated quiet, with controlled provider finals and classifier. An early card means the first part reached classification before the second part arrived.
+
+| Silence wait (s) | Final-to-eligibility wait (ms) | Early cards | Total cards | Result |
+|---:|---:|---:|---:|---|
+| 0 | 0 | 1 | 2 | Separate requests |
+| 0.5 | 500 | 1 | 2 | Separate requests |
+| 1 | 1,000 | 0 | 1 | Both requests in one round |
+| 2 | 2,000 | 0 | 1 | Both requests in one round |
+
+This measures the configured assembly gate with a virtual clock. Speech-end to first useful displayed text, completion latency and the trade-off on real paused speech still require annotated playback through the native workspace. The actual 90-minute remote run is blocked because no remote endpoint is available.
+
+## Earlier benchmark runs
+
 The latency and stability gates remain open. The [requirements](../requirements.md) define thresholds at actual speech end and useful visible text.
 
 ## Corpus and first classifier run

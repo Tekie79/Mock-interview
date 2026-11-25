@@ -174,6 +174,7 @@ public actor ElevenLabsTranscriber: StreamingSTT {
     private var nextItem = 0
     private var partial: Partial?
     private var companions: [Companion] = []
+    private var deferredDetails: [Detail] = []
     private var diarizedCommits: [Int: DiarizedCommit] = [:]
     private var lastSegmentIndex = -1
     private var speakerAliases: [Int: Int] = [:]
@@ -305,6 +306,7 @@ public actor ElevenLabsTranscriber: StreamingSTT {
         nextItem = 0
         partial = nil
         companions.removeAll()
+        deferredDetails.removeAll()
         diarizedCommits.removeAll()
         lastSegmentIndex = -1
         speakerAliases.removeAll()
@@ -339,7 +341,7 @@ public actor ElevenLabsTranscriber: StreamingSTT {
 
     private func finishDrainIfReady() -> Bool {
         guard inputState == .draining, voice.isEmpty, commitRequests.isEmpty,
-              partial == nil, companions.isEmpty, diarizedCommits.isEmpty else { return false }
+              partial == nil, companions.isEmpty, deferredDetails.isEmpty, diarizedCommits.isEmpty else { return false }
         inputState = .drained
         output?.finish()
         output = nil
@@ -388,7 +390,7 @@ public actor ElevenLabsTranscriber: StreamingSTT {
         if wire.message_type == "committed_transcript" {
             // Plain and timestamped events describe the same segment, not two finals. Keep the
             // provisional boundary so a newer partial can arrive before the detailed companion.
-            if recentFinalTexts.contains(text) || companions.contains(where: { $0.text == text }) {
+            if recentFinalTexts.contains(where: { matches($0, text) }) || companions.contains(where: { matches($0.text, text) }) {
                 guard matches(partial?.text, text) else { return true }
             }
             guard companions.count < 64 else { throw CaptureFailure.bufferOverrun }
@@ -399,7 +401,7 @@ public actor ElevenLabsTranscriber: StreamingSTT {
         let words = (wire.words ?? []).prefix(1_024).filter { $0.type == nil || $0.type == "word" }
         guard let detail = timingDetail(text, language: wire.language_code, words: words), accepts(detail) else { return true }
 
-        if let match = companions.firstIndex(where: { $0.text == text }) {
+        if let match = companions.firstIndex(where: { matches($0.text, text) }) {
             // A different segment's detailed result can wait behind the earlier plain boundary.
             guard companions[match].detail == nil else { return true }
             companions[match].detail = detail
@@ -415,8 +417,20 @@ public actor ElevenLabsTranscriber: StreamingSTT {
                 if resolved == nil { resolved = takeMatchingPartial(for: next) }
                 try finalize(next, partial: resolved, source: source, epoch: epoch, output: output)
             }
+            if companions.isEmpty {
+                let waiting = deferredDetails.sorted { $0.samples.lowerBound < $1.samples.lowerBound }
+                deferredDetails.removeAll()
+                for next in waiting where accepts(next) {
+                    try finalize(next, partial: takeMatchingPartial(for: next), source: source, epoch: epoch, output: output)
+                }
+            }
         } else if companions.isEmpty {
             try finalize(detail, partial: takeMatchingPartial(for: detail), source: source, epoch: epoch, output: output)
+        } else if !deferredDetails.contains(where: { $0.samples == detail.samples }) {
+            // Some finals arrive without the plain companion. Retain the position until
+            // earlier plain boundaries are resolved instead of dropping the later segment.
+            guard deferredDetails.count < 64 else { throw CaptureFailure.bufferOverrun }
+            deferredDetails.append(detail)
         }
         return !finishDrainIfReady()
     }
@@ -562,6 +576,6 @@ public actor ElevenLabsTranscriber: StreamingSTT {
     private func matches(_ partial: String?, _ final: String) -> Bool {
         guard let partial else { return false }
         let punctuation = CharacterSet.punctuationCharacters.union(.whitespacesAndNewlines)
-        return partial.trimmingCharacters(in: punctuation) == final.trimmingCharacters(in: punctuation)
+        return partial.trimmingCharacters(in: punctuation).caseInsensitiveCompare(final.trimmingCharacters(in: punctuation)) == .orderedSame
     }
 }

@@ -28,6 +28,7 @@ public struct AudioRoutePreference: Codable, Equatable, Sendable {
     public var interviewerMicrophoneUID: String?
     public var candidateMicrophoneUID: String?
     public var candidateEnabled: Bool
+    public var labelOutputSpeakers: Bool?
     private var previousQuestionAudio: QuestionAudioKind?
 
     public init(question: QuestionAudioKind = .application, outputUID: String? = nil,
@@ -55,6 +56,14 @@ public struct AudioRoutePreference: Codable, Equatable, Sendable {
            let interviewerMicrophoneUID, interviewerMicrophoneUID == candidateMicrophoneUID {
             throw CaptureFailure.conflictingMicrophones
         }
+    }
+
+    public var questionUsesOutput: Bool {
+        question == .application || question == .defaultOutput || question == .outputDevice
+    }
+
+    public var requiresSpeakerLabels: Bool {
+        question == .sharedMicrophone || (questionUsesOutput && labelOutputSpeakers == true)
     }
 }
 

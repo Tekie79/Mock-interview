@@ -18,6 +18,28 @@ private actor ClassifierFixture: QuestionClassifier {
 }
 
 final class QuestionDetectionTests: XCTestCase {
+    func testSharedFeedDropsNarrationAndAgreementWithoutSuppressingDirectedRequests() async throws {
+        let classifier = ClassifierFixture()
+        let detector = QuestionDetector(classifier: classifier)
+        let source = CaptureSource(id: "mixed output", role: .interviewer)
+        let epoch = UUID()
+        await detector.connect(source, epoch: epoch)
+        let answers = ["We saw the outage and routed around it.",
+                       "I remember asking myself, “How did this fail?” I checked the service log.",
+                       "You know, I changed the rollout order and checked each stage, which is how we caught the problem.",
+                       "The retry queue just needed a concurrency limit, right?",
+                       "Then you check the status before retrying. Does that make sense?"]
+        let questions = ["Walk me through the failure.", "I want you to tell me how the test worked.",
+                         "My next question is what happened after the rollback.",
+                         "We reviewed the fault, but could you explain your rollback check?"]
+        for (index, text) in (answers + questions).enumerated() {
+            let result = try await detector.receive(.init(source: source, epoch: epoch, itemID: String(index),
+                                                          text: text, state: .final))
+            XCTAssertEqual(result != nil, index >= answers.count, text)
+        }
+        let classified = await classifier.inputs
+        XCTAssertEqual(classified.map(\.turn.text), questions)
+    }
     func testClassifierPayloadKeepsLatestUtteranceSeparateFromPriorQuestions() throws {
         let source = CaptureSource(id: "remote", role: .interviewer)
         let latest = "I would record the result before retrying."

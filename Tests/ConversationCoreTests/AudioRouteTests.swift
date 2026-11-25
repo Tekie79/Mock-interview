@@ -2,6 +2,17 @@ import XCTest
 @testable import ConversationCore
 
 final class AudioRouteTests: XCTestCase {
+    func testMixedOutputRoleAssignmentIsOptInAndSurvivesPreferenceRoundTrip() throws {
+        var route = AudioRoutePreference(question: .application, applicationID: "conference")
+        XCTAssertFalse(route.requiresSpeakerLabels)
+        route.labelOutputSpeakers = true
+        var restored = try JSONDecoder().decode(AudioRoutePreference.self, from: JSONEncoder().encode(route))
+        XCTAssertTrue(restored.requiresSpeakerLabels)
+        restored.question = .interviewerMicrophone
+        XCTAssertFalse(restored.requiresSpeakerLabels)
+        restored.setOtherDeviceInterview(true)
+        XCTAssertTrue(restored.requiresSpeakerLabels)
+    }
     func testOtherDeviceToggleRestoresRouteAndPreservesSelections() throws {
         var route = AudioRoutePreference(question: .outputDevice, outputUID: "output",
                                          interviewerMicrophoneUID: "room")

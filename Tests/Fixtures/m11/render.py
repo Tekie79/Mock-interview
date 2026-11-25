@@ -84,14 +84,17 @@ def normalize(text):
 
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("--render", choices=("development", "held-out", "both"))
+    parser.add_argument("--render", choices=("development", "held-out", "both", "qualification"))
     parser.add_argument("--output", type=Path)
     args = parser.parse_args()
-    sets = {name: read_split(name, count) for name, count in [("development", 200), ("held-out", 100)]}
-    if set(map(lambda row: normalize(row["text"]), sets["development"])) & set(
-        map(lambda row: normalize(row["text"]), sets["held-out"])
-    ):
-        raise ValueError("Development and held-out text overlap")
+    sets = {name: read_split(name, count) for name, count in
+            [("development", 200), ("held-out", 100), ("qualification", 100)]}
+    seen = set()
+    for name, rows in sets.items():
+        normalized = {normalize(row["text"]) for row in rows}
+        if seen & normalized:
+            raise ValueError(f"{name}: text overlaps an earlier split")
+        seen.update(normalized)
     for name, rows in sets.items():
         print(name, len(rows), dict(Counter(row["expected"] for row in rows)), flush=True)
     if args.render:
@@ -99,7 +102,7 @@ def main():
             parser.error("--render requires --output")
         args.output.mkdir(parents=True, exist_ok=True)
         for name, rows in sets.items():
-            if args.render in (name, "both"):
+            if args.render == name or (args.render == "both" and name != "qualification"):
                 render(rows, args.output, name)
 
 

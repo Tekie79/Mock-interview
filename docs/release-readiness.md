@@ -1,6 +1,12 @@
 # Mac release readiness
 
-**Hold release.** M11 has runtime and provider smoke evidence and an open final acceptance gate. The baseline held-out text run missed the precision target. Independently measured displayed-answer latency, the actual 90-minute remote test, representative hardware recovery and signed installation are still required. [M11 acceptance](verification/m11-final-acceptance.md) · [Benchmark](verification/m11-performance-benchmark.md)
+**Hold release.** Local tests and unsigned packaging passed for the M11 correction. Release gates remain open:
+
+- Live shared-feed question precision and recall, duplicate and premature answers, and Scribe v3 Live same-audio strategy comparison. The human Q&A diagnostic still let two ambiguous turns reach classification. [Defect register](verification/m11-defect-register.md) · [Benchmark](verification/m11-performance-benchmark.md)
+- Independently measured speech-end to first useful displayed text and completion, plus the actual 90-minute remote run. No remote endpoint is currently available. [Acceptance report](verification/m11-final-acceptance.md)
+- Intermittent native **Test Audio** reproduction, physical candidate microphone, overlap, isolation, permission and hardware recovery. Both stacks captured 20/20 timed loop starts at the adapter layer. [Audio compatibility](verification/m11-audio-compatibility.md)
+- Remaining live model/effort, alternate provider, grounding and interruption checks. [Provider qualification](verification/m11-provider-qualification.md)
+- Signed installation and clean-host upgrade require separately authorized release work. The unsigned build is complete. [Draft PR #3 exact-commit evidence](https://github.com/Tekie79/Mock-interview/pull/3)
 
 ## Signing and distribution procedure
 

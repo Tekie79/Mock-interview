@@ -56,13 +56,13 @@ private final class RoundFixture {
     let clock = RoundClock()
     let session: InterviewSession
 
-    init() {
+    init(questionWait: Duration = .seconds(2)) {
         let stt = self.stt
         let clock = self.clock
         session = InterviewSession(
             channels: [.init(source: source, audio: audio, makeSTT: { stt })],
             detector: .init(classifier: classifier), generator: generator,
-            questionWait: .seconds(2), questionNow: { clock.now() },
+            questionWait: questionWait, questionNow: { clock.now() },
             questionSleep: { try await clock.sleep(until: $0) }
         )
     }
@@ -83,6 +83,39 @@ private final class RoundFixture {
 }
 
 final class QuestionRoundTests: XCTestCase {
+    func testSilenceWaitMatrixOnASevenHundredFiftyMillisecondPause() async throws {
+        for milliseconds in [0, 500, 1_000, 2_000] {
+            let wait = Duration.milliseconds(milliseconds)
+            let fixture = RoundFixture(questionWait: wait)
+            try await fixture.start()
+            let start = fixture.clock.now()
+            try await fixture.send("Describe the initial design.", id: "opening")
+            if milliseconds > 0 {
+                try await eventually { fixture.clock.hasWaiter(until: start.advanced(by: wait)) }
+            }
+            fixture.clock.advance(.milliseconds(750))
+            let premature = milliseconds < 750
+            if premature { try await eventually { await fixture.generator.submitted.count == 1 } }
+            let countBeforeContinuation = await fixture.generator.submitted.count
+            XCTAssertEqual(countBeforeContinuation, premature ? 1 : 0, "wait \(milliseconds) ms")
+
+            try await fixture.send("How would you confirm it works?", id: "continuation")
+            if milliseconds > 0 {
+                let end = fixture.clock.now()
+                if !premature { fixture.clock.advance(wait - .milliseconds(750)) }
+                try await eventually { fixture.clock.hasWaiter(until: end.advanced(by: wait)) }
+                let remaining = premature ? wait : .milliseconds(750)
+                fixture.clock.advance(remaining - .milliseconds(1))
+                let countBeforeDeadline = await fixture.generator.submitted.count
+                XCTAssertEqual(countBeforeDeadline, countBeforeContinuation)
+                fixture.clock.advance(.milliseconds(1))
+            }
+            try await eventually { await fixture.generator.submitted.count == (premature ? 2 : 1) }
+            let requests = await fixture.generator.submitted
+            XCTAssertEqual(requests.last?.questionParts.count, premature ? 0 : 2)
+            await fixture.session.stop()
+        }
+    }
     func testResumingSpeechRestartsQuietWindowAndJoinsFinalFragments() async throws {
         let fixture = RoundFixture()
         try await fixture.start()

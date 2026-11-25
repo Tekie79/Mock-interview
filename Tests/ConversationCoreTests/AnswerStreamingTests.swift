@@ -202,7 +202,7 @@ extension AnswerStreamingTests {
         let first = try XCTUnwrap(firstRequests.first)
         let payload = try XCTUnwrap(JSONSerialization.jsonObject(with: Data(try AnswerPrompt.input(first).utf8)) as? [String: [String]])
         XCTAssertEqual(payload["original_question"], [original])
-        XCTAssertEqual(payload["approved_facts"], [evidence + " | Source location: Text line 1"])
+        XCTAssertEqual(payload["approved_facts"], [evidence + " | Source: Resume.md | Source location: Text line 1"])
         XCTAssertTrue(payload["interview_context"]?.contains("Job requirements: \(requirements.text)") == true)
         await generator.write("I built incremental dbt models for subscription events.", to: 0, finish: true)
         try await eventually { await session.current().answers.last?.state == .complete }

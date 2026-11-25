@@ -421,7 +421,7 @@ final class WorkspaceModel: ObservableObject {
                 switch service {
                 case .transcription:
                     let factory = try SessionProviders.transcriptionFactory(defaults: defaults,
-                                                                            diarize: route.question == .sharedMicrophone)
+                                                                            diarize: route.requiresSpeakerLabels)
                     try await factory().testConnection()
                     providerTest = "Transcription provider acknowledged the connection."
                 case .classification:
@@ -495,7 +495,7 @@ final class WorkspaceModel: ObservableObject {
             }
             do {
                 let options = UserDefaults.standard
-                let diarize = route.question == .sharedMicrophone
+                let diarize = route.requiresSpeakerLabels
                 let providers = try await SessionProviders(defaults: options, diarize: diarize)
                 let embedding = try? SessionProviders.embeddings(defaults: options)
                 let format = AnswerFormat(rawValue: options.string(forKey: "answerFormat") ?? "") ?? .brief
@@ -767,7 +767,7 @@ final class WorkspaceModel: ObservableObject {
                 let options = UserDefaults.standard
                 let sensitivity = SessionProviders.audioActivityThreshold(defaults: options)
                 let speech = try SessionProviders.transcriptionFactory(defaults: options,
-                    diarize: route.question == .sharedMicrophone, activityThreshold: sensitivity)
+                    diarize: route.requiresSpeakerLabels, activityThreshold: sensitivity)
                 let channels = try makeChannels(speech, sensitivity: sensitivity)
                 await session.replaceChannels(channels)
             } catch {
@@ -783,7 +783,7 @@ final class WorkspaceModel: ObservableObject {
             return value
         }
         let question = CaptureSource(id: route.question == .replay ? "Replay" : "Question",
-                                     role: route.question == .sharedMicrophone ? .unknown : .interviewer)
+                                     role: route.requiresSpeakerLabels ? .unknown : .interviewer)
         let audio: any AudioSource
         switch route.question {
         case .defaultOutput: audio = MacAudioSource(source: question, input: .output(uid: nil))
@@ -939,6 +939,16 @@ private struct WorkspaceView: View {
                 get: { model.route.question == .sharedMicrophone },
                 set: { model.route.setOtherDeviceInterview($0) }
             ))
+            if model.route.questionUsesOutput {
+                Toggle("Assign speakers in question audio", isOn: Binding(
+                    get: { model.route.labelOutputSpeakers == true },
+                    set: { model.route.labelOutputSpeakers = $0 }
+                ))
+                if model.route.requiresSpeakerLabels && !supportsSpeakerLabels {
+                    Text("Speaker assignment requires ElevenLabs Scribe v3 Live or a supported Deepgram Nova model.")
+                        .font(.caption).foregroundStyle(.secondary)
+                }
+            }
             HStack {
                 switch model.route.question {
                 case .defaultOutput:
@@ -1019,7 +1029,7 @@ private struct WorkspaceView: View {
                         Text(source + " · " + (snapshot.sources[source]?.rawValue.capitalized ?? "Idle"))
                     }
                 }
-                if model.route.question == .sharedMicrophone, model.state.isRunning, supportsSpeakerLabels {
+                if model.route.requiresSpeakerLabels, model.state.isRunning, supportsSpeakerLabels {
                     Text(snapshot.speakers.contains(where: { $0.role == .interviewer })
                          ? "Confirmed interviewer questions can trigger answers."
                          : "Automatic answers wait until you label an interviewer. Match voices to the transcript below.")
@@ -1523,9 +1533,10 @@ private struct ProviderSettingsView: View {
                 ForEach(AnswerFormat.allCases) { Text($0.rawValue).tag($0) }
             }
             TextField("Response language", text: $answerLanguage)
-            TextField("Word limit", value: $answerWordLimit, format: .number)
+            TextField("Requested word limit", value: $answerWordLimit, format: .number)
                 .onChange(of: answerWordLimit) { _, limit in answerWordLimit = min(400, max(0, limit)) }
-            Text("Enter 0 to use the format default.").font(.caption).foregroundStyle(.secondary)
+            Text("The model may exceed this length. Enter 0 to use the format default.")
+                .font(.caption).foregroundStyle(.secondary)
             TextField("Answer instructions", text: $instructions, axis: .vertical)
             Stepper("Context turns: \(answerTurns)", value: $answerTurns, in: 0...32)
             Stepper("Context budget: \(answerBudget)", value: $answerBudget, in: 500...8_000, step: 250)
@@ -1858,6 +1869,7 @@ private struct ProfileEditor: View {
                                 .lineLimit(fact.category == ExperienceFact.projectStoryCategory ? 2 : nil)
                             Spacer()
                             if fact.status == .rejected { Text("Excluded").foregroundStyle(.secondary) }
+                            if fact.status == .pending { Text("Enable to use").foregroundStyle(.secondary) }
                             Button("Edit") { selectedFact = fact }.buttonStyle(.borderless)
                         }
                     }

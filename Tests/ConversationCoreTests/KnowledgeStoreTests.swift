@@ -1,6 +1,10 @@
 import Foundation
 import XCTest
 @testable import ConversationCore
+#if os(macOS)
+import CoreGraphics
+import CoreText
+#endif
 
 final class KnowledgeStoreTests: XCTestCase {
     func testProfileTrainingRoundTripsAndBroadExamplesRespectIsolationAndExclusion() async throws {
@@ -118,7 +122,7 @@ final class KnowledgeStoreTests: XCTestCase {
         XCTAssertTrue(deleted.isEmpty)
     }
 
-    func testLegacyUpgradeEnablesExistingProfileFactsAndPreservesExclusions() async throws {
+    func testLegacyUpgradePreservesPendingFactsAndExplicitExclusions() async throws {
         let folder = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString, isDirectory: true)
         try FileManager.default.createDirectory(at: folder, withIntermediateDirectories: true)
         defer { try? FileManager.default.removeItem(at: folder) }
@@ -138,14 +142,68 @@ final class KnowledgeStoreTests: XCTestCase {
 
         let updated = try KnowledgeStore(url: url)
         let facts = try await updated.facts(profile: profile.id)
-        XCTAssertEqual(facts.map(\.status), [.confirmed, .confirmed, .rejected])
+        XCTAssertEqual(facts.map(\.status), [.pending, .pending, .rejected])
         XCTAssertEqual(facts.first?.documentID, resume.id)
         XCTAssertEqual(facts.first?.locator, pendingImport.locator)
         let usable = try await updated.retrieve("instrumentation replay payments", profile: profile.id)
-        XCTAssertEqual(Set(usable.map(\.id)), Set([pendingImport.id, manual.id]))
+        XCTAssertTrue(usable.isEmpty)
 
         let reopened = try KnowledgeStore(url: url)
         let stable = try await reopened.facts(profile: profile.id)
         XCTAssertEqual(stable, facts)
+        pendingImport.status = .confirmed
+        try await reopened.save(pendingImport, profile: profile.id)
+        let enabled = try await reopened.retrieve("instrumentation replay payments", profile: profile.id)
+        XCTAssertEqual(enabled.map(\.id), [pendingImport.id])
     }
+
+    func testWrappedClaimsKeepSourceSpanAndIncompleteClaimsStayOut() async throws {
+        let store = try KnowledgeStore()
+        let profile = InterviewProfile(name: "Fixture")
+        try await store.save(profile)
+        let text = """
+            - Migrated telemetry records from
+              local CSV archives into the reporting database.
+            - Coordinated and
+            - Built a schema validator.
+            including an unsupported fragment.
+            """
+        let document = ProfileDocument(kind: .resume, title: "Fixture.md", text: text)
+        try await store.add(document, to: profile.id)
+        let facts = try await store.facts(profile: profile.id)
+        XCTAssertEqual(facts.map(\.claim), ["Migrated telemetry records from local CSV archives into the reporting database.",
+                                          "Built a schema validator."])
+        XCTAssertEqual(facts.map(\.locator), ["Text lines 1–2", "Text line 4"])
+        XCTAssertTrue(facts.allSatisfy { $0.sourceTitle == "Fixture.md" && $0.status == .confirmed })
+        let stored = try await store.documents(profile: profile.id)
+        XCTAssertEqual(stored.first?.text, text)
+    }
+
+    #if os(macOS)
+    func testPDFTwoColumnsAreExtractedSeparatelyWithPageProvenance() async throws {
+        let url = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString + ".pdf")
+        defer { try? FileManager.default.removeItem(at: url) }
+        var rect = CGRect(x: 0, y: 0, width: 600, height: 800)
+        let pdf = try XCTUnwrap(CGContext(url as CFURL, mediaBox: &rect, nil))
+        pdf.beginPDFPage(nil)
+        let font = CTFontCreateWithName("Helvetica" as CFString, 12, nil)
+        for (x, y, text) in [(30, 710, "Migrated audit events from"), (340, 710, "Built a data quality monitor."),
+                             (30, 692, "a CSV archive into PostgreSQL."), (340, 692, "Reviewed the daily incident log.")] {
+            pdf.textPosition = CGPoint(x: x, y: y)
+            let line = NSAttributedString(string: text, attributes: [NSAttributedString.Key(kCTFontAttributeName as String): font])
+            CTLineDraw(CTLineCreateWithAttributedString(line), pdf)
+        }
+        pdf.endPDFPage()
+        pdf.closePDF()
+        let store = try KnowledgeStore()
+        let profile = InterviewProfile(name: "Fixture")
+        try await store.save(profile)
+        try await store.add(ProfileDocument.read(url, kind: .resume), to: profile.id)
+        let facts = try await store.facts(profile: profile.id)
+        XCTAssertEqual(facts.map(\.claim), ["Migrated audit events from a CSV archive into PostgreSQL.",
+                                          "Built a data quality monitor.", "Reviewed the daily incident log."])
+        XCTAssertTrue(facts.first?.locator.hasPrefix("Page 1, column 1") == true)
+        XCTAssertTrue(facts.last?.locator.hasPrefix("Page 1, column 2") == true)
+    }
+    #endif
 }

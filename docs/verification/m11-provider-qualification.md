@@ -1,6 +1,6 @@
 # M11 provider qualification
 
-All provider data in M11 is synthetic. Keys are entered by the owner in the application's separate secure fields under **Settings → Accounts and billing**. The presence of a Keychain item is setup evidence. Provider availability and accepted model IDs require successful tests against the selected account.
+Live provider smoke inputs in this report are synthetic. Keys are entered by the owner in the application's separate secure fields under **Settings → Accounts and billing**. The presence of a Keychain item is setup evidence. Provider availability and accepted model IDs require successful tests against the selected account. The table and PCM results below predate the latest correction.
 
 | Service | Exact model or configuration | Status | Observed scope |
 |---|---|---|---|
@@ -29,6 +29,19 @@ The local harness sent synthetic PCM through the production recognition channel 
 Provider wall time here includes stream setup and real-paced replay. Apple's classic and SpeechAnalyzer paths used the same input in a separately bundled native runtime probe. The probe exercised both engines with an installed asset and strict mode. Permission denial/re-grant and sustained rollover need more tests.
 
 OpenAI lists January 14, 2027 as the shutdown date for `gpt-4.1-mini-2025-04-14`, the model snapshot relevant to the existing `gpt-4.1-mini` defaults. Confirm account availability in Settings. Qualify the documented replacement independently before relying on it for release. [OpenAI deprecations](https://developers.openai.com/api/docs/deprecations)
+
+## Qualification after 41c243a
+
+| Check | Status | Evidence and remaining work |
+|---|---|---|
+| Scribe v3 Live final association | Offline pass | Regression tests cover plain/timed pairs with punctuation drift and later timed finals that precede an earlier companion. Timed coverage still has bounded tolerance and unresolved speech remains incomplete. |
+| Scribe v3 Live manual, VAD and semantic turn | Blocked | The earlier single-final sentinel smoke exercised all three modes. The multi-turn run varied transcription provider as well as strategy. Compare the three strategies on identical independently annotated PCM and score segment boundaries, downstream classification, premature cards and repeat handling. Manual commits follow the client endpoint, VAD follows audio inactivity, and semantic turn uses provider turn prediction with silence fallback. Speaker identity requires separate diarization evidence. [ElevenLabs strategy contract](https://elevenlabs.io/docs/eleven-api/guides/how-to/speech-to-text/realtime/transcripts-and-commit-strategies) |
+| OpenAI model and effort matrix | Blocked | The configured GPT-6 Luna, GPT-6.2 Sol and GPT-5.4 mini choices have request and capability fixtures. Exercise each supported effort for classification and streaming answers on the actual account, and measure usable-output latency before promoting a default. OpenAI's published replacement for the dated GPT-4.1 mini snapshot is GPT-6 Luna. The current undated defaults were retained. [Model comparison](https://developers.openai.com/api/docs/models/compare) · [Deprecations](https://developers.openai.com/api/docs/deprecations) |
+| Live profile grounding and length | Blocked | Test approved, excluded, missing and conflicting evidence in streamed answers. The requested word limit is advisory and the UI says output can exceed it. Actual word counts were not collected in this run. |
+| Deepgram and Anthropic | Blocked | The noninteractive development probe returned item-not-found (`-25300`) for these providers. Existing mocked coverage passed. |
+| OpenAI and ElevenLabs credentials | Blocked for standalone live probe | Noninteractive local access returned authentication-failed (`-25293`) for the existing entries. The probe worked without prompting after interaction was disabled for the helper process. No credential content was captured. |
+
+The correction sent zero billable provider requests. Earlier historical spend remains subject to provider statements and the owner's approved US$10 total. The 90-minute run did not start because no remote endpoint was available.
 
 ## Spending
 

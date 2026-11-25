@@ -306,6 +306,26 @@ final class ElevenLabsTests: XCTestCase {
         await provider.close()
     }
 
+    func testSemanticTurnRetainsATimestampOnlyFinalWhileWaitingForAnEarlierCompanion() async throws {
+        let (provider, socket, stream) = try await connect()
+        var cursor = stream.makeAsyncIterator()
+        try await provider.append(audio(at: 0))
+        try await provider.append(audio(at: 2_400))
+        try await provider.finishInput()
+        await socket.enqueue(#"{"message_type":"committed_transcript","text":"First"}"#)
+        await socket.enqueue(detailed("Second?", 0.11, 0.19))
+        await socket.enqueue(detailed("First.", 0.01, 0.09))
+        await socket.fail()
+        let first = try await cursor.next()
+        let second = try await cursor.next()
+        let end = try await cursor.next()
+        XCTAssertEqual(first?.text, "First.")
+        XCTAssertEqual(second?.text, "Second?")
+        XCTAssertEqual(second?.previousItemID, first?.itemID)
+        XCTAssertNil(end)
+        await provider.close()
+    }
+
     func testMultipleManualRequestsRemainIndependentAndAllowIntentionalRepeat() async throws {
         let (provider, socket, stream) = try await connect(strategy: .manual)
         XCTAssertTrue(provider.behavior.requiresStreamEnd)

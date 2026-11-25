@@ -46,7 +46,7 @@ Local macOS build and 124 XCTest cases passed. Pinned Linux Swift build and 114 
 
 The owner requested removing the Pending and Review workflow. Attaching a résumé or project notes as experience, or entering an experience fact directly, makes it available for answers. Users can edit or exclude individual facts. Job descriptions remain target-role context.
 
-Migrate existing pending items once, retaining their source and any explicit exclusions. Preserve the confirmed-only retrieval and embedding indexes so excluded content stays out of answers. Verify new attachments, the legacy upgrade and the native profile controls before updating the review PR.
+The previous plan migrated existing pending items once. The owner later directed that pending facts stay excluded until explicitly enabled. The M11 acceptance correction supersedes that migration policy.
 
 `./scripts/build.sh` and `./scripts/test.sh` passed on Linux Swift 6.2.3 (115 XCTest cases) and on the local Apple Silicon Mac (125 XCTest cases). `./scripts/package-macos.sh` built the unsigned application with one App Intents metadata warning. A native walkthrough backed by an in-memory synthetic profile verified the fact list, **Edit** and saving an exclusion using **Use in answers**. No personal profile, Keychain entry or live provider was used in this check.
 
@@ -82,3 +82,14 @@ Local builds passed with 123 Linux Swift 6.2.3 and 133 Apple Silicon macOS XCTes
 Show Start in the idle Compact window and Resume when paused. Share the session buttons and availability checks with the main workspace. Surface startup failures in Compact so they can be diagnosed without expanding. Verify the controls in a native preview with synthetic state transitions, then run the build, tests and unsigned packaging.
 
 The native preview verified Start, Pause, Resume and Stop at the minimum Compact width, disabled Start during an audio test, and a visible missing-source error. Local macOS passed 133 tests and unsigned packaging. The first local Linux run timed out in the existing transcription watchdog test. The full retry passed all 123 tests. The preview used a simulated session and did not capture audio.
+
+## M11 acceptance defect correction and qualification
+
+Baseline is `41c243a1b7a72ea69b71940acd4c7edd615e732b` on `feature/m11-final-acceptance`. Keep PR #3 in draft and retain the current release and ChatGPT eligibility restrictions.
+
+- Freeze a fresh held-out corpus before evaluating the changes. Preserve separate evidence for language gating, audio boundaries, rendered latency, and remote endurance. Record actual outcomes and the device, credentials or peer needed for unmet tests.
+- Address shared-feed false positives in the question detector and reuse existing speaker assignment on mixed process feeds. Audit Scribe v3 Live segment association against its documented commit modes. Check route notifications and retry behavior against repeated physical changes when available.
+- Keep new evidence immediately usable. Audit document boundaries and exclusions. Resolve legacy pending semantics using the owner's policy and retain prior user edits when provenance cannot be established. Label the answer length control according to what generation guarantees.
+- Run unit and integration regressions, unsigned native packaging, and the full hosted Linux/macOS 15/macOS 26 matrix. Report measured and unexecuted acceptance cases separately, including remaining provider, hardware and latency gates.
+
+The owner confirmed existing pending facts must stay excluded until enabled and confirmed no remote endpoint is available. The new corpus was frozen before the corrections. Local Xcode build, 139 tests and unsigned packaging passed. A recorded human Q&A diagnostic and baseline/candidate physical output probes ran at the adapter layer. The provider strategy matrix, live model and grounding trials, physical microphone/overlap and true remote endurance still need their required environments. Exact hosted checks and the final commit are recorded on [draft PR #3](https://github.com/Tekie79/Mock-interview/pull/3).

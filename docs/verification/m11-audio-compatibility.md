@@ -19,3 +19,14 @@ Host is the Apple M5 Pro MacBook Pro (Mac17,8), macOS 26.3.2 build 25D2150. The 
 | Isolation, leakage and overlapping speakers | Not tested | Separate deterministic roles, late-correction and overlap fixtures passed. Acoustic isolation remains unmeasured. |
 
 The initial inventory showed built-in speakers with two channels and the built-in microphone with one channel at 48 kHz. A Continuity microphone advertised one input channel. Connection or enumeration is insufficient to claim that a device can be captured. See the [audio-routing contract](../audio-routing.md) and [defect register](m11-defect-register.md).
+
+## M11-02 correction retest
+
+A SwiftPM helper linked against the production Core Audio adapter on the physical Mac. With a public recorded Q&A excerpt playing locally, it started a fresh tap, measured the peak per-frame RMS, stopped it and immediately opened the next selection. Each set alternated 10 macOS default and 10 explicit MacBook Pro Speakers selections. The built-in speakers were the only output in this inventory. Each attempt used a two-second deadline.
+
+| Adapter | Attempts above 0.001 RMS | Peak range | Route errors |
+|---|---:|---|---:|
+| Reviewed baseline `41c243a` | 20/20 | 0.0014418002–0.012459481 | 0 |
+| Correction | 20/20 | 0.0014396926–0.011738739 | 0 |
+
+Stream and sample-rate callbacks can report unchanged values. The correction checks actual stream IDs and rate before triggering recovery and retains device and alive-state validation. Both revisions passed the adapter exercise. The original failure remains unreproduced under this protocol, and native **Test Audio** retest is pending after the UI automation connection timed out. This setup did not exercise an actual transition between two physical outputs or microphone capture. The helper reported undetermined microphone permission. No physical cross-channel leakage, overlapping voices or acoustic cancellation measurement was made. [Apple Core Audio tap sample](https://developer.apple.com/documentation/coreaudio/capturing-system-audio-with-core-audio-taps)

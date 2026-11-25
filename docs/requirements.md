@@ -367,7 +367,7 @@ Store atomic evidence with source document, location, inclusion status, category
 }
 ```
 
-The example is illustrative; do not hardcode it or any real candidate data into production fixtures.
+The example is illustrative; do not hardcode it or any real candidate data into production fixtures. An upgrade preserves stored pending and excluded states. A legacy pending record needs the owner's explicit inclusion before retrieval can use it.
 
 ### 8.3 Retrieval and context
 
@@ -385,6 +385,8 @@ The example is illustrative; do not hardcode it or any real candidate data into 
 OpenAI Responses API is the P0 text generation provider, streamed using SSE. Use a configurable low-latency text model verified at runtime, with low/minimal supported reasoning effort where applicable. Do not hardwire a soon-obsolete model into domain logic. Use a separate classifier request with schema-constrained output and a plain-text answer stream for fast rendering; optional post-stream evidence validation and structured metadata are separate from first visible text. Anthropic streaming and Deepgram STT are independent P1 adapters. P2 local STT and LLM must not be advertised as available until benchmarked.
 
 Build prompt from immutable base policy, validated profile settings, accepted question, bounded context and retrieved evidence. Custom user instructions can change tone/format, not override candidate accuracy, role filtering, or application boundaries. No tool execution, filesystem access or arbitrary web calls from answer prompts.
+
+The optional requested word limit is sent with the selected format. The model can exceed the request. A setting of zero uses the format default.
 
 Suggested base system instruction:
 

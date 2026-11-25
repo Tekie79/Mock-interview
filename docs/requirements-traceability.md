@@ -60,8 +60,9 @@ Statuses are **Not started**, **In progress**, **Implemented — qualification p
 
 | Requirements or gate | Evidence | Remaining acceptance work |
 |---|---|---|
-| FR-01–03, FR-14, FR-21 | [Native audio and route results](verification/m11-audio-compatibility.md), existing route and role regressions | Independent physical microphones, device transitions, denial/regrant, sleep/wake and acoustic isolation |
-| FR-04–09, FR-13, FR-20, NFR-12 | [Held-out split, classifier and replay timing](verification/m11-performance-benchmark.md), [AT-01–18 matrix](verification/m11-final-acceptance.md) | Native semantic accuracy, independent visible latency, end-to-end replay drift and sustained performance |
+| FR-01–03, FR-14, FR-21 | [20 physical capture starts per revision](verification/m11-audio-compatibility.md), shared-output speaker role gate and Scribe final-pair regressions | Native Test Audio defect reproduction, independent physical microphones, hardware transitions, sleep/wake and acoustic isolation |
+| FR-04–07, FR-09, FR-13, NFR-12 | [Fresh holdout, recorded nine-window classifier-boundary diagnostic and four quiet-window timings](verification/m11-performance-benchmark.md), [AT-01–18 evidence](verification/m11-final-acceptance.md) | Live native quality, duplicates and premature responses, independent displayed latency and sustained performance |
+| FR-08, FR-20 | Wrapped Markdown and pending-upgrade fixtures, native PDFKit simple two-column fixture and source locations | Live conflict/missing evidence, complex PDF layout and retrieval quality |
 | FR-10–12, FR-15–19 | [Native interaction, retention and provider results](verification/m11-final-acceptance.md) | Complete accessible session controls, retention, export, and unqualified provider configurations |
 | M10.1-8, M10.2-4 | [Provider eligibility and tested account scopes](verification/m11-provider-qualification.md) | Official ChatGPT distribution eligibility and subsequent live browser/account tests |
 | Native packaging | [Local and hosted checks](verification/m11-final-acceptance.md) | Signed install and upgrade on representative hosts |
