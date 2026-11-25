@@ -3,6 +3,56 @@ import XCTest
 @testable import ConversationCore
 
 final class KnowledgeStoreTests: XCTestCase {
+    func testMarkdownAttachesByTypeAndDraftsCleanFactsWithSourceLines() async throws {
+        let folder = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString, isDirectory: true)
+        try FileManager.default.createDirectory(at: folder, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: folder) }
+        let resumeURL = folder.appendingPathComponent("Resume.MD")
+        let jobURL = folder.appendingPathComponent("Role.markdown")
+        let notesURL = folder.appendingPathComponent("Project.md")
+        let resumeText = "# Practice résumé\n\n- Designed a bounded retry queue.\n~~~text\nThis is a code block.\n~~~"
+        let jobText = "## Target role\n* Own the retry platform."
+        let notesText = "## Project notes\n* Documented the failure scenarios."
+        try resumeText.write(to: resumeURL, atomically: true, encoding: .utf8)
+        try jobText.write(to: jobURL, atomically: true, encoding: .utf8)
+        try notesText.write(to: notesURL, atomically: true, encoding: .utf8)
+        let attachments = try [ProfileDocument.read(resumeURL, kind: .resume), .read(jobURL, kind: .jobDescription),
+                               .read(notesURL, kind: .project)]
+
+        let store = try KnowledgeStore()
+        let profile = InterviewProfile(name: "Markdown fixture")
+        try await store.save(profile)
+        for document in attachments { try await store.add(document, to: profile.id) }
+        let saved = try await store.documents(profile: profile.id)
+        XCTAssertEqual(saved.map(\.kind), [.resume, .jobDescription, .project])
+        XCTAssertEqual(saved.map(\.title), ["Resume.MD", "Role.markdown", "Project.md"])
+        XCTAssertEqual(saved.map(\.text), [resumeText, jobText, notesText])
+
+        let facts = try await store.facts(profile: profile.id)
+        XCTAssertEqual(facts.map(\.claim), ["Designed a bounded retry queue.", "Documented the failure scenarios."])
+        XCTAssertEqual(facts.map(\.documentID), [saved[0].id, saved[2].id])
+        XCTAssertEqual(facts.map(\.locator), ["Text line 3", "Text line 2"])
+        XCTAssertTrue(facts.allSatisfy { $0.status == .pending })
+        let unapproved = try await store.retrieve("bounded retry queue", profile: profile.id)
+        XCTAssertTrue(unapproved.isEmpty)
+    }
+
+    func testMarkdownReaderRejectsEmptyOrUnsupportedFiles() throws {
+        let folder = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString, isDirectory: true)
+        try FileManager.default.createDirectory(at: folder, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: folder) }
+        let empty = folder.appendingPathComponent("Empty.md")
+        let unsupported = folder.appendingPathComponent("Image.png")
+        try " \n\t".write(to: empty, atomically: true, encoding: .utf8)
+        try Data([1, 2, 3]).write(to: unsupported)
+        XCTAssertThrowsError(try ProfileDocument.read(empty, kind: .resume)) {
+            XCTAssertEqual($0 as? StorageFailure, .emptyDocument)
+        }
+        XCTAssertThrowsError(try ProfileDocument.read(unsupported, kind: .resume)) {
+            XCTAssertEqual($0 as? StorageFailure, .unsupportedFormat)
+        }
+    }
+
     func testRetrievalUsesOnlyConfirmedFactsInSelectedProfile() async throws {
         let store = try KnowledgeStore()
         let mine = InterviewProfile(name: "Primary")

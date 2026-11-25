@@ -27,7 +27,7 @@ public enum AnswerFormat: String, Codable, CaseIterable, Identifiable, Sendable 
         case .bullets:
             ("Present the response as Markdown bullets, one speakable thought per bullet.", "Use three to five bullets.")
         case .star:
-            ("Use the Markdown headings Situation, Task, Action, and Result. If experience is missing, clearly label the example as hypothetical.",
+            ("Use the Markdown headings Situation, Task, Action, and Result. For a proposed scenario, describe the actions and expected result conditionally.",
              "Keep each section to one or two sentences.")
         case .technical:
             ("Use Markdown sections for Approach and Validation, plus Trade-offs when relevant. Put code or pseudocode in a fenced block and never claim it was tested.",

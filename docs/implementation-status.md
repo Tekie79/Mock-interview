@@ -137,3 +137,5 @@ See `docs/verification/baseline.md` for the initial build/test run. No native Ma
 - **Interview on another device** exposes the shared-microphone workflow with confirmed speaker roles. The ElevenLabs Scribe v3 Live path pairs indexed speech commits and speaker labels. The Deepgram Nova path remains available. Physical room tests and live shared-mic account qualification remain open.
 
 - **Wait for silence** collects finalized pieces into question rounds, with live adjustment from 0 to 6 seconds and a two-second default. Resumed speech extends waiting. Each classified round generates one answer containing its approved requests in order. Live end-to-end latency and complex room pauses remain to be measured.
+
+- Scenarios lead with a practical conditional response. Approved facts remain the basis for claims about past experience. Profiles provide explicit file types, batch attachment by purpose, a separate paste control, and source-linked Markdown review drafts.

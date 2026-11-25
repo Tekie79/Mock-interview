@@ -67,6 +67,37 @@ public struct ProfileDocument: Codable, Identifiable, Equatable, Sendable {
         }
         return Self(kind: kind, title: url.lastPathComponent, text: text)
     }
+
+    fileprivate func pendingExperienceFacts() -> [ExperienceFact] {
+        guard kind != .jobDescription else { return [] }
+        let markdown = ["md", "markdown"].contains((title as NSString).pathExtension.lowercased())
+        var fence: (marker: Character, count: Int)?
+        var facts: [ExperienceFact] = []
+        for (index, rawLine) in text.split(omittingEmptySubsequences: false, whereSeparator: \.isNewline).enumerated() {
+            var line = rawLine.trimmingCharacters(in: .whitespacesAndNewlines)
+            if markdown {
+                if let first = line.first, first == "`" || first == "~",
+                   case let count = line.prefix(while: { $0 == first }).count, count >= 3 {
+                    if let active = fence {
+                        if first == active.marker, count >= active.count, line.count == count { fence = nil }
+                    } else { fence = (first, count) }
+                    continue
+                }
+                guard fence == nil else { continue }
+                let hashes = line.prefix(while: { $0 == "#" })
+                if (1...6).contains(hashes.count), line.dropFirst(hashes.count).first?.isWhitespace == true {
+                    continue
+                }
+                if ["- ", "* ", "+ "].contains(where: line.hasPrefix) {
+                    line = String(line.dropFirst(2)).trimmingCharacters(in: .whitespaces)
+                }
+            }
+            guard line.count >= 12 else { continue }
+            facts.append(.init(documentID: id, locator: "Text line \(index + 1)", claim: String(line.prefix(1_200))))
+            if facts.count == 100 { break }
+        }
+        return facts
+    }
 }
 
 public struct ExperienceFact: Codable, Identifiable, Equatable, Sendable {
@@ -192,16 +223,7 @@ public actor KnowledgeStore {
         try database.transaction {
             try database.write("INSERT INTO documents VALUES (?, ?, ?)",
                                [document.id.uuidString, profile.uuidString, try SQLiteDatabase.json(document)])
-            if document.kind != .jobDescription {
-                let lines = document.text.split(whereSeparator: \.isNewline).enumerated()
-                for (index, line) in lines.prefix(100) {
-                    let claim = line.trimmingCharacters(in: .whitespacesAndNewlines)
-                    guard claim.count >= 12 else { continue }
-                    let fact = ExperienceFact(documentID: document.id, locator: "Text line \(index + 1)",
-                                              claim: String(claim.prefix(1_200)))
-                    try writeFact(fact, profile: profile)
-                }
-            }
+            for fact in document.pendingExperienceFacts() { try writeFact(fact, profile: profile) }
         }
     }
 

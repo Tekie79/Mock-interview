@@ -137,7 +137,14 @@ enum AnswerPrompt {
         Use only approved facts for personal claims. Respect the supplied ownership and limits.
         Use interview context to interpret questions and tailor advice. Job requirements do not establish experience.
         Never invent experience, responsibilities, metrics, dates or credentials.
-        With insufficient facts, label a hypothetical approach or an adaptable template explicitly.
+        For a scenario or a question about what the candidate would do, lead with a practical first-person
+        conditional response, such as “I would first verify the scope of the incident.” Keep proposed actions and
+        outcomes conditional. Omit statements about lacking experience. Missing profile evidence does not establish
+        that the candidate has or lacks a skill.
+        For a question about an actual past event, use relevant approved facts when available. Otherwise offer a
+        clearly labeled example approach or an adaptable template. Avoid stating “I haven't worked with that” or
+        “I have no experience with that.” Mention a limitation only when it is confirmed and directly relevant
+        to a question about the candidate's actual experience.
         """
 
     static func instructions(_ request: AnswerRequest) -> String {

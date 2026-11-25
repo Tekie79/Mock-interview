@@ -1646,6 +1646,35 @@ private struct ProviderKeyField: View {
 }
 
 private struct ProfileEditor: View {
+    private enum Attachment {
+        case file(URL)
+        case pasted(String)
+
+        var name: String {
+            switch self {
+            case .file(let url): url.lastPathComponent
+            case .pasted: "Pasted text"
+            }
+        }
+
+        func read(kind: ProfileDocument.Kind) async throws -> ProfileDocument {
+            switch self {
+            case .pasted(let text):
+                return ProfileDocument(kind: kind, title: "Pasted " + kind.rawValue, text: text)
+            case .file(let url):
+                return try await Task.detached(priority: .utility) {
+                    let scoped = url.startAccessingSecurityScopedResource()
+                    defer { if scoped { url.stopAccessingSecurityScopedResource() } }
+                    return try ProfileDocument.read(url, kind: kind)
+                }.value
+            }
+        }
+    }
+
+    private static let attachmentTypes: [UTType] = [.plainText, .pdf] + ["md", "markdown", "docx"].compactMap {
+        UTType(filenameExtension: $0)
+    }
+
     @ObservedObject var model: WorkspaceModel
     let store: KnowledgeStore
     @Environment(\.dismiss) private var dismiss
@@ -1656,18 +1685,22 @@ private struct ProfileEditor: View {
     @State private var pastedText = ""
     @State private var kind: ProfileDocument.Kind = .resume
     @State private var picker = false
+    @State private var attaching = false
+    @State private var showingPaste = false
     @State private var message: String?
     @State private var selectedFact: ExperienceFact?
     @State private var deleteConfirmation = false
     @State private var indexing = false
     @AppStorage("semanticRetrieval") private var semanticRetrieval = false
 
+    private var hasProfileName: Bool { !profile.name.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty }
+
     var body: some View {
         VStack(alignment: .leading) {
             HStack {
                 Text("Interview Profiles").font(.title2)
                 Spacer()
-                Button("Done") { dismiss() }.keyboardShortcut(.cancelAction)
+                Button("Done") { dismiss() }.keyboardShortcut(.cancelAction).disabled(attaching)
             }
             HStack {
                 Menu("Open Profile") {
@@ -1678,6 +1711,7 @@ private struct ProfileEditor: View {
                 Button("Delete Profile", role: .destructive) { deleteConfirmation = true }
                     .disabled(!model.profiles.contains(where: { $0.id == profile.id }))
             }
+            .disabled(attaching)
             Form {
                 TextField("Profile name", text: $profile.name)
                 TextField("Target role", text: $profile.role)
@@ -1686,29 +1720,14 @@ private struct ProfileEditor: View {
                 TextField("Answer language", text: $profile.answerLanguage)
                 TextField("Response instructions", text: $profile.instructions)
             }
+            .disabled(attaching)
             Divider()
-            HStack {
-                Picker("Document type", selection: $kind) {
-                    ForEach(ProfileDocument.Kind.allCases) { Text($0.rawValue).tag($0) }
-                }
-                Button("Import Document") { picker = true }
-                TextField("Paste document text", text: $pastedText)
-                Button("Add Text") {
-                    let document = ProfileDocument(kind: kind, title: "Pasted " + kind.rawValue, text: pastedText)
-                    add(document)
-                    pastedText = ""
-                }.disabled(pastedText.isEmpty)
-            }
+            attachmentControls
             List {
-                Section("Imported documents") {
+                Section("Attachments") {
+                    if documents.isEmpty { Text("No attachments").foregroundStyle(.secondary) }
                     ForEach(documents) { document in
-                        HStack {
-                            Text(document.title)
-                            Spacer()
-                            Button("Remove", role: .destructive) {
-                                Task { await change { try await store.deleteDocument(document.id, profile: profile.id) } }
-                            }.buttonStyle(.borderless)
-                        }
+                        attachmentRow(document)
                     }
                 }
                 Section("Experience facts") {
@@ -1722,14 +1741,16 @@ private struct ProfileEditor: View {
                     }
                 }
             }
+            .disabled(attaching)
             HStack {
                 TextField("Add an experience fact", text: $claim)
                 Button("Add for Review") {
                     let fact = ExperienceFact(claim: claim)
                     claim = ""
-                    Task { await change { try await store.save(fact, profile: profile.id) } }
+                    Task { await change { id in try await store.save(fact, profile: id) } }
                 }.disabled(claim.trimmingCharacters(in: .whitespaces).isEmpty)
             }
+            .disabled(attaching)
             HStack {
                 if semanticRetrieval {
                     Button(indexing ? "Indexing…" : "Build Embeddings", action: reindex)
@@ -1747,31 +1768,23 @@ private struct ProfileEditor: View {
                     }
                 }.disabled(indexing || !model.profiles.contains(where: { $0.id == profile.id }))
             }
+            .disabled(attaching)
             if let message { Text(message).foregroundStyle(.secondary) }
         }
         .padding(16)
         .task { if let item = model.profiles.first(where: { $0.id == model.profileID }) { select(item) } }
-        .fileImporter(isPresented: $picker, allowedContentTypes: [.plainText, .pdf, .data]) { result in
+        .fileImporter(isPresented: $picker, allowedContentTypes: Self.attachmentTypes, allowsMultipleSelection: true) { result in
             switch result {
-            case .success(let url):
-                do {
-                    let scoped = url.startAccessingSecurityScopedResource()
-                    defer { if scoped { url.stopAccessingSecurityScopedResource() } }
-                    add(try ProfileDocument.read(url, kind: kind))
-                } catch StorageFailure.emptyDocument {
-                    message = "This document has no extractable text. Paste its text or use a text-based PDF."
-                } catch {
-                    message = "Import failed. Choose a text, Markdown, PDF, or DOCX document."
-                }
+            case .success(let urls): attach(urls.map(Attachment.file))
             case .failure:
                 message = "The selected document could not be opened."
             }
         }
         .sheet(item: $selectedFact) { fact in
             FactEditor(fact: fact, save: { update in
-                Task { await change { try await store.save(update, profile: profile.id) } }
+                Task { await change { id in try await store.save(update, profile: id) } }
             }, remove: {
-                Task { await change { try await store.deleteFact(fact.id, profile: profile.id) } }
+                Task { await change { id in try await store.deleteFact(fact.id, profile: id) } }
             })
         }
         .confirmationDialog("Delete this profile and its documents and facts?", isPresented: $deleteConfirmation) {
@@ -1784,6 +1797,41 @@ private struct ProfileEditor: View {
                     } catch { message = "Profile deletion failed." }
                 }
             }
+        }
+    }
+
+    private var attachmentControls: some View {
+        VStack(alignment: .leading, spacing: 6) {
+            HStack {
+                Picker("Attach as", selection: $kind) {
+                    ForEach(ProfileDocument.Kind.allCases) { Text($0.rawValue).tag($0) }
+                }
+                Button(attaching ? "Attaching…" : "Attach Files…") { picker = true }
+                    .disabled(!hasProfileName)
+            }
+            Text(hasProfileName ? "Markdown (.md, .markdown), text, PDF, or DOCX." : "Enter a profile name to add attachments.")
+                .font(.caption).foregroundStyle(.secondary)
+            DisclosureGroup("Paste document text", isExpanded: $showingPaste) {
+                HStack(alignment: .top) {
+                    TextField("Document text", text: $pastedText, axis: .vertical).lineLimit(2...4)
+                    Button("Attach Text") { attach([.pasted(pastedText)]) }
+                        .disabled(!hasProfileName || pastedText.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
+                }.padding(.top, 4)
+            }
+        }
+        .disabled(attaching)
+    }
+
+    private func attachmentRow(_ document: ProfileDocument) -> some View {
+        HStack(alignment: .firstTextBaseline) {
+            VStack(alignment: .leading, spacing: 2) {
+                Text(document.title).lineLimit(1).truncationMode(.middle).help(document.title)
+                Text(document.kind.rawValue).font(.caption).foregroundStyle(.secondary)
+            }
+            Spacer()
+            Button("Remove", role: .destructive) {
+                Task { await change { id in try await store.deleteDocument(document.id, profile: id) } }
+            }.buttonStyle(.borderless).accessibilityLabel("Remove " + document.title)
         }
     }
 
@@ -1819,23 +1867,70 @@ private struct ProfileEditor: View {
     }
 
     private func save() {
-        Task { await change {} }
+        Task { await change { _ in } }
     }
 
-    private func add(_ document: ProfileDocument) {
-        Task { await change { try await store.add(document, to: profile.id) } }
+    private func attach(_ attachments: [Attachment]) {
+        guard !attachments.isEmpty, hasProfileName, !attaching else { return }
+        let target = profile
+        let type = kind
+        attaching = true
+        message = nil
+        Task {
+            defer { attaching = false }
+            var saved = false
+            var attached = 0
+            var firstFailure: String?
+            for attachment in attachments {
+                do {
+                    let document = try await attachment.read(kind: type)
+                    if !saved {
+                        try await store.save(target)
+                        saved = true
+                    }
+                    try await store.add(document, to: target.id)
+                    attached += 1
+                    if case .pasted = attachment { pastedText = "" }
+                } catch {
+                    if firstFailure == nil { firstFailure = attachment.name + " — " + attachmentFailure(error) }
+                }
+            }
+            if saved { await model.reloadProfiles() }
+            guard profile.id == target.id else { return }
+            if saved {
+                model.profileID = target.id
+                await refresh(target.id)
+            }
+            let failures = attachments.count - attached
+            if let firstFailure {
+                message = attachments.count == 1 ? firstFailure : "Attached \(attached) of \(attachments.count) files. \(failures) failed. \(firstFailure)"
+            } else {
+                message = attached == 1 ? "Attached \(attachments[0].name)." : "Attached \(attached) files."
+            }
+        }
     }
 
-    private func change(_ operation: () async throws -> Void) async {
+    private func attachmentFailure(_ error: Error) -> String {
+        switch error {
+        case StorageFailure.emptyDocument: "No text was found. Try a text-based file or paste the text."
+        case StorageFailure.documentTooLarge: "The document is too large to attach."
+        case StorageFailure.unsupportedFormat: "Choose a Markdown, text, PDF, or DOCX file."
+        default: "Could not read or attach the document. Check that it opens locally."
+        }
+    }
+
+    private func change(_ operation: (UUID) async throws -> Void) async {
+        let target = profile
         do {
-            try await store.save(profile)
-            try await operation()
+            try await store.save(target)
+            try await operation(target.id)
             await model.reloadProfiles()
-            model.profileID = profile.id
-            await refresh(profile.id)
+            guard profile.id == target.id else { return }
+            model.profileID = target.id
+            await refresh(target.id)
             message = nil
         } catch {
-            message = "Could not save. Enter a profile name and check the document or fact."
+            if profile.id == target.id { message = "Could not save. Enter a profile name and check the document or fact." }
         }
     }
 }

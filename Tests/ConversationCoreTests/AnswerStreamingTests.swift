@@ -85,6 +85,18 @@ final class AnswerStreamingTests: XCTestCase {
 }
 
 extension AnswerStreamingTests {
+    func testScenarioAnswerPolicyLeadsWithAnApproachAndKeepsPastClaimsGrounded() {
+        let request = AnswerRequest(question: "How would you respond to a failed deployment?", instructions: "",
+                                    evidence: [])
+        let policy = AnswerPrompt.instructions(request)
+        XCTAssertTrue(policy.contains("lead with a practical first-person"))
+        XCTAssertTrue(policy.contains("I would first verify the scope of the incident"))
+        XCTAssertTrue(policy.contains("Omit statements about lacking experience"))
+        XCTAssertTrue(policy.contains("Use only approved facts for personal claims"))
+        XCTAssertTrue(policy.contains("only when it is confirmed and directly relevant"))
+        XCTAssertTrue(AnswerFormat.star.instructions(wordLimit: 0).contains("describe the actions and expected result conditionally"))
+    }
+
     func testCustomLengthOverridesFormatDefaultsAndPreservesGroundingOnRegenerate() async throws {
         let generator = ControlledGenerator()
         let session = InterviewSession(channels: [], detector: QuestionDetector(classifier: NeverClassify()),

@@ -31,3 +31,13 @@ The owner reported that short pauses triggered answers early and rapid questions
 - Add clock-controlled tests for speech restarting, grouped/staggered finals, unresolved partials and cancellation. Run Swift build/test, unsigned packaging and the hosted CI matrix. This deliberately adds question latency and needs measured live acceptance.
 
 Local Swift build and tests passed with 121 XCTest cases on the Apple Silicon Mac and 111 in the pinned Linux Swift container. The native unsigned package built and launched. The Settings walkthrough changed **Wait for silence** from 2 to 2.5 seconds, confirmed the displayed value, and restored 2 seconds. Clock-controlled cases cover resumed audio, two finalized questions, delayed finals, missing finals, pause, and a live timing change. No live capture or provider credentials were used for this check.
+
+## Scenario answers and profile attachments
+
+The owner wants scenario answers that open with a proposed approach and a clearer way to attach résumés, job descriptions, and Markdown files. Update the shared answer policy and the native Profiles editor. Conditional responses distinguish proposed actions from verified history. Approved facts remain the basis for personal claims.
+
+- Offer a focused file picker for Markdown, text, PDF, and DOCX. Show each attachment name and type and keep pasted text in a separate control.
+- Verify Markdown through the portable document reader and profile store. Preserve source text and keep imported experience claims pending until approved.
+- Validate the shared prompt, file import regressions and native attachment controls. Run Linux and macOS testing and package the app without using live provider credentials.
+
+Local macOS build and 124 XCTest cases passed. Pinned Linux Swift build and 114 XCTest cases passed. The unsigned native package launched, showed the attachment types and separate paste control, and enabled multi-selection of a synthetic `.md` and `.markdown` file. The picker was canceled before saving a profile. Portable tests verified storage, raw text retention, role type and approval boundaries. No live generation credentials were used.
