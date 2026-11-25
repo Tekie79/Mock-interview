@@ -8,6 +8,10 @@ private actor ClassifierFixture: QuestionClassifier {
     func classify(_ input: QuestionInput) async throws -> QuestionDecision {
         inputs.append(input)
         if input.turn.text.hasSuffix("...") { return QuestionDecision(decision: .wait) }
+        if input.turn.itemID == "literal-repeat" {
+            return QuestionDecision(decision: .accept, normalizedQuestion: input.turn.text,
+                                    parts: [input.turn.text])
+        }
         return QuestionDecision(decision: .accept, normalizedQuestion: input.turn.text,
                                 parts: ["design", "testing"], isFollowUp: !input.previousQuestions.isEmpty)
     }
@@ -30,6 +34,7 @@ final class QuestionDetectionTests: XCTestCase {
         for ignored in [
             event("partial", "Explain the design", state: .partial),
             event("logistics", "Can you hear me?"),
+            event("compound-logistics", "Thanks. Can you see the next slide?"),
             event("candidate", "Explain the design", source: mic),
             event("stale", "Explain the design", epoch: UUID()),
             event("incomplete", "Explain how you...")
@@ -48,5 +53,37 @@ final class QuestionDetectionTests: XCTestCase {
         XCTAssertEqual(repeatQuestion?.previousQuestionID, accepted?.id)
         let inputs = await classifier.inputs
         XCTAssertEqual(inputs.count, 2)
+    }
+
+    func testCallLogisticsDoNotSuppressAnInterviewRequestInTheSameTurn() async throws {
+        let classifier = ClassifierFixture()
+        let detector = QuestionDetector(classifier: classifier)
+        let epoch = UUID()
+        let interviewer = CaptureSource(id: "remote", role: .interviewer)
+        await detector.connect(interviewer, epoch: epoch)
+        let text = "Is the screen readable? Describe how you tested the audio export."
+        let result = try await detector.receive(.init(source: interviewer, epoch: epoch, itemID: "mixed",
+                                                      text: text, state: .final))
+        XCTAssertEqual(result?.original, text)
+        let inputs = await classifier.inputs
+        XCTAssertEqual(inputs.map(\.turn.text), [text])
+    }
+
+    func testLiteralRepeatLinksToTheMatchingQuestionAcrossAnInterveningTurn() async throws {
+        let detector = QuestionDetector(classifier: ClassifierFixture())
+        let epoch = UUID()
+        let interviewer = CaptureSource(id: "remote", role: .interviewer)
+        await detector.connect(interviewer, epoch: epoch)
+        let text = "Describe how you tested the audio export."
+        func final(_ id: String, _ text: String) -> TranscriptEvent {
+            .init(source: interviewer, epoch: epoch, itemID: id, text: text, state: .final)
+        }
+        let original = try await detector.receive(final("first", text))
+        let intervening = try await detector.receive(final("second", "Describe the release process."))
+        let repeatQuestion = try await detector.receive(final("literal-repeat", text))
+        XCTAssertNotNil(original)
+        XCTAssertNotEqual(intervening?.id, original?.id)
+        XCTAssertNotEqual(repeatQuestion?.id, original?.id)
+        XCTAssertEqual(repeatQuestion?.previousQuestionID, original?.id)
     }
 }

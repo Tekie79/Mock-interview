@@ -55,4 +55,13 @@ Statuses are **Not started**, **In progress**, **Implemented — qualification p
 | M10.2-G | Graceful recognition outcomes and required stream acknowledgment | P1 | Implemented — qualification pending | TranscriptionChannel, DeepgramTranscription | PipelineHardeningTests, ExtendedProviderTests | Provider-specific empty results must be attributable to the pending audio |
 | M10.2-H | Subtract partial ElevenLabs coverage and track independent commit requests | P0/P1 | Implemented — qualification pending | ElevenLabsTranscription | ElevenLabsTests | 20 ms edge tolerance is a development setting pending live qualification |
 
-M11 owns representative hardware, paid live smoke, target measurement and independent acceptance. See [implementation status](implementation-status.md), [audio routing](audio-routing.md), [providers](provider-compatibility.md) and [acceptance plan](acceptance-test-plan.md).
+
+## M11 qualification evidence
+
+| Requirements or gate | Evidence | Remaining acceptance work |
+|---|---|---|
+| FR-01–03, FR-14, FR-21 | [Native audio and route results](verification/m11-audio-compatibility.md), existing route and role regressions | Independent physical microphones, device transitions, denial/regrant, sleep/wake and acoustic isolation |
+| FR-04–09, FR-13, FR-20, NFR-12 | [Held-out split, classifier and replay timing](verification/m11-performance-benchmark.md), [AT-01–18 matrix](verification/m11-final-acceptance.md) | Native semantic accuracy, independent visible latency, end-to-end replay drift and sustained performance |
+| FR-10–12, FR-15–19 | [Native interaction, retention and provider results](verification/m11-final-acceptance.md) | Complete accessible session controls, retention, export, and unqualified provider configurations |
+| M10.1-8, M10.2-4 | [Provider eligibility and tested account scopes](verification/m11-provider-qualification.md) | Official ChatGPT distribution eligibility and subsequent live browser/account tests |
+| Native packaging | [Local and hosted checks](verification/m11-final-acceptance.md) | Signed install and upgrade on representative hosts |

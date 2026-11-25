@@ -1,0 +1,200 @@
+{"session": "development-01", "turn": 1, "role": "interviewer", "category": "logistics", "expected": "ignore", "text": "Is the screen readable while I open the cache eviction example?"}
+{"session": "development-01", "turn": 2, "role": "interviewer", "category": "technical", "expected": "accept", "text": "What failure modes would you look for in cache eviction?"}
+{"session": "development-01", "turn": 3, "role": "candidate", "category": "candidate_prompt", "expected": "ignore", "text": "Could we spend more time on cache eviction?"}
+{"session": "development-01", "turn": 4, "role": "interviewer", "category": "follow_up", "expected": "accept", "text": "How would you test that first?", "reference": 2}
+{"session": "development-01", "turn": 5, "role": "interviewer", "category": "incomplete", "expected": "wait", "text": "Tell me how you handled cache eviction when…", "gap_ms": 1200}
+{"session": "development-01", "turn": 6, "role": "interviewer", "category": "completion", "expected": "accept", "text": "the team was short on capacity and had to prioritize cache eviction.", "reference": 5}
+{"session": "development-01", "turn": 7, "role": "interviewer", "category": "multipart", "expected": "accept", "text": "Describe your design for cache eviction, then explain how you monitored it.", "parts": 2}
+{"session": "development-01", "turn": 8, "role": "unknown", "category": "unknown_speaker", "expected": "ignore", "text": "What would you change about cache eviction?"}
+{"session": "development-01", "turn": 9, "role": "interviewer", "category": "intentional_repeat", "expected": "accept", "text": "What failure modes would you look for in cache eviction?", "reference": 2}
+{"session": "development-01", "turn": 10, "role": "interviewer", "category": "logistics", "expected": "ignore", "text": "Thanks. I'll close the cache eviction slide now."}
+{"session": "development-02", "turn": 1, "role": "interviewer", "category": "logistics", "expected": "ignore", "text": "Is the screen readable while I open the batch retries example?"}
+{"session": "development-02", "turn": 2, "role": "interviewer", "category": "technical", "expected": "accept", "text": "What failure modes would you look for in batch retries?"}
+{"session": "development-02", "turn": 3, "role": "candidate", "category": "candidate_prompt", "expected": "ignore", "text": "Could we spend more time on batch retries?"}
+{"session": "development-02", "turn": 4, "role": "interviewer", "category": "follow_up", "expected": "accept", "text": "How would you test that first?", "reference": 2}
+{"session": "development-02", "turn": 5, "role": "interviewer", "category": "incomplete", "expected": "wait", "text": "Tell me how you handled batch retries when…", "gap_ms": 1200}
+{"session": "development-02", "turn": 6, "role": "interviewer", "category": "completion", "expected": "accept", "text": "the team was short on capacity and had to prioritize batch retries.", "reference": 5}
+{"session": "development-02", "turn": 7, "role": "interviewer", "category": "multipart", "expected": "accept", "text": "Describe your design for batch retries, then explain how you monitored it.", "parts": 2}
+{"session": "development-02", "turn": 8, "role": "unknown", "category": "unknown_speaker", "expected": "ignore", "text": "What would you change about batch retries?"}
+{"session": "development-02", "turn": 9, "role": "interviewer", "category": "intentional_repeat", "expected": "accept", "text": "What failure modes would you look for in batch retries?", "reference": 2}
+{"session": "development-02", "turn": 10, "role": "interviewer", "category": "logistics", "expected": "ignore", "text": "Thanks. I'll close the batch retries slide now."}
+{"session": "development-03", "turn": 1, "role": "interviewer", "category": "logistics", "expected": "ignore", "text": "Is the screen readable while I open the file ingestion example?"}
+{"session": "development-03", "turn": 2, "role": "interviewer", "category": "technical", "expected": "accept", "text": "What failure modes would you look for in file ingestion?"}
+{"session": "development-03", "turn": 3, "role": "candidate", "category": "candidate_prompt", "expected": "ignore", "text": "Could we spend more time on file ingestion?"}
+{"session": "development-03", "turn": 4, "role": "interviewer", "category": "follow_up", "expected": "accept", "text": "How would you test that first?", "reference": 2}
+{"session": "development-03", "turn": 5, "role": "interviewer", "category": "incomplete", "expected": "wait", "text": "Tell me how you handled file ingestion when…", "gap_ms": 1200}
+{"session": "development-03", "turn": 6, "role": "interviewer", "category": "completion", "expected": "accept", "text": "the team was short on capacity and had to prioritize file ingestion.", "reference": 5}
+{"session": "development-03", "turn": 7, "role": "interviewer", "category": "multipart", "expected": "accept", "text": "Describe your design for file ingestion, then explain how you monitored it.", "parts": 2}
+{"session": "development-03", "turn": 8, "role": "unknown", "category": "unknown_speaker", "expected": "ignore", "text": "What would you change about file ingestion?"}
+{"session": "development-03", "turn": 9, "role": "interviewer", "category": "intentional_repeat", "expected": "accept", "text": "What failure modes would you look for in file ingestion?", "reference": 2}
+{"session": "development-03", "turn": 10, "role": "interviewer", "category": "logistics", "expected": "ignore", "text": "Thanks. I'll close the file ingestion slide now."}
+{"session": "development-04", "turn": 1, "role": "interviewer", "category": "logistics", "expected": "ignore", "text": "Is the screen readable while I open the query indexes example?"}
+{"session": "development-04", "turn": 2, "role": "interviewer", "category": "technical", "expected": "accept", "text": "What failure modes would you look for in query indexes?"}
+{"session": "development-04", "turn": 3, "role": "candidate", "category": "candidate_prompt", "expected": "ignore", "text": "Could we spend more time on query indexes?"}
+{"session": "development-04", "turn": 4, "role": "interviewer", "category": "follow_up", "expected": "accept", "text": "How would you test that first?", "reference": 2}
+{"session": "development-04", "turn": 5, "role": "interviewer", "category": "incomplete", "expected": "wait", "text": "Tell me how you handled query indexes when…", "gap_ms": 1200}
+{"session": "development-04", "turn": 6, "role": "interviewer", "category": "completion", "expected": "accept", "text": "the team was short on capacity and had to prioritize query indexes.", "reference": 5}
+{"session": "development-04", "turn": 7, "role": "interviewer", "category": "multipart", "expected": "accept", "text": "Describe your design for query indexes, then explain how you monitored it.", "parts": 2}
+{"session": "development-04", "turn": 8, "role": "unknown", "category": "unknown_speaker", "expected": "ignore", "text": "What would you change about query indexes?"}
+{"session": "development-04", "turn": 9, "role": "interviewer", "category": "intentional_repeat", "expected": "accept", "text": "What failure modes would you look for in query indexes?", "reference": 2}
+{"session": "development-04", "turn": 10, "role": "interviewer", "category": "logistics", "expected": "ignore", "text": "Thanks. I'll close the query indexes slide now."}
+{"session": "development-05", "turn": 1, "role": "interviewer", "category": "logistics", "expected": "ignore", "text": "Is the screen readable while I open the deployment health example?"}
+{"session": "development-05", "turn": 2, "role": "interviewer", "category": "technical", "expected": "accept", "text": "What failure modes would you look for in deployment health?"}
+{"session": "development-05", "turn": 3, "role": "candidate", "category": "candidate_prompt", "expected": "ignore", "text": "Could we spend more time on deployment health?"}
+{"session": "development-05", "turn": 4, "role": "interviewer", "category": "follow_up", "expected": "accept", "text": "How would you test that first?", "reference": 2}
+{"session": "development-05", "turn": 5, "role": "interviewer", "category": "incomplete", "expected": "wait", "text": "Tell me how you handled deployment health when…", "gap_ms": 1200}
+{"session": "development-05", "turn": 6, "role": "interviewer", "category": "completion", "expected": "accept", "text": "the team was short on capacity and had to prioritize deployment health.", "reference": 5}
+{"session": "development-05", "turn": 7, "role": "interviewer", "category": "multipart", "expected": "accept", "text": "Describe your design for deployment health, then explain how you monitored it.", "parts": 2}
+{"session": "development-05", "turn": 8, "role": "unknown", "category": "unknown_speaker", "expected": "ignore", "text": "What would you change about deployment health?"}
+{"session": "development-05", "turn": 9, "role": "interviewer", "category": "intentional_repeat", "expected": "accept", "text": "What failure modes would you look for in deployment health?", "reference": 2}
+{"session": "development-05", "turn": 10, "role": "interviewer", "category": "logistics", "expected": "ignore", "text": "Thanks. I'll close the deployment health slide now."}
+{"session": "development-06", "turn": 1, "role": "interviewer", "category": "logistics", "expected": "ignore", "text": "Is the screen readable while I open the alert routing example?"}
+{"session": "development-06", "turn": 2, "role": "interviewer", "category": "technical", "expected": "accept", "text": "What failure modes would you look for in alert routing?"}
+{"session": "development-06", "turn": 3, "role": "candidate", "category": "candidate_prompt", "expected": "ignore", "text": "Could we spend more time on alert routing?"}
+{"session": "development-06", "turn": 4, "role": "interviewer", "category": "follow_up", "expected": "accept", "text": "How would you test that first?", "reference": 2}
+{"session": "development-06", "turn": 5, "role": "interviewer", "category": "incomplete", "expected": "wait", "text": "Tell me how you handled alert routing when…", "gap_ms": 1200}
+{"session": "development-06", "turn": 6, "role": "interviewer", "category": "completion", "expected": "accept", "text": "the team was short on capacity and had to prioritize alert routing.", "reference": 5}
+{"session": "development-06", "turn": 7, "role": "interviewer", "category": "multipart", "expected": "accept", "text": "Describe your design for alert routing, then explain how you monitored it.", "parts": 2}
+{"session": "development-06", "turn": 8, "role": "unknown", "category": "unknown_speaker", "expected": "ignore", "text": "What would you change about alert routing?"}
+{"session": "development-06", "turn": 9, "role": "interviewer", "category": "intentional_repeat", "expected": "accept", "text": "What failure modes would you look for in alert routing?", "reference": 2}
+{"session": "development-06", "turn": 10, "role": "interviewer", "category": "logistics", "expected": "ignore", "text": "Thanks. I'll close the alert routing slide now."}
+{"session": "development-07", "turn": 1, "role": "interviewer", "category": "logistics", "expected": "ignore", "text": "Is the screen readable while I open the access reviews example?"}
+{"session": "development-07", "turn": 2, "role": "interviewer", "category": "technical", "expected": "accept", "text": "What failure modes would you look for in access reviews?"}
+{"session": "development-07", "turn": 3, "role": "candidate", "category": "candidate_prompt", "expected": "ignore", "text": "Could we spend more time on access reviews?"}
+{"session": "development-07", "turn": 4, "role": "interviewer", "category": "follow_up", "expected": "accept", "text": "How would you test that first?", "reference": 2}
+{"session": "development-07", "turn": 5, "role": "interviewer", "category": "incomplete", "expected": "wait", "text": "Tell me how you handled access reviews when…", "gap_ms": 1200}
+{"session": "development-07", "turn": 6, "role": "interviewer", "category": "completion", "expected": "accept", "text": "the team was short on capacity and had to prioritize access reviews.", "reference": 5}
+{"session": "development-07", "turn": 7, "role": "interviewer", "category": "multipart", "expected": "accept", "text": "Describe your design for access reviews, then explain how you monitored it.", "parts": 2}
+{"session": "development-07", "turn": 8, "role": "unknown", "category": "unknown_speaker", "expected": "ignore", "text": "What would you change about access reviews?"}
+{"session": "development-07", "turn": 9, "role": "interviewer", "category": "intentional_repeat", "expected": "accept", "text": "What failure modes would you look for in access reviews?", "reference": 2}
+{"session": "development-07", "turn": 10, "role": "interviewer", "category": "logistics", "expected": "ignore", "text": "Thanks. I'll close the access reviews slide now."}
+{"session": "development-08", "turn": 1, "role": "interviewer", "category": "logistics", "expected": "ignore", "text": "Is the screen readable while I open the release rollback example?"}
+{"session": "development-08", "turn": 2, "role": "interviewer", "category": "technical", "expected": "accept", "text": "What failure modes would you look for in release rollback?"}
+{"session": "development-08", "turn": 3, "role": "candidate", "category": "candidate_prompt", "expected": "ignore", "text": "Could we spend more time on release rollback?"}
+{"session": "development-08", "turn": 4, "role": "interviewer", "category": "follow_up", "expected": "accept", "text": "How would you test that first?", "reference": 2}
+{"session": "development-08", "turn": 5, "role": "interviewer", "category": "incomplete", "expected": "wait", "text": "Tell me how you handled release rollback when…", "gap_ms": 1200}
+{"session": "development-08", "turn": 6, "role": "interviewer", "category": "completion", "expected": "accept", "text": "the team was short on capacity and had to prioritize release rollback.", "reference": 5}
+{"session": "development-08", "turn": 7, "role": "interviewer", "category": "multipart", "expected": "accept", "text": "Describe your design for release rollback, then explain how you monitored it.", "parts": 2}
+{"session": "development-08", "turn": 8, "role": "unknown", "category": "unknown_speaker", "expected": "ignore", "text": "What would you change about release rollback?"}
+{"session": "development-08", "turn": 9, "role": "interviewer", "category": "intentional_repeat", "expected": "accept", "text": "What failure modes would you look for in release rollback?", "reference": 2}
+{"session": "development-08", "turn": 10, "role": "interviewer", "category": "logistics", "expected": "ignore", "text": "Thanks. I'll close the release rollback slide now."}
+{"session": "development-09", "turn": 1, "role": "interviewer", "category": "logistics", "expected": "ignore", "text": "Is the screen readable while I open the data lineage example?"}
+{"session": "development-09", "turn": 2, "role": "interviewer", "category": "technical", "expected": "accept", "text": "What failure modes would you look for in data lineage?"}
+{"session": "development-09", "turn": 3, "role": "candidate", "category": "candidate_prompt", "expected": "ignore", "text": "Could we spend more time on data lineage?"}
+{"session": "development-09", "turn": 4, "role": "interviewer", "category": "follow_up", "expected": "accept", "text": "How would you test that first?", "reference": 2}
+{"session": "development-09", "turn": 5, "role": "interviewer", "category": "incomplete", "expected": "wait", "text": "Tell me how you handled data lineage when…", "gap_ms": 1200}
+{"session": "development-09", "turn": 6, "role": "interviewer", "category": "completion", "expected": "accept", "text": "the team was short on capacity and had to prioritize data lineage.", "reference": 5}
+{"session": "development-09", "turn": 7, "role": "interviewer", "category": "multipart", "expected": "accept", "text": "Describe your design for data lineage, then explain how you monitored it.", "parts": 2}
+{"session": "development-09", "turn": 8, "role": "unknown", "category": "unknown_speaker", "expected": "ignore", "text": "What would you change about data lineage?"}
+{"session": "development-09", "turn": 9, "role": "interviewer", "category": "intentional_repeat", "expected": "accept", "text": "What failure modes would you look for in data lineage?", "reference": 2}
+{"session": "development-09", "turn": 10, "role": "interviewer", "category": "logistics", "expected": "ignore", "text": "Thanks. I'll close the data lineage slide now."}
+{"session": "development-10", "turn": 1, "role": "interviewer", "category": "logistics", "expected": "ignore", "text": "Is the screen readable while I open the worker scheduling example?"}
+{"session": "development-10", "turn": 2, "role": "interviewer", "category": "technical", "expected": "accept", "text": "What failure modes would you look for in worker scheduling?"}
+{"session": "development-10", "turn": 3, "role": "candidate", "category": "candidate_prompt", "expected": "ignore", "text": "Could we spend more time on worker scheduling?"}
+{"session": "development-10", "turn": 4, "role": "interviewer", "category": "follow_up", "expected": "accept", "text": "How would you test that first?", "reference": 2}
+{"session": "development-10", "turn": 5, "role": "interviewer", "category": "incomplete", "expected": "wait", "text": "Tell me how you handled worker scheduling when…", "gap_ms": 1200}
+{"session": "development-10", "turn": 6, "role": "interviewer", "category": "completion", "expected": "accept", "text": "the team was short on capacity and had to prioritize worker scheduling.", "reference": 5}
+{"session": "development-10", "turn": 7, "role": "interviewer", "category": "multipart", "expected": "accept", "text": "Describe your design for worker scheduling, then explain how you monitored it.", "parts": 2}
+{"session": "development-10", "turn": 8, "role": "unknown", "category": "unknown_speaker", "expected": "ignore", "text": "What would you change about worker scheduling?"}
+{"session": "development-10", "turn": 9, "role": "interviewer", "category": "intentional_repeat", "expected": "accept", "text": "What failure modes would you look for in worker scheduling?", "reference": 2}
+{"session": "development-10", "turn": 10, "role": "interviewer", "category": "logistics", "expected": "ignore", "text": "Thanks. I'll close the worker scheduling slide now."}
+{"session": "development-11", "turn": 1, "role": "interviewer", "category": "logistics", "expected": "ignore", "text": "Is the screen readable while I open the API pagination example?"}
+{"session": "development-11", "turn": 2, "role": "interviewer", "category": "technical", "expected": "accept", "text": "What failure modes would you look for in API pagination?"}
+{"session": "development-11", "turn": 3, "role": "candidate", "category": "candidate_prompt", "expected": "ignore", "text": "Could we spend more time on API pagination?"}
+{"session": "development-11", "turn": 4, "role": "interviewer", "category": "follow_up", "expected": "accept", "text": "How would you test that first?", "reference": 2}
+{"session": "development-11", "turn": 5, "role": "interviewer", "category": "incomplete", "expected": "wait", "text": "Tell me how you handled API pagination when…", "gap_ms": 1200}
+{"session": "development-11", "turn": 6, "role": "interviewer", "category": "completion", "expected": "accept", "text": "the team was short on capacity and had to prioritize API pagination.", "reference": 5}
+{"session": "development-11", "turn": 7, "role": "interviewer", "category": "multipart", "expected": "accept", "text": "Describe your design for API pagination, then explain how you monitored it.", "parts": 2}
+{"session": "development-11", "turn": 8, "role": "unknown", "category": "unknown_speaker", "expected": "ignore", "text": "What would you change about API pagination?"}
+{"session": "development-11", "turn": 9, "role": "interviewer", "category": "intentional_repeat", "expected": "accept", "text": "What failure modes would you look for in API pagination?", "reference": 2}
+{"session": "development-11", "turn": 10, "role": "interviewer", "category": "logistics", "expected": "ignore", "text": "Thanks. I'll close the API pagination slide now."}
+{"session": "development-12", "turn": 1, "role": "interviewer", "category": "logistics", "expected": "ignore", "text": "Is the screen readable while I open the log sampling example?"}
+{"session": "development-12", "turn": 2, "role": "interviewer", "category": "technical", "expected": "accept", "text": "What failure modes would you look for in log sampling?"}
+{"session": "development-12", "turn": 3, "role": "candidate", "category": "candidate_prompt", "expected": "ignore", "text": "Could we spend more time on log sampling?"}
+{"session": "development-12", "turn": 4, "role": "interviewer", "category": "follow_up", "expected": "accept", "text": "How would you test that first?", "reference": 2}
+{"session": "development-12", "turn": 5, "role": "interviewer", "category": "incomplete", "expected": "wait", "text": "Tell me how you handled log sampling when…", "gap_ms": 1200}
+{"session": "development-12", "turn": 6, "role": "interviewer", "category": "completion", "expected": "accept", "text": "the team was short on capacity and had to prioritize log sampling.", "reference": 5}
+{"session": "development-12", "turn": 7, "role": "interviewer", "category": "multipart", "expected": "accept", "text": "Describe your design for log sampling, then explain how you monitored it.", "parts": 2}
+{"session": "development-12", "turn": 8, "role": "unknown", "category": "unknown_speaker", "expected": "ignore", "text": "What would you change about log sampling?"}
+{"session": "development-12", "turn": 9, "role": "interviewer", "category": "intentional_repeat", "expected": "accept", "text": "What failure modes would you look for in log sampling?", "reference": 2}
+{"session": "development-12", "turn": 10, "role": "interviewer", "category": "logistics", "expected": "ignore", "text": "Thanks. I'll close the log sampling slide now."}
+{"session": "development-13", "turn": 1, "role": "interviewer", "category": "logistics", "expected": "ignore", "text": "Is the screen readable while I open the cost allocation example?"}
+{"session": "development-13", "turn": 2, "role": "interviewer", "category": "technical", "expected": "accept", "text": "What failure modes would you look for in cost allocation?"}
+{"session": "development-13", "turn": 3, "role": "candidate", "category": "candidate_prompt", "expected": "ignore", "text": "Could we spend more time on cost allocation?"}
+{"session": "development-13", "turn": 4, "role": "interviewer", "category": "follow_up", "expected": "accept", "text": "How would you test that first?", "reference": 2}
+{"session": "development-13", "turn": 5, "role": "interviewer", "category": "incomplete", "expected": "wait", "text": "Tell me how you handled cost allocation when…", "gap_ms": 1200}
+{"session": "development-13", "turn": 6, "role": "interviewer", "category": "completion", "expected": "accept", "text": "the team was short on capacity and had to prioritize cost allocation.", "reference": 5}
+{"session": "development-13", "turn": 7, "role": "interviewer", "category": "multipart", "expected": "accept", "text": "Describe your design for cost allocation, then explain how you monitored it.", "parts": 2}
+{"session": "development-13", "turn": 8, "role": "unknown", "category": "unknown_speaker", "expected": "ignore", "text": "What would you change about cost allocation?"}
+{"session": "development-13", "turn": 9, "role": "interviewer", "category": "intentional_repeat", "expected": "accept", "text": "What failure modes would you look for in cost allocation?", "reference": 2}
+{"session": "development-13", "turn": 10, "role": "interviewer", "category": "logistics", "expected": "ignore", "text": "Thanks. I'll close the cost allocation slide now."}
+{"session": "development-14", "turn": 1, "role": "interviewer", "category": "logistics", "expected": "ignore", "text": "Is the screen readable while I open the incident handoffs example?"}
+{"session": "development-14", "turn": 2, "role": "interviewer", "category": "technical", "expected": "accept", "text": "What failure modes would you look for in incident handoffs?"}
+{"session": "development-14", "turn": 3, "role": "candidate", "category": "candidate_prompt", "expected": "ignore", "text": "Could we spend more time on incident handoffs?"}
+{"session": "development-14", "turn": 4, "role": "interviewer", "category": "follow_up", "expected": "accept", "text": "How would you test that first?", "reference": 2}
+{"session": "development-14", "turn": 5, "role": "interviewer", "category": "incomplete", "expected": "wait", "text": "Tell me how you handled incident handoffs when…", "gap_ms": 1200}
+{"session": "development-14", "turn": 6, "role": "interviewer", "category": "completion", "expected": "accept", "text": "the team was short on capacity and had to prioritize incident handoffs.", "reference": 5}
+{"session": "development-14", "turn": 7, "role": "interviewer", "category": "multipart", "expected": "accept", "text": "Describe your design for incident handoffs, then explain how you monitored it.", "parts": 2}
+{"session": "development-14", "turn": 8, "role": "unknown", "category": "unknown_speaker", "expected": "ignore", "text": "What would you change about incident handoffs?"}
+{"session": "development-14", "turn": 9, "role": "interviewer", "category": "intentional_repeat", "expected": "accept", "text": "What failure modes would you look for in incident handoffs?", "reference": 2}
+{"session": "development-14", "turn": 10, "role": "interviewer", "category": "logistics", "expected": "ignore", "text": "Thanks. I'll close the incident handoffs slide now."}
+{"session": "development-15", "turn": 1, "role": "interviewer", "category": "logistics", "expected": "ignore", "text": "Is the screen readable while I open the schema versions example?"}
+{"session": "development-15", "turn": 2, "role": "interviewer", "category": "technical", "expected": "accept", "text": "What failure modes would you look for in schema versions?"}
+{"session": "development-15", "turn": 3, "role": "candidate", "category": "candidate_prompt", "expected": "ignore", "text": "Could we spend more time on schema versions?"}
+{"session": "development-15", "turn": 4, "role": "interviewer", "category": "follow_up", "expected": "accept", "text": "How would you test that first?", "reference": 2}
+{"session": "development-15", "turn": 5, "role": "interviewer", "category": "incomplete", "expected": "wait", "text": "Tell me how you handled schema versions when…", "gap_ms": 1200}
+{"session": "development-15", "turn": 6, "role": "interviewer", "category": "completion", "expected": "accept", "text": "the team was short on capacity and had to prioritize schema versions.", "reference": 5}
+{"session": "development-15", "turn": 7, "role": "interviewer", "category": "multipart", "expected": "accept", "text": "Describe your design for schema versions, then explain how you monitored it.", "parts": 2}
+{"session": "development-15", "turn": 8, "role": "unknown", "category": "unknown_speaker", "expected": "ignore", "text": "What would you change about schema versions?"}
+{"session": "development-15", "turn": 9, "role": "interviewer", "category": "intentional_repeat", "expected": "accept", "text": "What failure modes would you look for in schema versions?", "reference": 2}
+{"session": "development-15", "turn": 10, "role": "interviewer", "category": "logistics", "expected": "ignore", "text": "Thanks. I'll close the schema versions slide now."}
+{"session": "development-16", "turn": 1, "role": "interviewer", "category": "logistics", "expected": "ignore", "text": "Is the screen readable while I open the capacity alerts example?"}
+{"session": "development-16", "turn": 2, "role": "interviewer", "category": "technical", "expected": "accept", "text": "What failure modes would you look for in capacity alerts?"}
+{"session": "development-16", "turn": 3, "role": "candidate", "category": "candidate_prompt", "expected": "ignore", "text": "Could we spend more time on capacity alerts?"}
+{"session": "development-16", "turn": 4, "role": "interviewer", "category": "follow_up", "expected": "accept", "text": "How would you test that first?", "reference": 2}
+{"session": "development-16", "turn": 5, "role": "interviewer", "category": "incomplete", "expected": "wait", "text": "Tell me how you handled capacity alerts when…", "gap_ms": 1200}
+{"session": "development-16", "turn": 6, "role": "interviewer", "category": "completion", "expected": "accept", "text": "the team was short on capacity and had to prioritize capacity alerts.", "reference": 5}
+{"session": "development-16", "turn": 7, "role": "interviewer", "category": "multipart", "expected": "accept", "text": "Describe your design for capacity alerts, then explain how you monitored it.", "parts": 2}
+{"session": "development-16", "turn": 8, "role": "unknown", "category": "unknown_speaker", "expected": "ignore", "text": "What would you change about capacity alerts?"}
+{"session": "development-16", "turn": 9, "role": "interviewer", "category": "intentional_repeat", "expected": "accept", "text": "What failure modes would you look for in capacity alerts?", "reference": 2}
+{"session": "development-16", "turn": 10, "role": "interviewer", "category": "logistics", "expected": "ignore", "text": "Thanks. I'll close the capacity alerts slide now."}
+{"session": "development-17", "turn": 1, "role": "interviewer", "category": "logistics", "expected": "ignore", "text": "Is the screen readable while I open the service discovery example?"}
+{"session": "development-17", "turn": 2, "role": "interviewer", "category": "technical", "expected": "accept", "text": "What failure modes would you look for in service discovery?"}
+{"session": "development-17", "turn": 3, "role": "candidate", "category": "candidate_prompt", "expected": "ignore", "text": "Could we spend more time on service discovery?"}
+{"session": "development-17", "turn": 4, "role": "interviewer", "category": "follow_up", "expected": "accept", "text": "How would you test that first?", "reference": 2}
+{"session": "development-17", "turn": 5, "role": "interviewer", "category": "incomplete", "expected": "wait", "text": "Tell me how you handled service discovery when…", "gap_ms": 1200}
+{"session": "development-17", "turn": 6, "role": "interviewer", "category": "completion", "expected": "accept", "text": "the team was short on capacity and had to prioritize service discovery.", "reference": 5}
+{"session": "development-17", "turn": 7, "role": "interviewer", "category": "multipart", "expected": "accept", "text": "Describe your design for service discovery, then explain how you monitored it.", "parts": 2}
+{"session": "development-17", "turn": 8, "role": "unknown", "category": "unknown_speaker", "expected": "ignore", "text": "What would you change about service discovery?"}
+{"session": "development-17", "turn": 9, "role": "interviewer", "category": "intentional_repeat", "expected": "accept", "text": "What failure modes would you look for in service discovery?", "reference": 2}
+{"session": "development-17", "turn": 10, "role": "interviewer", "category": "logistics", "expected": "ignore", "text": "Thanks. I'll close the service discovery slide now."}
+{"session": "development-18", "turn": 1, "role": "interviewer", "category": "logistics", "expected": "ignore", "text": "Is the screen readable while I open the integration testing example?"}
+{"session": "development-18", "turn": 2, "role": "interviewer", "category": "technical", "expected": "accept", "text": "What failure modes would you look for in integration testing?"}
+{"session": "development-18", "turn": 3, "role": "candidate", "category": "candidate_prompt", "expected": "ignore", "text": "Could we spend more time on integration testing?"}
+{"session": "development-18", "turn": 4, "role": "interviewer", "category": "follow_up", "expected": "accept", "text": "How would you test that first?", "reference": 2}
+{"session": "development-18", "turn": 5, "role": "interviewer", "category": "incomplete", "expected": "wait", "text": "Tell me how you handled integration testing when…", "gap_ms": 1200}
+{"session": "development-18", "turn": 6, "role": "interviewer", "category": "completion", "expected": "accept", "text": "the team was short on capacity and had to prioritize integration testing.", "reference": 5}
+{"session": "development-18", "turn": 7, "role": "interviewer", "category": "multipart", "expected": "accept", "text": "Describe your design for integration testing, then explain how you monitored it.", "parts": 2}
+{"session": "development-18", "turn": 8, "role": "unknown", "category": "unknown_speaker", "expected": "ignore", "text": "What would you change about integration testing?"}
+{"session": "development-18", "turn": 9, "role": "interviewer", "category": "intentional_repeat", "expected": "accept", "text": "What failure modes would you look for in integration testing?", "reference": 2}
+{"session": "development-18", "turn": 10, "role": "interviewer", "category": "logistics", "expected": "ignore", "text": "Thanks. I'll close the integration testing slide now."}
+{"session": "development-19", "turn": 1, "role": "interviewer", "category": "logistics", "expected": "ignore", "text": "Is the screen readable while I open the queue backpressure example?"}
+{"session": "development-19", "turn": 2, "role": "interviewer", "category": "technical", "expected": "accept", "text": "What failure modes would you look for in queue backpressure?"}
+{"session": "development-19", "turn": 3, "role": "candidate", "category": "candidate_prompt", "expected": "ignore", "text": "Could we spend more time on queue backpressure?"}
+{"session": "development-19", "turn": 4, "role": "interviewer", "category": "follow_up", "expected": "accept", "text": "How would you test that first?", "reference": 2}
+{"session": "development-19", "turn": 5, "role": "interviewer", "category": "incomplete", "expected": "wait", "text": "Tell me how you handled queue backpressure when…", "gap_ms": 1200}
+{"session": "development-19", "turn": 6, "role": "interviewer", "category": "completion", "expected": "accept", "text": "the team was short on capacity and had to prioritize queue backpressure.", "reference": 5}
+{"session": "development-19", "turn": 7, "role": "interviewer", "category": "multipart", "expected": "accept", "text": "Describe your design for queue backpressure, then explain how you monitored it.", "parts": 2}
+{"session": "development-19", "turn": 8, "role": "unknown", "category": "unknown_speaker", "expected": "ignore", "text": "What would you change about queue backpressure?"}
+{"session": "development-19", "turn": 9, "role": "interviewer", "category": "intentional_repeat", "expected": "accept", "text": "What failure modes would you look for in queue backpressure?", "reference": 2}
+{"session": "development-19", "turn": 10, "role": "interviewer", "category": "logistics", "expected": "ignore", "text": "Thanks. I'll close the queue backpressure slide now."}
+{"session": "development-20", "turn": 1, "role": "interviewer", "category": "logistics", "expected": "ignore", "text": "Is the screen readable while I open the rate limits example?"}
+{"session": "development-20", "turn": 2, "role": "interviewer", "category": "technical", "expected": "accept", "text": "What failure modes would you look for in rate limits?"}
+{"session": "development-20", "turn": 3, "role": "candidate", "category": "candidate_prompt", "expected": "ignore", "text": "Could we spend more time on rate limits?"}
+{"session": "development-20", "turn": 4, "role": "interviewer", "category": "follow_up", "expected": "accept", "text": "How would you test that first?", "reference": 2}
+{"session": "development-20", "turn": 5, "role": "interviewer", "category": "incomplete", "expected": "wait", "text": "Tell me how you handled rate limits when…", "gap_ms": 1200}
+{"session": "development-20", "turn": 6, "role": "interviewer", "category": "completion", "expected": "accept", "text": "the team was short on capacity and had to prioritize rate limits.", "reference": 5}
+{"session": "development-20", "turn": 7, "role": "interviewer", "category": "multipart", "expected": "accept", "text": "Describe your design for rate limits, then explain how you monitored it.", "parts": 2}
+{"session": "development-20", "turn": 8, "role": "unknown", "category": "unknown_speaker", "expected": "ignore", "text": "What would you change about rate limits?"}
+{"session": "development-20", "turn": 9, "role": "interviewer", "category": "intentional_repeat", "expected": "accept", "text": "What failure modes would you look for in rate limits?", "reference": 2}
+{"session": "development-20", "turn": 10, "role": "interviewer", "category": "logistics", "expected": "ignore", "text": "Thanks. I'll close the rate limits slide now."}

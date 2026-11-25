@@ -4,6 +4,10 @@ import Security
 import SwiftUI
 import UniformTypeIdentifiers
 
+private enum WorkspaceWindow: String, Codable, Hashable {
+    case main
+}
+
 @main
 struct MockInterviewApp: App {
     @StateObject private var model = WorkspaceModel()
@@ -13,10 +17,12 @@ struct MockInterviewApp: App {
     @AppStorage("compactShortcut") private var compactShortcut = "k"
 
     var body: some Scene {
-        WindowGroup("Mock Interview", id: "workspace") {
+        WindowGroup("Mock Interview", id: "workspace", for: WorkspaceWindow.self) { _ in
             WorkspaceView(model: model)
                 .onAppear { appDelegate.model = model }
                 .frame(minWidth: 850, minHeight: 600)
+        } defaultValue: {
+            .main
         }
         .defaultSize(width: 1080, height: 720)
         .commands {
@@ -1056,7 +1062,7 @@ private struct CompactView: View {
             HStack {
                 Toggle("Always on Top", isOn: $onTop)
                 Spacer()
-                Button("Expand") { openWindow(id: "workspace") }
+                Button("Expand") { openWindow(id: "workspace", value: WorkspaceWindow.main) }
                 if model.state.isRunning { Button("Pause", action: model.pause) }
                 if model.active { Button("Stop", action: model.stop) }
             }

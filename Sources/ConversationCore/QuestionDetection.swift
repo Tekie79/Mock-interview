@@ -106,7 +106,7 @@ public actor QuestionDetector {
         var text = event.text.trimmingCharacters(in: .whitespacesAndNewlines)
         let folded = text.lowercased().replacingOccurrences(of: "’", with: "'")
             .trimmingCharacters(in: .punctuationCharacters)
-        if text.isEmpty || Self.obviousNonQuestions.contains(folded) {
+        if text.isEmpty || Self.obviousNonQuestions.contains(folded) || Self.isOnlyCallLogistics(folded) {
             channels[event.source.id] = channel
             return nil
         }
@@ -156,9 +156,13 @@ public actor QuestionDetector {
         let references = Set(result.contextTurnIDs)
         let matched = context.last(where: { references.contains($0.id.uuidString) })?.id
             ?? conversation.last(where: { references.contains($0.id) && $0.questionID != nil })?.questionID
+        let canLinkLiteralRepeat = result.isIntentionalRepeat || !result.isFollowUp
+        let priorRepeat = canLinkLiteralRepeat ? context.last(where: {
+            $0.original.caseInsensitiveCompare(text) == .orderedSame
+        })?.id : nil
+        let contextualReference = result.isFollowUp || result.isIntentionalRepeat ? matched ?? context.last?.id : nil
         let question = AcceptedQuestion(original: text, normalized: normalized, parts: result.parts,
-                                        previousQuestionID: result.isFollowUp || result.isIntentionalRepeat
-                                            ? matched ?? context.last?.id : nil)
+                                        previousQuestionID: priorRepeat ?? contextualReference)
         let detection = Detection(question: question, transcriptIDs: transcriptIDs)
         recent.append(detection)
         if recent.count > 8 { recent.removeFirst() }
@@ -172,6 +176,14 @@ public actor QuestionDetector {
 
     private static let obviousNonQuestions: Set<String> = [
         "hi", "hello", "thanks", "thank you", "can you hear me", "can you see my screen",
-        "can you see me", "are you muted", "that's a good answer. thank you", "do you know what i mean"
+        "can you see me", "can you see the next slide", "is the screen readable", "are you muted",
+        "that's a good answer. thank you", "do you know what i mean"
     ]
+
+    private static func isOnlyCallLogistics(_ text: String) -> Bool {
+        let sentences = text.split(whereSeparator: { ".!?".contains($0) })
+        return sentences.count > 1 && sentences.allSatisfy {
+            obviousNonQuestions.contains($0.trimmingCharacters(in: .whitespacesAndNewlines))
+        }
+    }
 }

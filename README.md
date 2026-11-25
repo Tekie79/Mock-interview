@@ -26,6 +26,6 @@ The GitHub Actions workflow builds the portable package, runs deterministic test
 
 Use feature branches and reviewed changes. Do not merge or publish releases automatically. No distribution license has been selected.
 
-## M10.1 development evidence
+## Qualification evidence
 
-See [requirements traceability](docs/requirements-traceability.md), [audio compatibility](docs/audio-routing.md), [provider capabilities](docs/provider-compatibility.md), and [pipeline and timing](docs/realtime-pipeline.md). The hosted release build is an unsigned packaging check. Physical Mac and live provider qualification are handled in M11.
+See [requirements traceability](docs/requirements-traceability.md), [audio compatibility](docs/audio-routing.md), [provider capabilities](docs/provider-compatibility.md), and [pipeline and timing](docs/realtime-pipeline.md). See [M11 acceptance](docs/verification/m11-final-acceptance.md) for native and live provider observations and [release readiness](docs/release-readiness.md) for outstanding qualification gates. Hosted packaging checks build an unsigned bundle.

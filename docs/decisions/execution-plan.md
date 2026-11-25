@@ -1,30 +1,12 @@
-# M10.2 development execution
+# M11 final acceptance execution
 
-Branch `feature/m10-2-final-development` starts from reviewed M10.1 commit `42b8dda68ecc05a00a529a59cd03975e4ce56c05`. Preserve V1 features and the macOS 14.2 deployment target. Do not start M11, merge, or publish a release.
+Use the local Apple Silicon Mac and branch `feature/m11-final-acceptance`, based on approved M10.2 commit `6fdcc4b3e35c489499e4f1014cd69f5ce98167ed`. The review PR targets `feature/m10-2-final-development`. Keep the ChatGPT live eligibility gate closed pending documented owner approval. Release signing and publication require separate owner authorization.
 
-| Checkpoint | Scope, files and development evidence |
+| Checkpoint | Execution and evidence |
 |---|---|
-| A | ElevenLabs protocol and `TranscriptionChannel`: distinct audio, utterance and drain states; mocked delayed, duplicate, empty, timed-out and cancelled finals; silence-safe watchdog and retry tests |
-| B | `InterviewSession` and `PipelineMeasurements`: bounded cross-source attribution and timestamp provenance; arrival order, overlap, repeats, reset, reconnect and display acknowledgment regression |
-| C | ChatGPT authorization and AppShell: synthetic browser/loopback, account lifecycle and subscription composition; live activation remains gated on documented eligibility; audit independent provider settings and contracts |
-| D | Native Core Audio and SpeechAnalyzer: remove warning causes, review buffer/converter ownership and task cleanup; test portable lifecycle and compile/package on macOS 15 and 26 |
-| E | Run the full portable and hosted suites; update traceability, provider compatibility, implementation status and exact-head verification; open the review PR against M10.1 |
+| A | Inventory the environment, run SwiftPM builds and tests locally where supported, and validate the hosted Linux and macOS 15/26 matrix and unsigned package. Keep exact artifact identity in evidence. |
+| B | Launch a local native bundle and test its UI. Exercise available capture, role gating, local recognition, profile import, retention, and failure paths independently of credentials. Preserve existing settings and do not expose secrets or user content. |
+| C | Exercise the complete acceptance matrix using distinct development and held-out labels. Qualify each available live provider with synthetic audio. Collect independently annotated speech-end and visible-response timing and run a real 90-minute remote session when configuration and spending are authorized. |
+| D | Record and retest defects with deterministic coverage. Update the six qualification documents, README, traceability, implementation status and acceptance plan. Run the hosted matrix against the PR head and report actual outcomes and remaining gates. |
 
-Use `./scripts/build.sh`, `./scripts/test.sh`, and `git diff --check`. Hosted macOS runners must also run `./scripts/package-macos.sh`. Keep untagged provider timing and acoustic correlation limitations explicit: silence is not a stalled recognizer, a partial is not a final, and transcript evidence cannot prove acoustic isolation. No real authorization, paid-provider traffic, signing, or physical acceptance is part of these checkpoints.
-
-The branch already contained uncommitted M10.2 implementation and regression fixtures at the reviewed base. Preserve those changes, record them as a development checkpoint, and run hosted CI while auditing the remaining edge cases. The local Swift 6.3.2 Command Line Tools build passed. Local XCTest requires the Xcode test SDK, so use the Swift 6.2.3 Linux container and the hosted macOS matrix for full results.
-
-Checkpoint `2620b3d` passed all three hosted build and test jobs. The macOS 26 packaging check uncovered a missing Core Audio permission key after a successful compile. The follow-up adds explicit app permission metadata, tests overlapping speech coverage and delayed identical finals, and tightens provider readiness and native timestamp correlation. Run the same hosted matrix on the follow-up and record results for the PR head in the review description. See [M10.1 verification](../verification/m10-1.md) and [M10.2 verification](../verification/m10-2.md).
-
-## Final review corrections
-
-Continue on `feature/m10-2-final-development` from reviewed commit `8e7ccc254c6a89428e5c504703914045e2677940` in PR #2. Keep the ChatGPT eligibility gate closed and leave M11 pending.
-
-| Checkpoint | Scope and checks |
-|---|---|
-| F | Persist answer provenance, invalidate automatic answers across revisions and history, and remove affected context in `InterviewSession` and `QuestionDetection`. Verify queued, streaming, completed and subsequent-question corrections plus saved-history compatibility. |
-| G | Make successful drain depend on attributed recognition results and the required completion acknowledgment in `TranscriptionChannel`. Verify confirmation, silence, failure, delayed acknowledgment and cancellation. |
-| H | Subtract bounded ElevenLabs timestamp intervals from pending voice and commits. Verify preservation of leading, middle and trailing gaps, allowable edge tolerance, repeats and out-of-order results. |
-| I | Run full Linux and macOS 15/26 hosted checks and unsigned packaging. Update traceability, status, verification and PR #2 with exact-head evidence. |
-
-Risks include stale question references, old saved answer payloads, and different provider and local speech boundaries. Preserve original transcripts, user-requested manual answers, approximate timing and bounded state. The local macOS Swift core build and Linux Swift 6.2.3 suite passed during implementation. The hosted matrix will verify the final PR revision.
+Xcode 26.6 is installed and local native packaging passed. Portable Swift tests, the corpus manifest, native workspace and selected audio routes, and live provider smoke completed on the host. M11-01 has a native window regression procedure. M11-04 and M11-05 have behavioral regression tests. Physical audio topologies, the complete 90-minute and latency gates, and provider eligibility are tracked in the [M11 acceptance record](../verification/m11-final-acceptance.md). The review PR records exact-head CI results.

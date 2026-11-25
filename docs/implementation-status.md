@@ -16,7 +16,7 @@ The original bootstrap is documented in the baseline evidence below. Status voca
 | M09 | IMPLEMENTED (qualification pending) | Opt-in saved history with SQLite search, review and missed questions, text export, and solo practice with AI-estimate coaching. |
 | M10 | IMPLEMENTED (qualification pending) | DOCX text extraction, opt-in hybrid retrieval, and explicit epoch-scoped roles for diarized mixed microphone speech. |
 | M10.2 | IMPLEMENTED (qualification pending) | Finalization, cross-source gating, watchdog, account lifecycle, native capture and provider hardening. See the development verification record. Live ChatGPT authorization depends on official eligibility. |
-| M11 | NOT STARTED | Final qualification |
+| M11 | IN PROGRESS | Native unsigned package and live provider smoke verified. Final latency, release and hardware gates remain open. |
 
 ## Verification log
 
@@ -125,3 +125,9 @@ See `docs/verification/baseline.md` for the initial build/test run. No native Ma
 - Automatic answer provenance is retained with the answer, including in saved sessions. Late attribution corrections withdraw affected answers and remove the question from follow-up context. Explicit manual answers and original transcript text are retained.
 - Graceful drain distinguishes unresolved audio from confirmed recognition and silence. ElevenLabs tracks remaining voiced intervals and independent commit acknowledgments, including when timestamped results overlap or arrive out of order.
 - Validation uses the full Linux and macOS 15/26 matrix and unsigned macOS packaging. Exact-head test counts and warning evidence are recorded in PR #2. Live ChatGPT authorization remains gated and M11 remains pending. [Development verification](verification/m10-2.md)
+
+## M11 acceptance
+
+- Apple Silicon native startup, unsigned packaging, default and explicit built-in speaker capture, hardware enumeration, local storage and workspace accessibility checks ran on macOS 26.3.2.
+- Actual Apple speech, OpenAI, and ElevenLabs PCM smoke reached final results. OpenAI classification, answer streaming and embeddings responded successfully. Deepgram and Anthropic live checks require keys. Live ChatGPT authorization still requires official eligibility.
+- The initial held-out text run measured 85.96% precision and 98.00% recall. Subsequent checks distinguish text classification, audio replay and physical capture. The release remains subject to independently measured visible-answer latency, long-session stability and the open scenarios in the [acceptance record](verification/m11-final-acceptance.md).
