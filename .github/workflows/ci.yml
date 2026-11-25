@@ -7,7 +7,12 @@ permissions:
   contents: read
 jobs:
   macos-core:
-    runs-on: macos-15
+    name: macOS development (${{ matrix.runner }})
+    strategy:
+      fail-fast: false
+      matrix:
+        runner: [macos-15, macos-26]
+    runs-on: ${{ matrix.runner }}
     timeout-minutes: 15
     steps:
       - uses: actions/checkout@v4

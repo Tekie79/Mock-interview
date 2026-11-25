@@ -69,3 +69,13 @@ extension CapabilityTests {
         }
     }
 }
+
+#if os(macOS) && compiler(>=6.2)
+extension CapabilityTests {
+    func testSpeechAnalyzerDoesNotUseAnUnavailableLocale() async throws {
+        guard #available(macOS 26.0, *) else { throw XCTSkip("SpeechAnalyzer requires macOS 26") }
+        let unsupported = await MacSpeechAnalyzerTranscriber.installedLocale(for: "und-ZZ")
+        XCTAssertNil(unsupported)
+    }
+}
+#endif
