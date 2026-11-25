@@ -56,3 +56,9 @@ Both packages were built from a clean `b0303b846201f9d7d16a1869fc96584369df0e1d`
 | First-run OS authorization | The installed signer requested Microphone and System Audio Recording. The first dual-source test timed out awaiting macOS. The signed app detected the existing OpenAI Keychain entry and its synthetic classification check awaited Keychain access. |
 | Physical audio, live context and session lifecycle | Require the owner’s macOS authorization on the installed signer. The test does not count the earlier unsigned observations as signed-runtime evidence. |
 | Same-certificate upgrade | The signed and extracted upgrade build has the same certificate and designated requirement. Runtime authorization retention still requires successful first-build grants and an installed-upgrade retest. |
+
+### App icon upgrade
+
+Signed build **1.0.0 (12.3)** at `3ed4bbfacd15ae73c655f27e71845daf46b6986a` includes the supplied macOS icon, with all ten standard and Retina variants. Release packaging verifies that the listed icon is present in the bundle. Finder Get Info displayed the artwork on the application at `/Applications/MockInterview.app`. Build 12.2 was backed up under the local signing backup directory before replacement.
+
+The 12.3 ZIP passed signature verification after extraction and has SHA-256 `baa7b1130282919ca9bafe9c23687ebb6ea01f98d7cfd9435d31a648fdd0a156`. Its designated requirement matches build 12.2. The local build and 165 deterministic tests passed. Live privacy permission retention was outside this icon check.

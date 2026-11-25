@@ -150,3 +150,5 @@ Reviewed starting commit `03cd472e8ec392b2604d2fdcd566f1d2a3357209`. Build the e
 ### M12 macOS app icon
 
 Use the owner-supplied transparent artwork as the bundle icon at standard and Retina sizes. Verify the icon in the unsigned and signed bundles, then update the authorized Applications installation after backing up build 12.2. Preserve the designated requirement and application data.
+
+The signed 12.3 build passed unsigned and signed bundle validation, archive extraction, and 165 deterministic tests. Finder Get Info showed the supplied icon on the Applications copy. The previous 12.2 app was retained before replacement, and both installed-build signatures satisfied the same designated requirement.

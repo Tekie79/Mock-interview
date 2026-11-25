@@ -176,3 +176,5 @@ Development branch `feature/m12-modern-ui` is based on verified M11 `a843a565ef0
 M12 follow-up build 12.1 exposes automatic answers when starting with a confirmed interviewer feed and makes unresolved mixed capture and its transcript path visible. Real Zoom output capture, transcription and automatic generation were verified on this Mac with the owner-designated interviewer feed. [System output follow-up](verification/m12-ui-validation.md#system-output-follow-up)
 
 Personal-use 1.0.0 (12.2) has a certificate-pinned local signing workflow. The app was installed in Applications and its signed bundle and archive verified. The same-certificate 12.2.1 upgrade bundle was also verified. See the [local signing report](verification/m12-local-signing.md) for per-gate runtime and authorization evidence.
+
+Build 12.3 includes the owner-supplied app icon in the native macOS bundle. Finder displayed it after the signed Applications upgrade. [Local signing evidence](verification/m12-local-signing.md#app-icon-upgrade)
